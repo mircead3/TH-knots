@@ -251,7 +251,7 @@
   <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
     <span>Flat</span><span>Cylinder</span>
   </div>
-  <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="1"
+  <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
          style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
 
   <input type="range" id="thickInput" min="0.02" max="0.25" step="0.01" value="0.13"
@@ -294,7 +294,7 @@ scene.background = new THREE.Color(0x060610);
 scene.fog = new THREE.FogExp2(0x060610, 0.018);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 4, 14);
+camera.position.set(0, 0, 14);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -837,7 +837,8 @@ function drawDiagram() {
   const totalW   = mod * REPS;
   const oy       = (innerHeight + MAX_Y * scale) / 2;
 
-  const px = x => ox + x * scaleX;
+  const diagOffset = scaleX * 0.5; // shift so seam lines don't land on integer coords
+  const px = x => ox + diagOffset + x * scaleX;
   const py = y => oy - y * scale;
 
   // Clip everything to the fixed diagram rectangle.
@@ -883,11 +884,10 @@ function drawDiagram() {
   ctx.setLineDash([]);
 
   // Cylinder-seam markers — extend 25px above and below the diagram.
-  // The leftmost (r=0) is always at ox, fixed to the left edge of the diagram.
   ctx.strokeStyle = 'rgba(160,185,255,0.75)';
   ctx.lineWidth = 1.5;
   for (let r = 0; r <= REPS; r++) {
-    const sx = r === 0 ? ox : px(r * mod);
+    const sx = px(r * mod);
     ctx.beginPath();
     ctx.moveTo(sx, py(0)     + 25);
     ctx.lineTo(sx, py(MAX_Y) - 25);
@@ -979,14 +979,38 @@ function drawDiagram() {
         }
       }
 
-  // Bight dots
-  ctx.fillStyle = '#fff';
+  // Precompute per-row labels: within each y-row, sort bights by x and number 0,1,2,...
+  const bightLabel = new Array(n);
+  const byY = new Map();
+  for (let j = 0; j < n; j++) {
+    const y = bights[j][1];
+    if (!byY.has(y)) byY.set(y, []);
+    byY.get(y).push(j);
+  }
+  for (const group of byY.values()) {
+    group.sort((a, b) => bights[a][0] - bights[b][0]);
+    group.forEach((j, idx) => { bightLabel[j] = idx; });
+  }
+
+  // Bight dots and labels
+  ctx.textAlign = 'center';
   for (let r = rStart; r < REPS; r++) {
     const xOff = r * mod;
-    for (const [x, y] of bights) {
+    for (let j = 0; j < n; j++) {
+      const [x, y] = bights[j];
+      const sx = px(x + xOff), sy = py(y);
+      const prevY = bights[(j - 1 + n) % n][1];
+      const nextY = bights[(j + 1) % n][1];
+      const isTop = prevY < y && nextY < y;
+
+      ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(px(x + xOff), py(y), 4, 0, Math.PI * 2);
+      ctx.arc(sx, sy, 4, 0, Math.PI * 2);
       ctx.fill();
+
+      ctx.font = '11px monospace';
+      ctx.fillStyle = 'rgba(255,240,160,0.95)';
+      ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 19 : sy - 12);
     }
   }
   ctx.restore();
@@ -1001,12 +1025,12 @@ function drawDiagram() {
   for (let x = 0; x <= totalW; x += xStep) {
     const sx = px(x);
     if (sx < ox || sx > ox + availDiagW) continue;
-    ctx.fillText(String(x), sx, py(0) + 14);
+    ctx.fillText(String(x % mod), sx, py(0) + 14);
   }
   for (let x = topStart; x <= totalW; x += xStep) {
     const sx = px(x);
     if (sx < ox || sx > ox + availDiagW) continue;
-    ctx.fillText(String(x), sx, py(MAX_Y) - 6);
+    ctx.fillText(String(x % mod), sx, py(MAX_Y) - 6);
   }
 }
 
