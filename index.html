@@ -178,6 +178,40 @@
       margin-bottom: 5px;
     }
 
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px;
+      background: rgba(100,130,255,0.3);
+      border-radius: 2px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(100,130,255,0.85);
+      margin-top: -5px;
+      cursor: pointer;
+    }
+    input[type=range]::-moz-range-track {
+      height: 4px;
+      background: rgba(100,130,255,0.3);
+      border-radius: 2px;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(100,130,255,0.85);
+      border: none;
+      cursor: pointer;
+    }
+
     .hint {
       position: absolute;
       bottom: 22px;
@@ -227,11 +261,13 @@
     <button id="diagramToggle" class="view-btn">Diagram</button>
   </div>
 
-  <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
-    <span>Narrow</span><span>Wide</span>
+  <div id="xStretchSection" style="display:none;">
+    <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+      <span>Narrow</span><span>Wide</span>
+    </div>
+    <input type="range" id="xStretchSlider" min="0.3" max="3" step="0.05" value="1"
+           style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
   </div>
-  <input type="range" id="xStretchSlider" min="0.3" max="3" step="0.05" value="1"
-         style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
 </div>
 
 <canvas id="diagram"></canvas>
@@ -872,11 +908,20 @@ function drawDiagram() {
   const numZigs  = Math.floor(n / D);
   const crossMap = computeDiagramCrossings(bights, n, mod);
 
-  for (let r = -1; r < REPS; r++) {
+  // Some zigzags have cumX up to (mod-1)+PERIOD; they need r lower than -1
+  // to land their endpoint within the visible area.
+  const rStart = -Math.ceil(PERIOD / mod);
+
+  // Precompute per-segment geometry so we can do three separate passes.
+  // segs[r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
+  const segs = [];
+  for (let r = rStart; r < REPS; r++) {
     const xOff = r * mod;
+    const rSegs = [];
     for (let i = 0; i < numZigs; i++) {
       const hue = `hsl(${i / numZigs * 360},90%,65%)`;
       let cumX = bights[i * D][0];
+      const iSegs = [];
       for (let s = 0; s < D; s++) {
         const idx = i * D + s;
         const nxt = (idx + 1) % n;
@@ -890,43 +935,53 @@ function drawDiagram() {
         const crosses = crossMap.get(idx) || [];
         const underFs = crosses.filter(c =>  c.isUnder).map(c => c.t / dx);
         const overFs  = crosses.filter(c => !c.isUnder).map(c => c.t / dx);
-
-        // 1: full segment
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = hue;
-        ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
-
-        // 2: erase under-crossings with background colour
-        if (underFs.length && gapF > 0) {
-          ctx.strokeStyle = '#060610'; ctx.lineWidth = 5;
-          for (const tf of underFs) {
-            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
-            ctx.beginPath();
-            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
-            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
-            ctx.stroke();
-          }
-        }
-
-        // 3: thicken over-crossings
-        if (overFs.length && gapF > 0) {
-          ctx.strokeStyle = hue; ctx.lineWidth = 4;
-          for (const tf of overFs) {
-            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
-            ctx.beginPath();
-            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
-            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
-            ctx.stroke();
-          }
-        }
+        iSegs.push({x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs});
         cumX += dx;
       }
+      rSegs.push(iSegs);
     }
+    segs.push(rSegs);
   }
+
+  // Pass 1: draw all segments
+  for (const rSegs of segs)
+    for (const iSegs of rSegs)
+      for (const {x1s, y1s, x2s, y2s, hue} of iSegs) {
+        ctx.lineWidth = 2; ctx.strokeStyle = hue;
+        ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
+      }
+
+  // Pass 2: erase all under-crossings
+  ctx.strokeStyle = '#060610'; ctx.lineWidth = 5;
+  for (const rSegs of segs)
+    for (const iSegs of rSegs)
+      for (const {x1s, y1s, x2s, y2s, gapF, underFs} of iSegs)
+        for (const tf of underFs) {
+          const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+          ctx.beginPath();
+          ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+          ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+          ctx.stroke();
+        }
+
+  // Pass 3: thicken all over-crossings
+  ctx.lineWidth = 4;
+  for (const rSegs of segs)
+    for (const iSegs of rSegs)
+      for (const {x1s, y1s, x2s, y2s, hue, gapF, overFs} of iSegs) {
+        ctx.strokeStyle = hue;
+        for (const tf of overFs) {
+          const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+          ctx.beginPath();
+          ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+          ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+          ctx.stroke();
+        }
+      }
 
   // Bight dots
   ctx.fillStyle = '#fff';
-  for (let r = -1; r < REPS; r++) {
+  for (let r = rStart; r < REPS; r++) {
     const xOff = r * mod;
     for (const [x, y] of bights) {
       ctx.beginPath();
@@ -964,6 +1019,7 @@ document.getElementById('diagramToggle').addEventListener('click', () => {
   diagramCanvas.style.display   = showDiagram ? 'block' : 'none';
   renderer.domElement.style.display = showDiagram ? 'none'  : 'block';
   document.getElementById('diagramToggle').textContent = showDiagram ? 'Knot view' : 'Diagram';
+  document.getElementById('xStretchSection').style.display = showDiagram ? '' : 'none';
   if (showDiagram) drawDiagram();
   positionZigzagDisplay();
 });
@@ -976,6 +1032,7 @@ document.addEventListener('keydown', (e) => {
     diagramCanvas.style.display = 'none';
     renderer.domElement.style.display = 'block';
     document.getElementById('diagramToggle').textContent = 'Diagram';
+    document.getElementById('xStretchSection').style.display = 'none';
     positionZigzagDisplay();
   }
 });
