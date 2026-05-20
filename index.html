@@ -163,7 +163,7 @@
       cursor: pointer;
       outline: none;
     }
-    .view-btn:hover { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
+    .view-btn:hover  { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
 
     #info {
       font-size: 11px;
@@ -197,31 +197,31 @@
 <div id="panel">
   <h1>Knot Visualizer</h1>
 
-  <div class="label">Leads (m)</div>
+  <div class="label">Complexity</div>
+  <input type="number" id="cInput" class="b-input" value="2" min="1" max="2">
+
+  <div class="label">Leads</div>
   <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
 
-  <div class="label">Shape (a, b)</div>
-  <div id="abDisplay">a=1,  b=1</div>
-  <div id="abPopup"></div>
-
-  <div class="label">Bights (B)</div>
+  <div class="label">Bights</div>
   <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
 
-  <div class="label">Tube thickness</div>
-  <input type="range" id="thickInput" min="0.02" max="0.25" step="0.01" value="0.13"
-         style="width:100%; margin-bottom:16px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
+  <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
 
-  <div id="info">
-    <div class="name" id="infoName">5 leads × 4 bights</div>
-    <div id="infoNote">mod = 16 · 16 bights total · single strand</div>
-    <div class="code-display" id="zigzagDisplay" style="margin-top:10px; margin-bottom:0">(0,0)→(5,5)→(8,2)→(13,7)</div>
+  <div id="shapeSection">
+    <div class="label">Shape</div>
+    <div id="abDisplay">a=1,  b=1</div>
+    <div id="abPopup"></div>
   </div>
 
-  <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">
-    <span>Flat</span><span>3D</span>
+  <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+    <span>Flat</span><span>Cylinder</span>
   </div>
   <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="1"
-         style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+         style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+
+  <input type="range" id="thickInput" min="0.02" max="0.25" step="0.01" value="0.13"
+         style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
 
   <div class="btn-row">
     <button id="diagramToggle" class="view-btn">Diagram</button>
@@ -229,6 +229,8 @@
 </div>
 
 <canvas id="diagram"></canvas>
+<div id="zigzagDisplay"
+     style="position:fixed;display:none;bottom:18px;left:310px;font-size:11px;color:rgba(160,185,255,0.55);background:rgba(0,0,20,0.5);border:1px solid rgba(100,130,255,0.13);border-radius:5px;padding:9px 11px;pointer-events:none;z-index:8;"></div>
 <div class="hint">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
 
 <script type="importmap">
@@ -302,6 +304,21 @@ function setKnotDef(m, a, b) {
   MAX_Y  = m + a + b;
 }
 
+function setKnotDefC1(m) {
+  ZIGZAG = [[0, 0], [m, m]];
+  PERIOD = 2 * m;
+  D      = 2;
+  LEADS  = m;
+  MAX_Y  = m;
+}
+
+let currentC = 2;
+
+function setKnotFromUI(m) {
+  if (currentC === 1) setKnotDefC1(m);
+  else { const [a, b] = getAB(); setKnotDef(m, a, b); }
+}
+
 setKnotDef(5, 1, 1); // initial values match the original example
 
 function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
@@ -310,7 +327,7 @@ function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
 // In degenerate cases (e.g. a=b=0) the path closes before all B periods are
 // exhausted; we detect this by stopping at the first return to the start bight.
 function generateBights(B) {
-  const mod = B * D;
+  const mod = 2 * currentC * B;
   const bights = [];
   const seen = new Set();
   for (let k = 0; k < B; k++) {
@@ -479,7 +496,7 @@ function buildKnot(B, resumeRotation = false) {
     knotGroup.remove(c);
   }
 
-  const mod    = B * D;
+  const mod = 2 * currentC * B;
   const bights = generateBights(B);
   const vt     = parseFloat(document.getElementById('viewSlider').value);
   const curve  = new KnotCurve(bights, mod, vt);
@@ -528,17 +545,14 @@ function buildKnot(B, resumeRotation = false) {
 
 // ── Info panel ─────────────────────────────────────────────────────────────
 const infoName      = document.getElementById('infoName');
-const infoNote      = document.getElementById('infoNote');
-const zigzagDisplay = document.getElementById('zigzagDisplay');
+const zigzagDisplay  = document.getElementById('zigzagDisplay');
 
 function updateInfo(B) {
-  const mod = B * D;
-  const g   = gcd(LEADS, B);
-  infoName.textContent = `${LEADS} leads × ${B} bights`;
-  infoNote.textContent = g > 1
-    ? `mod = ${mod}  ·  gcd(${LEADS},${B}) = ${g} — ${g} components`
-    : `mod = ${mod}  ·  ${B * ZIGZAG.length} bights total  ·  single strand`;
-  zigzagDisplay.textContent = ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
+  const mod = 2 * currentC * B;
+  infoName.textContent = `${2 * currentC * B} bights total`;
+  zigzagDisplay.textContent = `mod = ${mod}    ` +
+    ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
+  positionZigzagDisplay();
 }
 
 // ── View state ─────────────────────────────────────────────────────────────
@@ -615,8 +629,7 @@ function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < 2) return;
-  const [a, b] = getAB();
-  setKnotDef(m, a, b);
+  setKnotFromUI(m);
   buildKnot(B);
   if (showDiagram) drawDiagram();
 }
@@ -624,11 +637,12 @@ function rebuildKnot() {
 function onMChange() {
   const m = parseInt(document.getElementById('mInput').value);
   if (isNaN(m) || m < 2) return;
-  [currentA, currentB] = nearestValid(m, currentA, currentB);
-  document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
-  if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
-  const [a, b] = getAB();
-  setKnotDef(m, a, b);
+  if (currentC === 2) {
+    [currentA, currentB] = nearestValid(m, currentA, currentB);
+    document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
+    if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
+  }
+  setKnotFromUI(m);
   buildKnot(parseInt(document.getElementById('bInput').value), true);
   if (showDiagram) drawDiagram();
 }
@@ -693,10 +707,19 @@ document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < 2) return;
-  const [a, b] = getAB();
-  setKnotDef(m, a, b);
+  setKnotFromUI(m);
   buildKnot(B, true);
   if (showDiagram) drawDiagram();
+});
+
+function setComplexity(c) {
+  currentC = c;
+  document.getElementById('shapeSection').style.display = c === 2 ? '' : 'none';
+  rebuildKnot();
+}
+document.getElementById('cInput').addEventListener('change', () => {
+  const c = parseInt(document.getElementById('cInput').value);
+  if (!isNaN(c) && c >= 1) setComplexity(c);
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
@@ -709,7 +732,7 @@ const diagramCanvas = document.getElementById('diagram');
 
 function drawDiagram() {
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod = B * D;
+  const mod = 2 * currentC * B;
 
   diagramCanvas.width  = innerWidth;
   diagramCanvas.height = innerHeight;
@@ -842,15 +865,20 @@ function drawDiagram() {
   }
 }
 
+function positionZigzagDisplay() {
+  document.getElementById('zigzagDisplay').style.display = showDiagram ? 'block' : 'none';
+}
+
 document.getElementById('diagramToggle').addEventListener('click', () => {
   showDiagram = !showDiagram;
   diagramCanvas.style.display   = showDiagram ? 'block' : 'none';
   renderer.domElement.style.display = showDiagram ? 'none'  : 'block';
-  document.getElementById('diagramToggle').textContent = showDiagram ? 'Flat view' : 'Diagram';
+  document.getElementById('diagramToggle').textContent = showDiagram ? 'Knot view' : 'Diagram';
   if (showDiagram) drawDiagram();
+  positionZigzagDisplay();
 });
 
-window.addEventListener('resize', () => { if (showDiagram) drawDiagram(); });
+window.addEventListener('resize', () => { if (showDiagram) { drawDiagram(); positionZigzagDisplay(); } });
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && showDiagram) {
@@ -858,6 +886,7 @@ document.addEventListener('keydown', (e) => {
     diagramCanvas.style.display = 'none';
     renderer.domElement.style.display = 'block';
     document.getElementById('diagramToggle').textContent = 'Diagram';
+    positionZigzagDisplay();
   }
 });
 
