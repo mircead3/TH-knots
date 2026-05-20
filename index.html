@@ -226,6 +226,12 @@
   <div class="btn-row">
     <button id="diagramToggle" class="view-btn">Diagram</button>
   </div>
+
+  <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+    <span>Narrow</span><span>Wide</span>
+  </div>
+  <input type="range" id="xStretchSlider" min="0.3" max="3" step="0.05" value="1"
+         style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
 </div>
 
 <canvas id="diagram"></canvas>
@@ -727,6 +733,45 @@ document.getElementById('thickInput').addEventListener('input', () => {
 });
 
 // ── Diagram view ───────────────────────────────────────────────────────────
+// For each bight segment, returns a Map: segIndex → [{t (integer diagram units), isUnder}]
+function computeDiagramCrossings(bights, n, mod) {
+  const seen = new Map();
+  const cumLen = [0];
+  for (let i = 0; i < n; i++)
+    cumLen.push(cumLen[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
+
+  for (let p = 0; p < n; p++) {
+    const [ax, ay] = bights[p];
+    const dxp = Math.abs(bights[(p+1)%n][1] - ay);
+    if (bights[(p+1)%n][1] - ay <= 0) continue;
+    for (let q = 0; q < n; q++) {
+      const [cx, cy] = bights[q];
+      const dxq = Math.abs(bights[(q+1)%n][1] - cy);
+      if (bights[(q+1)%n][1] - cy >= 0) continue;
+      const diffY = cy - ay;
+      for (let t = 1; t < dxp; t++) {
+        const u = diffY - t;
+        if (u <= 0 || u >= dxq) continue;
+        if ((ax + t) % mod !== (cx + u) % mod) continue;
+        const key = `${(ax+t)%mod},${ay+t}`;
+        if (!seen.has(key))
+          seen.set(key, {p, t, q, u, sP: cumLen[p]+t});
+      }
+    }
+  }
+
+  const list = [...seen.values()].sort((a, b) => a.sP - b.sP);
+  const perSeg = new Map();
+  list.forEach(({p, t, q, u}, i) => {
+    const isOver = i % 2 === 0;
+    if (!perSeg.has(p)) perSeg.set(p, []);
+    if (!perSeg.has(q)) perSeg.set(q, []);
+    perSeg.get(p).push({t, isUnder: !isOver});
+    perSeg.get(q).push({t: u, isUnder: isOver});
+  });
+  return perSeg;
+}
+
 let showDiagram = false;
 const diagramCanvas = document.getElementById('diagram');
 
@@ -743,18 +788,20 @@ function drawDiagram() {
 
   // Scale depends only on leads (LEADS = m): more leads → smaller unit.
   // ox is fixed just right of the panel; right edge is fixed at screen right.
-  const PANEL_W  = 235;   // panel width + gap
-  const LABEL_W  = 40;    // room for y= labels
+  const PANEL_W  = 235;
+  const LABEL_W  = 40;
   const padR     = 30;
   const diagH    = innerHeight * 0.75;
   const scale    = diagH / (2 * LEADS);
+  const xStretch = parseFloat(document.getElementById('xStretchSlider').value);
+  const scaleX   = scale * xStretch;
   const ox       = PANEL_W + LABEL_W;
   const availDiagW = innerWidth - ox - padR;
-  const REPS     = Math.max(1, Math.ceil(availDiagW / (mod * scale)));
+  const REPS     = Math.max(1, Math.ceil(availDiagW / (mod * scaleX)));
   const totalW   = mod * REPS;
   const oy       = (innerHeight + MAX_Y * scale) / 2;
 
-  const px = x => ox + x * scale;
+  const px = x => ox + x * scaleX;
   const py = y => oy - y * scale;
 
   // Clip everything to the fixed diagram rectangle.
@@ -792,8 +839,8 @@ function drawDiagram() {
     ctx.moveTo(px(0), py(y));
     ctx.lineTo(px(totalW), py(y));
     ctx.stroke();
-    ctx.fillStyle = 'rgba(160,185,255,0.4)';
-    ctx.font = '11px monospace';
+    ctx.fillStyle = 'rgba(180,205,255,0.75)';
+    ctx.font = '12px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(`y=${y}`, ox - 6, py(y) + 4);
   }
@@ -821,24 +868,57 @@ function drawDiagram() {
   ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
   ctx.clip();
 
-  const n       = bights.length;
-  const numZigs = Math.floor(n / D);
-  ctx.lineWidth = 2;
+  const n        = bights.length;
+  const numZigs  = Math.floor(n / D);
+  const crossMap = computeDiagramCrossings(bights, n, mod);
+
   for (let r = -1; r < REPS; r++) {
     const xOff = r * mod;
     for (let i = 0; i < numZigs; i++) {
-      ctx.strokeStyle = `hsl(${i / numZigs * 360},90%,65%)`;
-      let cumX = bights[i * D][0]; // unrolled x, starting from first bight's modular position
+      const hue = `hsl(${i / numZigs * 360},90%,65%)`;
+      let cumX = bights[i * D][0];
       for (let s = 0; s < D; s++) {
         const idx = i * D + s;
         const nxt = (idx + 1) % n;
         const [, ay] = bights[idx];
         const [, by] = bights[nxt];
         const dx = Math.abs(by - ay);
-        ctx.beginPath();
-        ctx.moveTo(px(cumX + xOff),      py(ay));
-        ctx.lineTo(px(cumX + xOff + dx), py(by));
-        ctx.stroke();
+        const x1s = px(cumX + xOff), y1s = py(ay);
+        const x2s = px(cumX + xOff + dx), y2s = py(by);
+        const segLen = Math.hypot(x2s - x1s, y2s - y1s);
+        const gapF   = segLen > 0 ? 8 / segLen : 0;
+        const crosses = crossMap.get(idx) || [];
+        const underFs = crosses.filter(c =>  c.isUnder).map(c => c.t / dx);
+        const overFs  = crosses.filter(c => !c.isUnder).map(c => c.t / dx);
+
+        // 1: full segment
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = hue;
+        ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
+
+        // 2: erase under-crossings with background colour
+        if (underFs.length && gapF > 0) {
+          ctx.strokeStyle = '#060610'; ctx.lineWidth = 5;
+          for (const tf of underFs) {
+            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+            ctx.beginPath();
+            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+            ctx.stroke();
+          }
+        }
+
+        // 3: thicken over-crossings
+        if (overFs.length && gapF > 0) {
+          ctx.strokeStyle = hue; ctx.lineWidth = 4;
+          for (const tf of overFs) {
+            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+            ctx.beginPath();
+            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+            ctx.stroke();
+          }
+        }
         cumX += dx;
       }
     }
@@ -856,12 +936,22 @@ function drawDiagram() {
   }
   ctx.restore();
 
-  // x-axis labels at each seam
-  ctx.fillStyle = 'rgba(160,185,255,0.3)';
-  ctx.font = '10px monospace';
+  // x-axis tick labels every 2 units below diagram, and above starting at first top-row bight
+  ctx.fillStyle = 'rgba(180,205,255,0.75)';
+  ctx.font = '11px monospace';
   ctx.textAlign = 'center';
-  for (let r = 0; r <= REPS; r++) {
-    ctx.fillText(String(r * mod), px(r * mod), py(0) + 18);
+  const xStep    = 2;
+  const topBight = bights.find(([, y]) => y === MAX_Y);
+  const topStart = topBight ? topBight[0] % xStep : 0;
+  for (let x = 0; x <= totalW; x += xStep) {
+    const sx = px(x);
+    if (sx < ox || sx > ox + availDiagW) continue;
+    ctx.fillText(String(x), sx, py(0) + 14);
+  }
+  for (let x = topStart; x <= totalW; x += xStep) {
+    const sx = px(x);
+    if (sx < ox || sx > ox + availDiagW) continue;
+    ctx.fillText(String(x), sx, py(MAX_Y) - 6);
   }
 }
 
@@ -893,6 +983,10 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('viewSlider').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
   buildKnot(B);
+});
+
+document.getElementById('xStretchSlider').addEventListener('input', () => {
+  if (showDiagram) drawDiagram();
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
