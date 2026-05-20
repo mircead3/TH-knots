@@ -217,8 +217,13 @@
     <div class="code-display" id="zigzagDisplay" style="margin-top:10px; margin-bottom:0">(0,0)→(5,5)→(8,2)→(13,7)</div>
   </div>
 
+  <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">
+    <span>Flat</span><span>3D</span>
+  </div>
+  <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="1"
+         style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+
   <div class="btn-row">
-    <button id="viewToggle"   class="view-btn">Flat view</button>
     <button id="diagramToggle" class="view-btn">Diagram</button>
   </div>
 </div>
@@ -378,7 +383,7 @@ class KnotCurve extends THREE.Curve {
     super();
     this.bights = bights;
     this.mod    = mod;
-    this.mode   = mode;
+    this.viewT  = mode; // 0 = flat, 1 = cylinder (accepts slider value)
     this.R      = 4.5;  // cylinder radius
     this.H      = 8;    // cylinder height
     this.innerR = Math.min(1.5, 0.15 * (mod / D)); // grows with B, capped at 1.5
@@ -452,14 +457,13 @@ class KnotCurve extends THREE.Curve {
               * Math.exp(-0.5 * (d / this.sigma) ** 2);
     }
 
-    if (this.mode === 'cylinder') {
-      const R = this.R + rOff;
-      const z = (y / MAX_Y) * this.H - this.H / 2;
-      return out.set(R * Math.cos(theta), R * Math.sin(theta), z);
-    } else {
-      const r = this.innerR + (y / MAX_Y) * (this.outerR - this.innerR);
-      return out.set(r * Math.cos(theta), r * Math.sin(theta), rOff);
-    }
+    const vt    = this.viewT;
+    const rFlat = this.innerR + (y / MAX_Y) * (this.outerR - this.innerR);
+    const rCyl  = this.R + rOff;
+    const zCyl  = (y / MAX_Y) * this.H - this.H / 2;
+    const r = (1 - vt) * rFlat + vt * rCyl;
+    const z = (1 - vt) * rOff  + vt * zCyl;
+    return out.set(r * Math.cos(theta), r * Math.sin(theta), z);
   }
 }
 
@@ -477,7 +481,8 @@ function buildKnot(B, resumeRotation = false) {
 
   const mod    = B * D;
   const bights = generateBights(B);
-  const curve  = new KnotCurve(bights, mod, currentView);
+  const vt     = parseFloat(document.getElementById('viewSlider').value);
+  const curve  = new KnotCurve(bights, mod, vt);
 
   const tubularSegments = bights.length * 60;
   const radialSegments  = 20;
@@ -510,12 +515,13 @@ function buildKnot(B, resumeRotation = false) {
   });
 
   knotGroup.add(new THREE.Mesh(geo, mat));
-  if (currentView === 'cylinder') {
-    knotGroup.rotation.set(-0.4, 0, 0);
-  } else {
-    knotGroup.rotation.set(0, 0, 0);
+  knotGroup.rotation.set(-0.4 * vt, 0, 0);
+  if (resumeRotation) {
+    camera.position.set(0, 4 * vt, 14);
+    orbit.target.set(0, 0, 0);
+    orbit.update();
+    autoRotate = true;
   }
-  if (resumeRotation) autoRotate = true;
 
   updateInfo(B);
 }
@@ -536,10 +542,6 @@ function updateInfo(B) {
 }
 
 // ── View state ─────────────────────────────────────────────────────────────
-let currentView = 'cylinder';
-
-const CAMERA_CYLINDER = new THREE.Vector3(0, 4, 14);
-const CAMERA_FLAT     = new THREE.Vector3(0, 0, 14);
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
 let currentA = 1, currentB = 1;
@@ -859,25 +861,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-document.getElementById('viewToggle').addEventListener('click', () => {
-  // Exit diagram mode if active.
-  if (showDiagram) {
-    showDiagram = false;
-    diagramCanvas.style.display = 'none';
-    renderer.domElement.style.display = 'block';
-    document.getElementById('diagramToggle').textContent = 'Diagram';
-  }
-  currentView = currentView === 'cylinder' ? 'flat' : 'cylinder';
-  document.getElementById('viewToggle').textContent =
-    currentView === 'cylinder' ? 'Flat view' : '3D view';
-
+document.getElementById('viewSlider').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
   buildKnot(B);
-
-  const pos = currentView === 'cylinder' ? CAMERA_CYLINDER : CAMERA_FLAT;
-  camera.position.copy(pos);
-  orbit.target.set(0, 0, 0);
-  orbit.update();
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
@@ -890,8 +876,8 @@ const clock = new THREE.Clock();
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
   if (autoRotate) {
-    if (currentView === 'cylinder') knotGroup.rotation.y += dt * 0.28;
-    else                            knotGroup.rotation.z += dt * 0.12;
+    const vt = parseFloat(document.getElementById('viewSlider').value);
+    knotGroup.rotation.y += dt * (0.12 + 0.16 * vt);
   }
   orbit.update();
   renderer.render(scene, camera);
