@@ -379,8 +379,8 @@ class KnotCurve extends THREE.Curve {
     this.bights = bights;
     this.mod    = mod;
     this.mode   = mode;
-    this.R      = 3;    // cylinder radius
-    this.H      = 5;    // cylinder height
+    this.R      = 4.5;  // cylinder radius
+    this.H      = 8;    // cylinder height
     this.innerR = Math.min(1.5, 0.15 * (mod / D)); // grows with B, capped at 1.5
     this.outerR = 5.5;  // flat-mode outer radius  (maps to y = MAX_Y)
 
@@ -467,7 +467,7 @@ class KnotCurve extends THREE.Curve {
 const knotGroup = new THREE.Group();
 scene.add(knotGroup);
 
-function buildKnot(B) {
+function buildKnot(B, resumeRotation = false) {
   while (knotGroup.children.length) {
     const c = knotGroup.children[0];
     c.geometry.dispose();
@@ -515,7 +515,7 @@ function buildKnot(B) {
   } else {
     knotGroup.rotation.set(0, 0, 0);
   }
-  autoRotate = true;
+  if (resumeRotation) autoRotate = true;
 
   updateInfo(B);
 }
@@ -625,14 +625,17 @@ function onMChange() {
   [currentA, currentB] = nearestValid(m, currentA, currentB);
   document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
   if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
-  rebuildKnot();
+  const [a, b] = getAB();
+  setKnotDef(m, a, b);
+  buildKnot(parseInt(document.getElementById('bInput').value), true);
+  if (showDiagram) drawDiagram();
 }
 
 document.getElementById('abDisplay').addEventListener('click', e => {
   e.stopPropagation();
   const m = parseInt(document.getElementById('mInput').value);
   const popup = document.getElementById('abPopup');
-  if (popup.style.display === 'none') { buildABGrid(m); popup.style.display = 'block'; }
+  if (popup.style.display === 'none') { buildABGrid(m); popup.style.display = 'block'; autoRotate = false; }
   else popup.style.display = 'none';
 });
 
@@ -684,7 +687,15 @@ document.addEventListener('keydown', e => {
 });
 
 document.getElementById('mInput').addEventListener('change', onMChange);
-document.getElementById('bInput').addEventListener('change',  rebuildKnot);
+document.getElementById('bInput').addEventListener('change', () => {
+  const m = parseInt(document.getElementById('mInput').value);
+  const B = parseInt(document.getElementById('bInput').value);
+  if (isNaN(m) || isNaN(B) || m < 2) return;
+  const [a, b] = getAB();
+  setKnotDef(m, a, b);
+  buildKnot(B, true);
+  if (showDiagram) drawDiagram();
+});
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
   buildKnot(B);
@@ -710,7 +721,7 @@ function drawDiagram() {
   const PANEL_W  = 235;   // panel width + gap
   const LABEL_W  = 40;    // room for y= labels
   const padR     = 30;
-  const diagH    = innerHeight * 0.4;
+  const diagH    = innerHeight * 0.75;
   const scale    = diagH / (2 * LEADS);
   const ox       = PANEL_W + LABEL_W;
   const availDiagW = innerWidth - ox - padR;
@@ -775,36 +786,7 @@ function drawDiagram() {
     ctx.stroke();
   }
 
-  // Dotted arcs above/below connecting bights that are identical on the cylinder.
-  // Each bight at (x, y) in rep r is the same physical point as (x, y) in rep r+1.
   const bights = generateBights(B);
-
-  {
-    const topBights = bights.filter(([, y]) => y === MAX_Y);
-    const botBights = bights.filter(([, y]) => y === 0);
-
-    const drawArc = (x1s, x2s, ys, above) => {
-      const h = (x2s - x1s) * 0.38;
-      ctx.beginPath();
-      ctx.moveTo(x1s, ys);
-      ctx.quadraticCurveTo((x1s + x2s) / 2, ys + (above ? -h : h), x2s, ys);
-      ctx.stroke();
-    };
-
-    ctx.setLineDash([4, 6]);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = 'rgba(160,185,255,0.5)';
-
-    for (const [x] of topBights) {
-      for (let r = 0; r < REPS - 1; r++)
-        drawArc(px(x + r * mod), px(x + (r + 1) * mod), py(MAX_Y), true);
-    }
-    for (const [x] of botBights) {
-      for (let r = 0; r < REPS - 1; r++)
-        drawArc(px(x + r * mod), px(x + (r + 1) * mod), py(0), false);
-    }
-    ctx.setLineDash([]);
-  }
 
 
 
