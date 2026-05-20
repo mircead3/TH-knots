@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Knot Visualizer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #060610; overflow: hidden; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+    canvas { display: block; }
+
+    #panel {
+      position: absolute;
+      top: 20px;
+      left: 0;
+      background: rgba(6, 6, 22, 0.88);
+      border: 1px solid rgba(100, 130, 255, 0.2);
+      border-radius: 12px;
+      padding: 20px;
+      width: 230px;
+      color: #c0c8e8;
+      user-select: none;
+    }
+
+    #panel h1 {
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: rgba(120, 150, 255, 0.7);
+      margin-bottom: 18px;
+    }
+
+    .label {
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: rgba(180, 195, 255, 0.35);
+      margin-bottom: 6px;
+    }
+
+    select {
+      width: 100%;
+      background: rgba(15, 15, 45, 0.9);
+      border: 1px solid rgba(100, 130, 255, 0.22);
+      border-radius: 6px;
+      color: #c0c8e8;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      appearance: none;
+      margin-bottom: 16px;
+      outline: none;
+    }
+    select:focus { border-color: rgba(100, 130, 255, 0.5); }
+
+    .code-display {
+      font-size: 11px;
+      color: rgba(160, 185, 255, 0.55);
+      background: rgba(0, 0, 20, 0.5);
+      border: 1px solid rgba(100, 130, 255, 0.13);
+      border-radius: 5px;
+      padding: 9px 11px;
+      margin-bottom: 16px;
+      line-height: 1.7;
+    }
+
+    .b-input {
+      width: 100%;
+      background: rgba(15, 15, 45, 0.9);
+      border: 1px solid rgba(100, 130, 255, 0.22);
+      border-radius: 6px;
+      color: #c0c8e8;
+      padding: 8px;
+      font-size: 20px;
+      font-family: inherit;
+      text-align: center;
+      outline: none;
+      margin-bottom: 18px;
+    }
+    .b-input:focus { border-color: rgba(100, 130, 255, 0.5); }
+
+    .param-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    .param-col { flex: 1; }
+    .param-col .b-input { margin-bottom: 0; font-size: 16px; }
+    .sublabel {
+      font-size: 9px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: rgba(180, 195, 255, 0.28);
+      margin-bottom: 4px;
+    }
+
+    #diagram {
+      position: absolute;
+      top: 0; left: 0;
+      display: none;
+      background: #060610;
+      z-index: 5;
+    }
+
+    #abDisplay {
+      width: 100%;
+      background: rgba(15,15,45,0.9);
+      border: 1px solid rgba(100,130,255,0.22);
+      border-radius: 6px;
+      color: #c0c8e8;
+      padding: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      text-align: center;
+      cursor: pointer;
+      margin-bottom: 6px;
+      box-sizing: border-box;
+      user-select: none;
+    }
+    #abDisplay:hover { border-color: rgba(100,130,255,0.5); }
+
+    #abPopup {
+      display: none;
+      background: rgba(6,6,22,0.97);
+      border: 1px solid rgba(100,130,255,0.25);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    #abPopup table { border-collapse: separate; border-spacing: 3px; table-layout: fixed; }
+    #abPopup td, #abPopup th {
+      width: 18px; min-width: 18px; max-width: 18px;
+      height: 18px; line-height: 18px;
+      font-size: 9px; text-align: center;
+      color: rgba(160,185,255,0.4);
+      overflow: hidden; box-sizing: border-box;
+    }
+    .ab-valid {
+      background: rgba(20,20,60,0.9);
+      border: 1px solid rgba(100,130,255,0.18);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .ab-valid:hover  { background: rgba(60,80,180,0.7); border-color: rgba(100,130,255,0.5); }
+    .ab-selected     { background: rgba(100,130,255,0.55) !important; border-color: rgba(140,170,255,0.8) !important; }
+
+    #panel {
+      z-index: 10;
+    }
+
+    .btn-row { display: flex; gap: 8px; margin-top: 14px; }
+    .btn-row .view-btn { flex: 1; margin-top: 0; }
+
+    .view-btn {
+      width: 100%;
+      margin-top: 14px;
+      padding: 9px;
+      background: rgba(15, 15, 45, 0.8);
+      border: 1px solid rgba(100, 130, 255, 0.25);
+      border-radius: 6px;
+      color: rgba(160, 185, 255, 0.75);
+      font-size: 11px;
+      font-family: inherit;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      outline: none;
+    }
+    .view-btn:hover { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
+
+    #info {
+      font-size: 11px;
+      color: rgba(180, 200, 255, 0.38);
+      line-height: 1.65;
+      border-top: 1px solid rgba(100, 130, 255, 0.1);
+      padding-top: 14px;
+    }
+    #info .name {
+      color: rgba(140, 170, 255, 0.85);
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .hint {
+      position: absolute;
+      bottom: 22px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: rgba(180, 200, 255, 0.18);
+      letter-spacing: 1px;
+      font-family: inherit;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+<div id="panel">
+  <h1>Knot Visualizer</h1>
+
+  <div class="label">Leads (m)</div>
+  <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
+
+  <div class="label">Shape (a, b)</div>
+  <div id="abDisplay">a=1,  b=1</div>
+  <div id="abPopup"></div>
+
+  <div class="label">Bights (B)</div>
+  <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
+
+  <div class="label">Tube thickness</div>
+  <input type="range" id="thickInput" min="0.02" max="0.25" step="0.01" value="0.13"
+         style="width:100%; margin-bottom:16px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
+
+  <div id="info">
+    <div class="name" id="infoName">5 leads × 4 bights</div>
+    <div id="infoNote">mod = 16 · 16 bights total · single strand</div>
+    <div class="code-display" id="zigzagDisplay" style="margin-top:10px; margin-bottom:0">(0,0)→(5,5)→(8,2)→(13,7)</div>
+  </div>
+
+  <div class="btn-row">
+    <button id="viewToggle"   class="view-btn">Flat view</button>
+    <button id="diagramToggle" class="view-btn">Diagram</button>
+  </div>
+</div>
+
+<canvas id="diagram"></canvas>
+<div class="hint">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Scene ──────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060610);
+scene.fog = new THREE.FogExp2(0x060610, 0.018);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 4, 14);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.prepend(renderer.domElement);
+
+// ── Controls ───────────────────────────────────────────────────────────────
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.07;
+orbit.minDistance = 3;
+orbit.maxDistance = 50;
+
+let autoRotate = true;
+orbit.addEventListener('start', () => { autoRotate = false; });
+
+// ── Lights ─────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x18183a, 4));
+
+const keyLight = new THREE.DirectionalLight(0x8899ff, 4);
+keyLight.position.set(6, 8, 6);
+scene.add(keyLight);
+
+const rimLight = new THREE.DirectionalLight(0xff7744, 2);
+rimLight.position.set(-8, -4, -6);
+scene.add(rimLight);
+
+const fillLight = new THREE.DirectionalLight(0x44ffcc, 1);
+fillLight.position.set(0, -8, 5);
+scene.add(fillLight);
+
+// ── Zigzag knot definition ─────────────────────────────────────────────────
+// For leads m, parameters a≥0 b≥0 a+b≤m-1:
+//   rows at y = 0, 2a, m+a-b, m+a+b
+//   zigzag bights: (0,0) → (m+a-b, m+a-b) → (2m-2b, 2a) → (3m-a-b, m+a+b)
+//   period = 4m,  d = 4  (always),  leads = m
+let ZIGZAG, PERIOD, D, LEADS, MAX_Y;
+
+function setKnotDef(m, a, b) {
+  ZIGZAG = [
+    [0,           0          ],
+    [m + a - b,   m + a - b  ],
+    [2*m - 2*b,   2*a        ],
+    [3*m - a - b, m + a + b  ],
+  ];
+  PERIOD = 4 * m;
+  D      = 4;
+  LEADS  = m;
+  MAX_Y  = m + a + b;
+}
+
+setKnotDef(5, 1, 1); // initial values match the original example
+
+function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
+
+// Generate the full list of bight [x,y] coordinates for B bights (in path order).
+// In degenerate cases (e.g. a=b=0) the path closes before all B periods are
+// exhausted; we detect this by stopping at the first return to the start bight.
+function generateBights(B) {
+  const mod = B * D;
+  const bights = [];
+  const seen = new Set();
+  for (let k = 0; k < B; k++) {
+    for (const [x, y] of ZIGZAG) {
+      const bx = (x + k * PERIOD) % mod;
+      const key = `${bx},${y}`;
+      if (seen.has(key)) return bights;
+      seen.add(key);
+      bights.push([bx, y]);
+    }
+  }
+  return bights;
+}
+
+// Find all crossings between slope+1 and slope-1 segments, assign alternating
+// over/under by sorting encounters along the strand, return as bump events.
+function buildCrossingEvents(bights, mod, cumLen, totalLen) {
+  const n = bights.length;
+  const seen = new Map(); // key `cx,cy` → {sP, sQ}
+
+  for (let p = 0; p < n; p++) {
+    const [ax, ay] = bights[p];
+    const [px2, py2] = bights[(p + 1) % n];
+    const dxp = Math.abs(py2 - ay);
+    if (py2 - ay <= 0) continue; // slope+1 segments only
+
+    for (let q = 0; q < n; q++) {
+      const [cx, cy] = bights[q];
+      const [qx2, qy2] = bights[(q + 1) % n];
+      const dxq = Math.abs(qy2 - cy);
+      if (qy2 - cy >= 0) continue; // slope-1 segments only
+
+      const diffY = cy - ay;
+      for (let t = 1; t < dxp; t++) {
+        const u = diffY - t;
+        if (u <= 0 || u >= dxq) continue;
+        if ((ax + t) % mod !== (cx + u) % mod) continue;
+
+        const key = `${(ax + t) % mod},${ay + t}`;
+        if (!seen.has(key))
+          seen.set(key, { sP: cumLen[p] + t, sQ: cumLen[q] + u });
+      }
+    }
+  }
+
+  // Sort crossings by sP (order encountered along the strand).
+  // For an alternating knot, consecutive crossings alternate over/under.
+  // At each crossing the two strands get opposite assignments.
+  const crossings = [...seen.values()];
+  crossings.sort((a, b) => a.sP - b.sP);
+
+  const events = [];
+  for (let i = 0; i < crossings.length; i++) {
+    const isOver = (i % 2 === 0);
+    const { sP, sQ } = crossings[i];
+    for (const offset of [0, -totalLen, totalLen]) {
+      events.push({ s_c: sP + offset, isOver });
+      events.push({ s_c: sQ + offset, isOver: !isOver });
+    }
+  }
+  return events;
+}
+
+// Shared curve for both views. In 'cylinder' mode the path lies on a cylinder
+// and over/under is shown as a radial bump. In 'flat' mode the cylinder is
+// unrolled into a disc (each bight row → a concentric circle) and over/under
+// is a z-depth offset.
+class KnotCurve extends THREE.Curve {
+  constructor(bights, mod, mode = 'cylinder') {
+    super();
+    this.bights = bights;
+    this.mod    = mod;
+    this.mode   = mode;
+    this.R      = 3;    // cylinder radius
+    this.H      = 5;    // cylinder height
+    this.innerR = Math.min(1.5, 0.15 * (mod / D)); // grows with B, capped at 1.5
+    this.outerR = 5.5;  // flat-mode outer radius  (maps to y = MAX_Y)
+
+    const n = bights.length;
+    this.cumLen = [0];
+    for (let i = 0; i < n; i++) {
+      const a  = bights[i];
+      const b  = bights[(i + 1) % n];
+      const dx = Math.abs(b[1] - a[1]);
+      this.cumLen.push(this.cumLen[i] + dx);
+    }
+    this.totalLen = this.cumLen[n];
+
+    this.events       = buildCrossingEvents(bights, mod, this.cumLen, this.totalLen);
+    this.delta        = 0.18;
+    this.sigma        = 0.6;
+    this.cornerRadius = 0.8;
+  }
+
+  // Returns {xUnwrapped, y} with quadratic-Bezier corner rounding at bights.
+  // Effective radius at each bight is min(cr, half of each adjacent segment)
+  // so short segments (|dy|=1 when a+b=m-1) never cause discontinuities.
+  _getXY(s) {
+    const n  = this.bights.length;
+    const cr = this.cornerRadius;
+
+    let i = 0;
+    while (i < n - 1 && this.cumLen[i + 1] < s) i++;
+
+    const a      = this.bights[i];
+    const b      = this.bights[(i + 1) % n];
+    const prev   = this.bights[(i - 1 + n) % n];
+    const next   = this.bights[(i + 2) % n];
+    const dx     = Math.abs(b[1] - a[1]);
+    const dxPrev = Math.abs(a[1] - prev[1]);
+    const dxNext = Math.abs(next[1] - b[1]);
+    const sLocal = s - this.cumLen[i];
+
+    // Adaptive radii: never exceed half of either adjacent segment.
+    const crS = Math.min(cr, dx / 2, dxPrev / 2);
+    const crE = Math.min(cr, dx / 2, dxNext / 2);
+
+    if (sLocal < crS) {
+      const s1  = Math.sign(a[1] - prev[1]);
+      const tau = 0.5 + sLocal / (2 * crS);
+      return { xUnwrapped: this.cumLen[i] + crS * (2 * tau - 1),
+               y: a[1] - s1 * crS * (1 - 2 * tau + 2 * tau * tau) };
+    }
+    if (dx - sLocal < crE) {
+      const s1       = Math.sign(b[1] - a[1]);
+      const sFromEnd = dx - sLocal;
+      const tau      = 0.5 - sFromEnd / (2 * crE);
+      return { xUnwrapped: this.cumLen[i + 1] + crE * (2 * tau - 1),
+               y: b[1] - s1 * crE * (1 - 2 * tau + 2 * tau * tau) };
+    }
+    return { xUnwrapped: this.cumLen[i] + sLocal,
+             y: a[1] + (b[1] - a[1]) * sLocal / dx };
+  }
+
+  getPoint(t, out = new THREE.Vector3()) {
+    const s = t * this.totalLen;
+    const { xUnwrapped, y } = this._getXY(s);
+    const theta = ((xUnwrapped % this.mod) / this.mod) * 2 * Math.PI;
+
+    let rOff = 0;
+    for (const ev of this.events) {
+      const d = s - ev.s_c;
+      rOff += (ev.isOver ? this.delta : -this.delta)
+              * Math.exp(-0.5 * (d / this.sigma) ** 2);
+    }
+
+    if (this.mode === 'cylinder') {
+      const R = this.R + rOff;
+      const z = (y / MAX_Y) * this.H - this.H / 2;
+      return out.set(R * Math.cos(theta), R * Math.sin(theta), z);
+    } else {
+      const r = this.innerR + (y / MAX_Y) * (this.outerR - this.innerR);
+      return out.set(r * Math.cos(theta), r * Math.sin(theta), rOff);
+    }
+  }
+}
+
+// ── Scene objects ──────────────────────────────────────────────────────────
+const knotGroup = new THREE.Group();
+scene.add(knotGroup);
+
+function buildKnot(B) {
+  while (knotGroup.children.length) {
+    const c = knotGroup.children[0];
+    c.geometry.dispose();
+    c.material.dispose();
+    knotGroup.remove(c);
+  }
+
+  const mod    = B * D;
+  const bights = generateBights(B);
+  const curve  = new KnotCurve(bights, mod, currentView);
+
+  const tubularSegments = bights.length * 60;
+  const radialSegments  = 20;
+  const tubeRadius      = parseFloat(document.getElementById('thickInput').value);
+
+  const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
+
+  // Rainbow gradient so crossing strands show distinct colours.
+  const ringCount    = tubularSegments + 1;
+  const vertsPerRing = radialSegments + 1;
+  const cols         = new Float32Array(ringCount * vertsPerRing * 3);
+  const tmp          = new THREE.Color();
+
+  for (let i = 0; i < ringCount; i++) {
+    tmp.setHSL(i / tubularSegments, 0.9, 0.62);
+    for (let j = 0; j < vertsPerRing; j++) {
+      const idx   = (i * vertsPerRing + j) * 3;
+      cols[idx]   = tmp.r;
+      cols[idx+1] = tmp.g;
+      cols[idx+2] = tmp.b;
+    }
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+
+  const mat = new THREE.MeshPhongMaterial({
+    vertexColors: true,
+    specular:     new THREE.Color(0xffffff),
+    shininess:    140,
+  });
+
+  knotGroup.add(new THREE.Mesh(geo, mat));
+  if (currentView === 'cylinder') {
+    knotGroup.rotation.set(-0.4, 0, 0);
+  } else {
+    knotGroup.rotation.set(0, 0, 0);
+  }
+  autoRotate = true;
+
+  updateInfo(B);
+}
+
+// ── Info panel ─────────────────────────────────────────────────────────────
+const infoName      = document.getElementById('infoName');
+const infoNote      = document.getElementById('infoNote');
+const zigzagDisplay = document.getElementById('zigzagDisplay');
+
+function updateInfo(B) {
+  const mod = B * D;
+  const g   = gcd(LEADS, B);
+  infoName.textContent = `${LEADS} leads × ${B} bights`;
+  infoNote.textContent = g > 1
+    ? `mod = ${mod}  ·  gcd(${LEADS},${B}) = ${g} — ${g} components`
+    : `mod = ${mod}  ·  ${B * ZIGZAG.length} bights total  ·  single strand`;
+  zigzagDisplay.textContent = ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
+}
+
+// ── View state ─────────────────────────────────────────────────────────────
+let currentView = 'cylinder';
+
+const CAMERA_CYLINDER = new THREE.Vector3(0, 4, 14);
+const CAMERA_FLAT     = new THREE.Vector3(0, 0, 14);
+
+// ── UI wiring ──────────────────────────────────────────────────────────────
+let currentA = 1, currentB = 1;
+
+function validPairs(m) {
+  const pairs = [];
+  for (let a = 0; a <= m - 3; a++)
+    for (let b = 0; a + b <= m - 3; b++)
+      if ((m - a - b) % 2 === 1) pairs.push([a, b]);
+  return pairs;
+}
+
+function nearestValid(m, prefA, prefB) {
+  const pairs = validPairs(m);
+  let best = pairs[0], bestD = Infinity;
+  for (const [a, b] of pairs) {
+    const d = Math.abs(a - prefA) + Math.abs(b - prefB);
+    if (d < bestD) { bestD = d; best = [a, b]; }
+  }
+  return best;
+}
+
+function buildABGrid(m) {
+  const popup = document.getElementById('abPopup');
+  popup.innerHTML = '';
+  const maxAB = m - 3;
+  const table = document.createElement('table');
+
+  // Header row: b values
+  const hdr = document.createElement('tr');
+  const corner = document.createElement('th');
+  corner.textContent = 'a \\ b';
+  hdr.appendChild(corner);
+  for (let b = 0; b <= maxAB; b++) {
+    const th = document.createElement('th');
+    th.textContent = b;
+    hdr.appendChild(th);
+  }
+  table.appendChild(hdr);
+
+  // Data rows: a values
+  for (let a = 0; a <= maxAB; a++) {
+    const row = document.createElement('tr');
+    const rh = document.createElement('th');
+    rh.textContent = a;
+    row.appendChild(rh);
+    for (let b = 0; b <= maxAB; b++) {
+      const td = document.createElement('td');
+      const valid = a + b <= maxAB && (m - a - b) % 2 === 1;
+      if (valid) {
+        td.className = 'ab-valid' + (a === currentA && b === currentB ? ' ab-selected' : '');
+        td.addEventListener('click', e => {
+          e.stopPropagation();
+          currentA = a; currentB = b;
+          document.getElementById('abDisplay').textContent = `a=${a},  b=${b}`;
+          popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
+          td.classList.add('ab-selected');
+          rebuildKnot();
+        });
+      }
+      row.appendChild(td);
+    }
+    table.appendChild(row);
+  }
+  popup.appendChild(table);
+}
+
+function getAB() { return [currentA, currentB]; }
+
+function rebuildKnot() {
+  const m = parseInt(document.getElementById('mInput').value);
+  const B = parseInt(document.getElementById('bInput').value);
+  if (isNaN(m) || isNaN(B) || m < 2) return;
+  const [a, b] = getAB();
+  setKnotDef(m, a, b);
+  buildKnot(B);
+  if (showDiagram) drawDiagram();
+}
+
+function onMChange() {
+  const m = parseInt(document.getElementById('mInput').value);
+  if (isNaN(m) || m < 2) return;
+  [currentA, currentB] = nearestValid(m, currentA, currentB);
+  document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
+  if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
+  rebuildKnot();
+}
+
+document.getElementById('abDisplay').addEventListener('click', e => {
+  e.stopPropagation();
+  const m = parseInt(document.getElementById('mInput').value);
+  const popup = document.getElementById('abPopup');
+  if (popup.style.display === 'none') { buildABGrid(m); popup.style.display = 'block'; }
+  else popup.style.display = 'none';
+});
+
+document.addEventListener('click', e => {
+  if (!document.getElementById('abDisplay').contains(e.target) &&
+      !document.getElementById('abPopup').contains(e.target))
+    document.getElementById('abPopup').style.display = 'none';
+});
+
+document.addEventListener('keydown', e => {
+  const popup = document.getElementById('abPopup');
+  if (popup.style.display === 'none') return;
+  if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
+  e.preventDefault();
+  const m = parseInt(document.getElementById('mInput').value);
+  const maxAB = m - 3;
+  let na = currentA, nb = currentB;
+
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    // Move within same row (fixed a), searching for next valid b
+    const db = e.key === 'ArrowRight' ? 1 : -1;
+    for (let b = currentB + db; b >= 0 && b <= maxAB - currentA; b += db)
+      if ((m - currentA - b) % 2 === 1) { nb = b; break; }
+    if (nb === currentB) return; // no valid b found
+  } else {
+    // Move to adjacent row (change a), pick b closest to current
+    const da = e.key === 'ArrowDown' ? 1 : -1;
+    let found = false;
+    for (let a = currentA + da; a >= 0 && a <= maxAB; a += da) {
+      const bs = [];
+      for (let b = 0; b + a <= maxAB; b++)
+        if ((m - a - b) % 2 === 1) bs.push(b);
+      if (bs.length) {
+        na = a;
+        nb = bs.reduce((p, c) => Math.abs(c - currentB) < Math.abs(p - currentB) ? c : p);
+        found = true; break;
+      }
+    }
+    if (!found) return;
+  }
+
+  currentA = na; currentB = nb;
+  document.getElementById('abDisplay').textContent = `a=${na},  b=${nb}`;
+  const table = popup.querySelector('table');
+  popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
+  const row = table.querySelectorAll('tr')[na + 1];
+  if (row) { const cell = row.querySelectorAll('td')[nb]; if (cell) cell.classList.add('ab-selected'); }
+  rebuildKnot();
+});
+
+document.getElementById('mInput').addEventListener('change', onMChange);
+document.getElementById('bInput').addEventListener('change',  rebuildKnot);
+document.getElementById('thickInput').addEventListener('input', () => {
+  const B = parseInt(document.getElementById('bInput').value);
+  buildKnot(B);
+});
+
+// ── Diagram view ───────────────────────────────────────────────────────────
+let showDiagram = false;
+const diagramCanvas = document.getElementById('diagram');
+
+function drawDiagram() {
+  const B   = parseInt(document.getElementById('bInput').value);
+  const mod = B * D;
+
+  diagramCanvas.width  = innerWidth;
+  diagramCanvas.height = innerHeight;
+  const ctx = diagramCanvas.getContext('2d');
+
+  ctx.fillStyle = '#060610';
+  ctx.fillRect(0, 0, innerWidth, innerHeight);
+
+  // Scale depends only on leads (LEADS = m): more leads → smaller unit.
+  // ox is fixed just right of the panel; right edge is fixed at screen right.
+  const PANEL_W  = 235;   // panel width + gap
+  const LABEL_W  = 40;    // room for y= labels
+  const padR     = 30;
+  const diagH    = innerHeight * 0.4;
+  const scale    = diagH / (2 * LEADS);
+  const ox       = PANEL_W + LABEL_W;
+  const availDiagW = innerWidth - ox - padR;
+  const REPS     = Math.max(1, Math.ceil(availDiagW / (mod * scale)));
+  const totalW   = mod * REPS;
+  const oy       = (innerHeight + MAX_Y * scale) / 2;
+
+  const px = x => ox + x * scale;
+  const py = y => oy - y * scale;
+
+  // Clip everything to the fixed diagram rectangle.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
+  ctx.clip();
+
+  // All grid lines the same dim colour, stepping by 2 (all bight feet are even).
+  ctx.strokeStyle = 'rgba(100,130,255,0.55)';
+  ctx.lineWidth = 1;
+  const kStart = Math.ceil(-MAX_Y / 2) * 2;
+  for (let k = kStart; k <= totalW; k += 2) {
+    ctx.beginPath();
+    ctx.moveTo(px(k),         py(0));
+    ctx.lineTo(px(k + MAX_Y), py(MAX_Y));
+    ctx.stroke();
+  }
+  for (let k = 0; k <= totalW + MAX_Y; k += 2) {
+    ctx.beginPath();
+    ctx.moveTo(px(k),         py(0));
+    ctx.lineTo(px(k - MAX_Y), py(MAX_Y));
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // Bight-row guide lines spanning all repetitions
+  const rows = [...new Set([0, ...ZIGZAG.map(p => p[1])])].sort((a, b) => a - b);
+  ctx.setLineDash([4, 5]);
+  ctx.lineWidth = 1;
+  for (const y of rows) {
+    ctx.strokeStyle = 'rgba(100,130,255,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(y));
+    ctx.lineTo(px(totalW), py(y));
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(160,185,255,0.4)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`y=${y}`, ox - 6, py(y) + 4);
+  }
+  ctx.setLineDash([]);
+
+  // Cylinder-seam markers — extend 25px above and below the diagram.
+  // The leftmost (r=0) is always at ox, fixed to the left edge of the diagram.
+  ctx.strokeStyle = 'rgba(160,185,255,0.75)';
+  ctx.lineWidth = 1.5;
+  for (let r = 0; r <= REPS; r++) {
+    const sx = r === 0 ? ox : px(r * mod);
+    ctx.beginPath();
+    ctx.moveTo(sx, py(0)     + 25);
+    ctx.lineTo(sx, py(MAX_Y) - 25);
+    ctx.stroke();
+  }
+
+  // Dotted arcs above/below connecting bights that are identical on the cylinder.
+  // Each bight at (x, y) in rep r is the same physical point as (x, y) in rep r+1.
+  const bights = generateBights(B);
+
+  {
+    const topBights = bights.filter(([, y]) => y === MAX_Y);
+    const botBights = bights.filter(([, y]) => y === 0);
+
+    const drawArc = (x1s, x2s, ys, above) => {
+      const h = (x2s - x1s) * 0.38;
+      ctx.beginPath();
+      ctx.moveTo(x1s, ys);
+      ctx.quadraticCurveTo((x1s + x2s) / 2, ys + (above ? -h : h), x2s, ys);
+      ctx.stroke();
+    };
+
+    ctx.setLineDash([4, 6]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(160,185,255,0.5)';
+
+    for (const [x] of topBights) {
+      for (let r = 0; r < REPS - 1; r++)
+        drawArc(px(x + r * mod), px(x + (r + 1) * mod), py(MAX_Y), true);
+    }
+    for (const [x] of botBights) {
+      for (let r = 0; r < REPS - 1; r++)
+        drawArc(px(x + r * mod), px(x + (r + 1) * mod), py(0), false);
+    }
+    ctx.setLineDash([]);
+  }
+
+
+
+  // Zigzag lines and bight dots — clipped to the diagram rectangle.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
+  ctx.clip();
+
+  const n       = bights.length;
+  const numZigs = Math.floor(n / D);
+  ctx.lineWidth = 2;
+  for (let r = -1; r < REPS; r++) {
+    const xOff = r * mod;
+    for (let i = 0; i < numZigs; i++) {
+      ctx.strokeStyle = `hsl(${i / numZigs * 360},90%,65%)`;
+      let cumX = bights[i * D][0]; // unrolled x, starting from first bight's modular position
+      for (let s = 0; s < D; s++) {
+        const idx = i * D + s;
+        const nxt = (idx + 1) % n;
+        const [, ay] = bights[idx];
+        const [, by] = bights[nxt];
+        const dx = Math.abs(by - ay);
+        ctx.beginPath();
+        ctx.moveTo(px(cumX + xOff),      py(ay));
+        ctx.lineTo(px(cumX + xOff + dx), py(by));
+        ctx.stroke();
+        cumX += dx;
+      }
+    }
+  }
+
+  // Bight dots
+  ctx.fillStyle = '#fff';
+  for (let r = -1; r < REPS; r++) {
+    const xOff = r * mod;
+    for (const [x, y] of bights) {
+      ctx.beginPath();
+      ctx.arc(px(x + xOff), py(y), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  // x-axis labels at each seam
+  ctx.fillStyle = 'rgba(160,185,255,0.3)';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  for (let r = 0; r <= REPS; r++) {
+    ctx.fillText(String(r * mod), px(r * mod), py(0) + 18);
+  }
+}
+
+document.getElementById('diagramToggle').addEventListener('click', () => {
+  showDiagram = !showDiagram;
+  diagramCanvas.style.display   = showDiagram ? 'block' : 'none';
+  renderer.domElement.style.display = showDiagram ? 'none'  : 'block';
+  document.getElementById('diagramToggle').textContent = showDiagram ? 'Flat view' : 'Diagram';
+  if (showDiagram) drawDiagram();
+});
+
+window.addEventListener('resize', () => { if (showDiagram) drawDiagram(); });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && showDiagram) {
+    showDiagram = false;
+    diagramCanvas.style.display = 'none';
+    renderer.domElement.style.display = 'block';
+    document.getElementById('diagramToggle').textContent = 'Diagram';
+  }
+});
+
+document.getElementById('viewToggle').addEventListener('click', () => {
+  // Exit diagram mode if active.
+  if (showDiagram) {
+    showDiagram = false;
+    diagramCanvas.style.display = 'none';
+    renderer.domElement.style.display = 'block';
+    document.getElementById('diagramToggle').textContent = 'Diagram';
+  }
+  currentView = currentView === 'cylinder' ? 'flat' : 'cylinder';
+  document.getElementById('viewToggle').textContent =
+    currentView === 'cylinder' ? 'Flat view' : '3D view';
+
+  const B = parseInt(document.getElementById('bInput').value);
+  buildKnot(B);
+
+  const pos = currentView === 'cylinder' ? CAMERA_CYLINDER : CAMERA_FLAT;
+  camera.position.copy(pos);
+  orbit.target.set(0, 0, 0);
+  orbit.update();
+});
+
+// ── Initial state ──────────────────────────────────────────────────────────
+buildKnot(4);
+
+// ── Render loop ────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+(function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  if (autoRotate) {
+    if (currentView === 'cylinder') knotGroup.rotation.y += dt * 0.28;
+    else                            knotGroup.rotation.z += dt * 0.12;
+  }
+  orbit.update();
+  renderer.render(scene, camera);
+})();
+
+// ── Resize ─────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
