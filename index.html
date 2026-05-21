@@ -463,7 +463,8 @@ class KnotCurve extends THREE.Curve {
     this.viewT  = mode; // 0 = flat, 1 = cylinder (accepts slider value)
     this.R      = 4.5;  // cylinder radius
     this.H      = 8;    // cylinder height
-    this.innerR = Math.min(1.5, 0.15 * (mod / D)); // grows with B, capped at 1.5
+    const tubeR = parseFloat(document.getElementById('thickInput').value);
+    this.innerR = Math.min(1.5, 0.15 * (mod / D)) * (tubeR / 0.25); // scales with tube thickness
     this.outerR = 5.5;  // flat-mode outer radius  (maps to y = MAX_Y)
 
     const n = bights.length;
@@ -477,7 +478,7 @@ class KnotCurve extends THREE.Curve {
     this.totalLen = this.cumLen[n];
 
     this.events       = buildCrossingEvents(bights, mod, this.cumLen, this.totalLen);
-    this.delta        = 0.18;
+    this.delta        = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
     this.sigma        = 0.6;
     this.cornerRadius = 0.8;
   }
