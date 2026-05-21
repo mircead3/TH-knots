@@ -265,6 +265,7 @@
     </div>
     <input type="range" id="xStretchSlider" min="0.3" max="3" step="0.05" value="1"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    <button id="downloadBtn" class="view-btn" style="margin-bottom:8px;">Download tying sequence</button>
   </div>
 
   <div class="btn-row">
@@ -386,11 +387,28 @@ function generateBights(B) {
   return bights;
 }
 
+// Return true if the parity of crossing assignments should be flipped so that
+// the first crossing encountered during tying (min segment index, then min t)
+// is an over-crossing for the later strand.
+// crossings must be sorted by sP with pIsOver = (i%2===0) already set.
+function needsParityFlip(crossings) {
+  let bestSeg = Infinity, bestT = Infinity, firstIsOver = true;
+  for (const {p, q, tP, tQ, pIsOver} of crossings) {
+    const laterSeg   = Math.max(p, q);
+    const tOnLater   = p > q ? tP : tQ;
+    const isOverLater = p > q ? pIsOver : !pIsOver;
+    if (laterSeg < bestSeg || (laterSeg === bestSeg && tOnLater < bestT)) {
+      bestSeg = laterSeg; bestT = tOnLater; firstIsOver = isOverLater;
+    }
+  }
+  return !firstIsOver;
+}
+
 // Find all crossings between slope+1 and slope-1 segments, assign alternating
 // over/under by sorting encounters along the strand, return as bump events.
 function buildCrossingEvents(bights, mod, cumLen, totalLen) {
   const n = bights.length;
-  const seen = new Map(); // key `cx,cy` → {sP, sQ}
+  const seen = new Map(); // key `cx,cy` → {sP, sQ, p, q, tP, tQ}
 
   for (let p = 0; p < n; p++) {
     const [ax, ay] = bights[p];
@@ -412,24 +430,22 @@ function buildCrossingEvents(bights, mod, cumLen, totalLen) {
 
         const key = `${(ax + t) % mod},${ay + t}`;
         if (!seen.has(key))
-          seen.set(key, { sP: cumLen[p] + t, sQ: cumLen[q] + u });
+          seen.set(key, { sP: cumLen[p] + t, sQ: cumLen[q] + u, p, q, tP: t, tQ: u });
       }
     }
   }
 
-  // Sort crossings by sP (order encountered along the strand).
-  // For an alternating knot, consecutive crossings alternate over/under.
-  // At each crossing the two strands get opposite assignments.
   const crossings = [...seen.values()];
   crossings.sort((a, b) => a.sP - b.sP);
+  crossings.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
+  const flip = needsParityFlip(crossings);
+  if (flip) crossings.forEach(c => { c.pIsOver = !c.pIsOver; });
 
   const events = [];
-  for (let i = 0; i < crossings.length; i++) {
-    const isOver = (i % 2 === 0);
-    const { sP, sQ } = crossings[i];
+  for (const { sP, sQ, pIsOver } of crossings) {
     for (const offset of [0, -totalLen, totalLen]) {
-      events.push({ s_c: sP + offset, isOver });
-      events.push({ s_c: sQ + offset, isOver: !isOver });
+      events.push({ s_c: sP + offset, isOver:  pIsOver });
+      events.push({ s_c: sQ + offset, isOver: !pIsOver });
     }
   }
   return events;
@@ -799,14 +815,18 @@ function computeDiagramCrossings(bights, n, mod) {
   }
 
   const list = [...seen.values()].sort((a, b) => a.sP - b.sP);
+  list.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
+  const flip = needsParityFlip(list.map(c => ({p:c.p, q:c.q, tP:c.t, tQ:c.u, pIsOver:c.pIsOver})));
+  if (flip) list.forEach(c => { c.pIsOver = !c.pIsOver; });
+
   const perSeg = new Map();
-  list.forEach(({p, t, q, u}, i) => {
-    const isOver = i % 2 === 0;
+  list.forEach(({p, t, q, u, pIsOver}) => {
     if (!perSeg.has(p)) perSeg.set(p, []);
     if (!perSeg.has(q)) perSeg.set(q, []);
-    perSeg.get(p).push({t, isUnder: !isOver});
-    perSeg.get(q).push({t: u, isUnder: isOver});
+    perSeg.get(p).push({t,    isUnder: !pIsOver});
+    perSeg.get(q).push({t: u, isUnder:  pIsOver});
   });
+  perSeg.crossingCount = list.length;
   return perSeg;
 }
 
@@ -1034,10 +1054,21 @@ function drawDiagram() {
     if (sx < ox || sx > ox + availDiagW) continue;
     ctx.fillText(String(x % mod), sx, py(MAX_Y) - 6);
   }
+
+  // Info line below the diagram: mod | zigzag | crossings
+  const infoY = py(0) + 44;
+  ctx.font = '13px monospace';
+  ctx.fillStyle = 'rgba(180,205,255,0.75)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`mod = ${mod}`, ox, infoY);
+  ctx.textAlign = 'center';
+  ctx.fillText(ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → '), ox + availDiagW / 2, infoY);
+  ctx.textAlign = 'right';
+  ctx.fillText(`${crossMap.crossingCount} crossings`, ox + availDiagW, infoY);
 }
 
 function positionZigzagDisplay() {
-  document.getElementById('zigzagDisplay').style.display = showDiagram ? 'block' : 'none';
+  document.getElementById('zigzagDisplay').style.display = 'none';
 }
 
 document.getElementById('diagramToggle').addEventListener('click', () => {
@@ -1072,6 +1103,107 @@ document.getElementById('viewSlider').addEventListener('input', () => {
 
 document.getElementById('xStretchSlider').addEventListener('input', () => {
   if (showDiagram) drawDiagram();
+});
+
+// ── Tying sequence ─────────────────────────────────────────────────────────
+function generateTyingSequence() {
+  const B   = parseInt(document.getElementById('bInput').value);
+  const mod = 2 * currentC * B;
+  const bights = generateBights(B);
+  const n = bights.length;
+
+  // Row numbering: distinct y-values sorted ascending
+  const yValues = [...new Set(bights.map(b => b[1]))].sort((a, b) => a - b);
+  const yToRow  = new Map(yValues.map((y, i) => [y, i]));
+
+  // Per-row bight labels (same as diagram: sort by x within row)
+  const bightLabel = new Array(n);
+  const byY = new Map();
+  for (let j = 0; j < n; j++) {
+    const y = bights[j][1];
+    if (!byY.has(y)) byY.set(y, []);
+    byY.get(y).push(j);
+  }
+  for (const group of byY.values()) {
+    group.sort((a, b) => bights[a][0] - bights[b][0]);
+    group.forEach((j, idx) => { bightLabel[j] = idx; });
+  }
+
+  // Cumulative arc-lengths
+  const cumLen = [0];
+  for (let i = 0; i < n; i++)
+    cumLen.push(cumLen[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
+
+  // Find all crossings
+  const seen = new Map();
+  for (let p = 0; p < n; p++) {
+    const [ax, ay] = bights[p];
+    const dxp = Math.abs(bights[(p+1)%n][1] - ay);
+    if (bights[(p+1)%n][1] - ay <= 0) continue;
+    for (let q = 0; q < n; q++) {
+      const [cx, cy] = bights[q];
+      const dxq = Math.abs(bights[(q+1)%n][1] - cy);
+      if (bights[(q+1)%n][1] - cy >= 0) continue;
+      const diffY = cy - ay;
+      for (let t = 1; t < dxp; t++) {
+        const u = diffY - t;
+        if (u <= 0 || u >= dxq) continue;
+        if ((ax + t) % mod !== (cx + u) % mod) continue;
+        const key = `${(ax+t)%mod},${ay+t}`;
+        if (!seen.has(key))
+          seen.set(key, {p, q, tP: t, tQ: u, sP: cumLen[p]+t});
+      }
+    }
+  }
+
+  // Assign over/under by sP order
+  const crossList = [...seen.values()].sort((a, b) => a.sP - b.sP);
+  crossList.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
+  const flip = needsParityFlip(crossList);
+  if (flip) crossList.forEach(c => { c.pIsOver = !c.pIsOver; });
+
+  // Per-segment crossing lists sorted by position along segment
+  const segCrossings = Array.from({length: n}, () => []);
+  for (const {p, q, tP, tQ, pIsOver} of crossList) {
+    segCrossings[p].push({t: tP, other: q, isOver:  pIsOver});
+    segCrossings[q].push({t: tQ, other: p, isOver: !pIsOver});
+  }
+  for (let i = 0; i < n; i++)
+    segCrossings[i].sort((a, b) => a.t - b.t);
+
+  // Build sequence
+  const m = parseInt(document.getElementById('mInput').value);
+  const lines = [
+    `# Turk's Head Knot tying sequence`,
+    `# ${m} leads × ${B} bights, complexity=${currentC}` + (currentC === 2 ? `  (a=${currentA}, b=${currentB})` : ''),
+    `# ${n} path bights, mod=${mod}, ${crossList.length} crossings`,
+    ``
+  ];
+
+  for (let i = 0; i < n; i++) {
+    const [, y] = bights[i];
+    const prevY = bights[(i - 1 + n) % n][1];
+    const nextY = bights[(i + 1) % n][1];
+    const isTop = prevY < y && nextY < y;
+    lines.push(`${isTop ? 'H' : 'L'}(${yToRow.get(y)},${bightLabel[i]})`);
+    for (const {other, isOver} of segCrossings[i])
+      if (other < i)
+        lines.push(`  ${isOver ? 'O' : 'U'}`);
+  }
+
+  return lines.join('\n');
+}
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
+  const seq  = generateTyingSequence();
+  const m    = parseInt(document.getElementById('mInput').value);
+  const B    = parseInt(document.getElementById('bInput').value);
+  const blob = new Blob([seq], {type: 'text/plain'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `knot_${m}L_${B}B.txt`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
