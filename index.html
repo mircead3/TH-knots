@@ -451,97 +451,121 @@ function buildCrossingEvents(bights, mod, cumLen, totalLen) {
   return events;
 }
 
-// Shared curve for both views. In 'cylinder' mode the path lies on a cylinder
-// and over/under is shown as a radial bump. In 'flat' mode the cylinder is
-// unrolled into a disc (each bight row → a concentric circle) and over/under
-// is a z-depth offset.
-class KnotCurve extends THREE.Curve {
-  constructor(bights, mod, mode = 'cylinder') {
-    super();
-    this.bights = bights;
-    this.mod    = mod;
-    this.viewT  = mode; // 0 = flat, 1 = cylinder (accepts slider value)
-    this.R      = 4.5;  // cylinder radius
-    this.H      = 8;    // cylinder height
-    const tubeR = parseFloat(document.getElementById('thickInput').value);
-    this.innerR = Math.min(1.5, 0.15 * (mod / D)) * (tubeR / 0.25); // scales with tube thickness
-    this.outerR = 5.5;  // flat-mode outer radius  (maps to y = MAX_Y)
-
-    const n = bights.length;
-    this.cumLen = [0];
-    for (let i = 0; i < n; i++) {
-      const a  = bights[i];
-      const b  = bights[(i + 1) % n];
-      const dx = Math.abs(b[1] - a[1]);
-      this.cumLen.push(this.cumLen[i] + dx);
+// Per-segment crossing data with exact (x,y) coordinates and over/under assignments.
+function buildSegmentCrossings(bights, mod, cumLen) {
+  const n = bights.length;
+  const seen = new Map();
+  for (let p = 0; p < n; p++) {
+    const [ax, ay] = bights[p];
+    const dxp = Math.abs(bights[(p+1)%n][1] - ay);
+    if (bights[(p+1)%n][1] - ay <= 0) continue;
+    for (let q = 0; q < n; q++) {
+      const [cx, cy] = bights[q];
+      const dxq = Math.abs(bights[(q+1)%n][1] - cy);
+      if (bights[(q+1)%n][1] - cy >= 0) continue;
+      const diffY = cy - ay;
+      for (let t = 1; t < dxp; t++) {
+        const u = diffY - t;
+        if (u <= 0 || u >= dxq) continue;
+        if ((ax + t) % mod !== (cx + u) % mod) continue;
+        const key = `${(ax+t)%mod},${ay+t}`;
+        if (!seen.has(key))
+          seen.set(key, { p, q, tP: t, tQ: u, sP: cumLen[p]+t, x: (ax+t)%mod, y: ay+t });
+      }
     }
-    this.totalLen = this.cumLen[n];
-
-    this.events       = buildCrossingEvents(bights, mod, this.cumLen, this.totalLen);
-    this.delta        = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
-    this.sigma        = 0.6;
-    this.cornerRadius = 0.8;
   }
 
-  // Returns {xUnwrapped, y} with quadratic-Bezier corner rounding at bights.
-  // Effective radius at each bight is min(cr, half of each adjacent segment)
-  // so short segments (|dy|=1 when a+b=m-1) never cause discontinuities.
-  _getXY(s) {
-    const n  = this.bights.length;
-    const cr = this.cornerRadius;
+  const crossings = [...seen.values()].sort((a, b) => a.sP - b.sP);
+  crossings.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
+  const flip = needsParityFlip(crossings);
+  if (flip) crossings.forEach(c => { c.pIsOver = !c.pIsOver; });
 
-    let i = 0;
-    while (i < n - 1 && this.cumLen[i + 1] < s) i++;
+  const segCrossings = Array.from({length: n}, () => []);
+  for (const {p, q, tP, tQ, x, y, pIsOver} of crossings) {
+    segCrossings[p].push({t: tP, x, y, isOver:  pIsOver});
+    segCrossings[q].push({t: tQ, x, y, isOver: !pIsOver});
+  }
+  for (let i = 0; i < n; i++) segCrossings[i].sort((a, b) => a.t - b.t);
+  return segCrossings;
+}
 
-    const a      = this.bights[i];
-    const b      = this.bights[(i + 1) % n];
-    const prev   = this.bights[(i - 1 + n) % n];
-    const next   = this.bights[(i + 2) % n];
-    const dx     = Math.abs(b[1] - a[1]);
-    const dxPrev = Math.abs(a[1] - prev[1]);
-    const dxNext = Math.abs(next[1] - b[1]);
-    const sLocal = s - this.cumLen[i];
+// Cubic Hermite spline through crossing points with analytically-derived tangents.
+// At each crossing the tangent is the exact derivative of the 3D position mapping
+// with respect to the abstract path parameter, using the segment's ±1 slope.
+class KnotCurve extends THREE.Curve {
+  constructor(bights, mod, viewT) {
+    super();
+    const n      = bights.length;
+    const tubeR  = parseFloat(document.getElementById('thickInput').value);
+    const R      = 4.5, H = 8;
+    const innerR = Math.min(1.0, Math.max(0.2, 0.1 * (mod / D)));
+    const outerR = 5.5;
+    const delta  = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
 
-    // Adaptive radii: never exceed half of either adjacent segment.
-    const crS = Math.min(cr, dx / 2, dxPrev / 2);
-    const crE = Math.min(cr, dx / 2, dxNext / 2);
+    const cumLen = [0];
+    for (let i = 0; i < n; i++)
+      cumLen.push(cumLen[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
 
-    if (sLocal < crS) {
-      const s1  = Math.sign(a[1] - prev[1]);
-      const tau = 0.5 + sLocal / (2 * crS);
-      return { xUnwrapped: this.cumLen[i] + crS * (2 * tau - 1),
-               y: a[1] - s1 * crS * (1 - 2 * tau + 2 * tau * tau) };
+    const segCrossings = buildSegmentCrossings(bights, mod, cumLen);
+
+    const to3D = (x, y, radOff = 0) => {
+      const theta = (x / mod) * 2 * Math.PI;
+      const rFlat = innerR + (y / MAX_Y) * (outerR - innerR);
+      const zCyl  = (y / MAX_Y) * H - H / 2;
+      const r     = (1 - viewT) * rFlat + viewT * (R + radOff);
+      const z     = (1 - viewT) * radOff  + viewT * zCyl;
+      return new THREE.Vector3(r * Math.cos(theta), r * Math.sin(theta), z);
+    };
+
+    // Analytical unit tangent: derivative of to3D w.r.t. abstract parameter,
+    // using base radius (no radOff) since radOff is a fixed offset, not varying.
+    const dir3D = (x, y, slope) => {
+      const theta  = (x / mod) * 2 * Math.PI;
+      const rFlat  = innerR + (y / MAX_Y) * (outerR - innerR);
+      const r      = (1 - viewT) * rFlat + viewT * R;
+      const dtheta = 2 * Math.PI / mod;                          // d(theta)/d(abstract_x)
+      const dr     = (1 - viewT) * slope * (outerR - innerR) / MAX_Y;
+      const dz     = viewT * slope * H / MAX_Y;
+      return new THREE.Vector3(
+        dr * Math.cos(theta) - r * Math.sin(theta) * dtheta,
+        dr * Math.sin(theta) + r * Math.cos(theta) * dtheta,
+        dz
+      ).normalize();
+    };
+
+    // Build positions and unit tangent directions for all crossings in path order
+    this.pts  = [];
+    this.dirs = [];
+    for (let i = 0; i < n; i++) {
+      const slope = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+      for (const {x, y, isOver} of segCrossings[i]) {
+        this.pts.push(to3D(x, y, isOver ? delta : -delta));
+        this.dirs.push(dir3D(x, y, slope));
+      }
     }
-    if (dx - sLocal < crE) {
-      const s1       = Math.sign(b[1] - a[1]);
-      const sFromEnd = dx - sLocal;
-      const tau      = 0.5 - sFromEnd / (2 * crE);
-      return { xUnwrapped: this.cumLen[i + 1] + crE * (2 * tau - 1),
-               y: b[1] - s1 * crE * (1 - 2 * tau + 2 * tau * tau) };
-    }
-    return { xUnwrapped: this.cumLen[i] + sLocal,
-             y: a[1] + (b[1] - a[1]) * sLocal / dx };
+    this.m = this.pts.length;
   }
 
   getPoint(t, out = new THREE.Vector3()) {
-    const s = t * this.totalLen;
-    const { xUnwrapped, y } = this._getXY(s);
-    const theta = ((xUnwrapped % this.mod) / this.mod) * 2 * Math.PI;
+    const { pts, dirs, m } = this;
+    const ft = ((t * m) % m + m) % m;
+    const i  = Math.floor(ft);
+    const u  = ft - i;
+    const j  = (i + 1) % m;
 
-    let rOff = 0;
-    for (const ev of this.events) {
-      const d = s - ev.s_c;
-      rOff += (ev.isOver ? this.delta : -this.delta)
-              * Math.exp(-0.5 * (d / this.sigma) ** 2);
-    }
+    const P0 = pts[i], P1 = pts[j];
+    const scale = P0.distanceTo(P1); // scale tangents by chord length
 
-    const vt    = this.viewT;
-    const rFlat = this.innerR + (y / MAX_Y) * (this.outerR - this.innerR);
-    const rCyl  = this.R + rOff;
-    const zCyl  = (y / MAX_Y) * this.H - this.H / 2;
-    const r = (1 - vt) * rFlat + vt * rCyl;
-    const z = (1 - vt) * rOff  + vt * zCyl;
-    return out.set(r * Math.cos(theta), r * Math.sin(theta), z);
+    const h00 =  2*u*u*u - 3*u*u + 1;
+    const h10 =    u*u*u - 2*u*u + u;
+    const h01 = -2*u*u*u + 3*u*u;
+    const h11 =    u*u*u -   u*u;
+
+    return out.set(
+      h00*P0.x + h10*scale*dirs[i].x + h01*P1.x + h11*scale*dirs[j].x,
+      h00*P0.y + h10*scale*dirs[i].y + h01*P1.y + h11*scale*dirs[j].y,
+      h00*P0.z + h10*scale*dirs[i].z + h01*P1.z + h11*scale*dirs[j].z
+    );
   }
 }
 
