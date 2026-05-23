@@ -793,12 +793,13 @@ function updateABSelector(m) {
   el.style.pointerEvents = only ? 'none' : '';
 }
 
-function minLeads() { return currentC === 2 ? 3 : 2; }
+function minLeads()  { return currentC === 2 ? 3 : 2; }
+function minBights() { return currentC === 1 ? 2 : 1; }
 
 function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
-  if (isNaN(m) || isNaN(B) || m < minLeads()) return;
+  if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
   if (currentC === 2 && validPairs(m).length === 0) return;
   setKnotFromUI(m);
   buildKnot(B);
@@ -884,7 +885,7 @@ document.getElementById('mInput').addEventListener('change', onMChange);
 document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
-  if (isNaN(m) || isNaN(B) || m < 2) return;
+  if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
   setKnotFromUI(m);
   buildKnot(B, true);
   if (showDiagram) drawDiagram();
@@ -896,6 +897,9 @@ function setComplexity(c) {
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
+  const bInput = document.getElementById('bInput');
+  bInput.min = minBights();
+  if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
   updateABSelector(parseInt(mInput.value));
   rebuildKnot();
 }
