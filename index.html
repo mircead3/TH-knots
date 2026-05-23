@@ -537,7 +537,8 @@ function buildAllSegmentCrossings(components, mod) {
   }
 
   const list = [...seen.values()];
-  list.forEach(c => { c.pIsOver = (c.y % 2 === 0); });
+  const yRank = new Map([...new Set(list.map(c => c.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
+  list.forEach(c => { c.pIsOver = (yRank.get(c.y) % 2 === 0); });
   const forFlip = list.map(c => ({p:c.p, q:c.q, tP:c.tP, tQ:c.tQ, pIsOver:c.pIsOver}));
   if (needsParityFlip(forFlip)) list.forEach(c => { c.pIsOver = !c.pIsOver; });
 
@@ -981,7 +982,8 @@ function computeDiagramCrossingsAll(components, mod) {
     }
   }
   const list = [...seen.values()];
-  list.forEach(cr => { cr.pIsOver = (cr.y % 2 === 0); });
+  const yRank = new Map([...new Set(list.map(cr => cr.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
+  list.forEach(cr => { cr.pIsOver = (yRank.get(cr.y) % 2 === 0); });
   const forFlip = list.map(cr => ({p:cr.p, q:cr.q, tP:cr.t, tQ:cr.u, pIsOver:cr.pIsOver}));
   if (needsParityFlip(forFlip)) list.forEach(cr => { cr.pIsOver = !cr.pIsOver; });
   const result = components.map(() => new Map());
