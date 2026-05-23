@@ -498,7 +498,7 @@ class KnotCurve extends THREE.Curve {
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
     const R      = 4.5, H = 8;
-    const innerR = Math.min(1.0, Math.max(0.2, 0.1 * (mod / D)));
+    const innerR = Math.min(1.0, Math.max(0.05, 0.1 * (mod / D)));
     const outerR = 5.5;
     const delta  = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
 
@@ -533,14 +533,31 @@ class KnotCurve extends THREE.Curve {
       ).normalize();
     };
 
-    // Build positions and unit tangent directions for all crossings in path order
-    this.pts  = [];
-    this.dirs = [];
+    // Build positions and unit tangent directions for all crossings in path order.
+    // Bights are NOT hard control points — they're stored separately for display only.
+    this.pts      = [];
+    this.dirs     = [];
+    this.scales   = []; // per-segment tangent scale multiplier
+    this.bightPts = []; // 3D bight positions for debug display
+
     for (let i = 0; i < n; i++) {
-      const slope = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-      for (const {x, y, isOver} of segCrossings[i]) {
+      const slope     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+      const nextSlope = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
+      const atBight   = slope !== nextSlope; // last segment before a turn
+      for (let k = 0; k < segCrossings[i].length; k++) {
+        const {x, y, isOver} = segCrossings[i][k];
         this.pts.push(to3D(x, y, isOver ? delta : -delta));
         this.dirs.push(dir3D(x, y, slope));
+        // Boost tangent scale for the last crossing before a bight and the
+        // first crossing after — this sweeps a wider arc near the turn.
+        const isLast  = k === segCrossings[i].length - 1;
+        this.scales.push(atBight && isLast ? 1.5 : 1);
+      }
+
+      // Store bight 3D position for display only (not a control point)
+      if (atBight) {
+        const [bx, by] = bights[(i+1)%n];
+        this.bightPts.push(to3D(bx, by, 0));
       }
     }
     this.m = this.pts.length;
@@ -554,7 +571,7 @@ class KnotCurve extends THREE.Curve {
     const j  = (i + 1) % m;
 
     const P0 = pts[i], P1 = pts[j];
-    const scale = P0.distanceTo(P1); // scale tangents by chord length
+    const scale = P0.distanceTo(P1) * this.scales[i];
 
     const h00 =  2*u*u*u - 3*u*u + 1;
     const h10 =    u*u*u - 2*u*u + u;
@@ -617,6 +634,8 @@ function buildKnot(B, resumeRotation = false) {
   });
 
   knotGroup.add(new THREE.Mesh(geo, mat));
+
+
   knotGroup.rotation.set(-0.4 * vt, 0, 0);
   if (resumeRotation) {
     camera.position.set(0, 4 * vt, 14);
@@ -710,19 +729,28 @@ function buildABGrid(m) {
 
 function getAB() { return [currentA, currentB]; }
 
+function minLeads() { return currentC === 2 ? 3 : 2; }
+
 function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
-  if (isNaN(m) || isNaN(B) || m < 2) return;
+  if (isNaN(m) || isNaN(B) || m < minLeads()) return;
+  if (currentC === 2 && validPairs(m).length === 0) return;
   setKnotFromUI(m);
   buildKnot(B);
   if (showDiagram) drawDiagram();
 }
 
 function onMChange() {
-  const m = parseInt(document.getElementById('mInput').value);
-  if (isNaN(m) || m < 2) return;
+  let m = parseInt(document.getElementById('mInput').value);
+  if (isNaN(m)) return;
+  if (m < minLeads()) {
+    m = minLeads();
+    document.getElementById('mInput').value = m;
+  }
   if (currentC === 2) {
+    const pairs = validPairs(m);
+    if (pairs.length === 0) return;
     [currentA, currentB] = nearestValid(m, currentA, currentB);
     document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
     if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
@@ -800,6 +828,9 @@ document.getElementById('bInput').addEventListener('change', () => {
 function setComplexity(c) {
   currentC = c;
   document.getElementById('shapeSection').style.display = c === 2 ? '' : 'none';
+  const mInput = document.getElementById('mInput');
+  mInput.min = minLeads();
+  if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
   rebuildKnot();
 }
 document.getElementById('cInput').addEventListener('change', () => {
