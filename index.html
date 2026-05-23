@@ -729,6 +729,13 @@ function buildABGrid(m) {
 
 function getAB() { return [currentA, currentB]; }
 
+function updateABSelector(m) {
+  const only = currentC === 2 && validPairs(m).length <= 1;
+  const el = document.getElementById('abDisplay');
+  el.style.opacity = only ? '0.35' : '';
+  el.style.pointerEvents = only ? 'none' : '';
+}
+
 function minLeads() { return currentC === 2 ? 3 : 2; }
 
 function rebuildKnot() {
@@ -755,6 +762,7 @@ function onMChange() {
     document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
     if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
   }
+  updateABSelector(m);
   setKnotFromUI(m);
   buildKnot(parseInt(document.getElementById('bInput').value), true);
   if (showDiagram) drawDiagram();
@@ -831,6 +839,7 @@ function setComplexity(c) {
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
+  updateABSelector(parseInt(mInput.value));
   rebuildKnot();
 }
 document.getElementById('cInput').addEventListener('change', () => {
