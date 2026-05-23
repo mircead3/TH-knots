@@ -404,6 +404,22 @@ function needsParityFlip(crossings) {
   return !firstIsOver;
 }
 
+// Generate all g = gcd(LEADS, B) components of the TH link.
+// Component j is component 0 with all bight x-coordinates shifted by j × gcd(PERIOD, mod) / g.
+function generateAllComponents(B) {
+  const mod  = 2 * currentC * B;
+  const base = generateBights(B);
+  const g    = gcd(LEADS, B);
+  if (g === 1) return [base];
+  const shift = gcd(PERIOD, mod) / g;
+  const components = [base];
+  for (let j = 1; j < g; j++) {
+    const off = j * shift;
+    components.push(base.map(([x, y]) => [(x + off) % mod, y]));
+  }
+  return components;
+}
+
 // Find all crossings between slope+1 and slope-1 segments, assign alternating
 // over/under by sorting encounters along the strand, return as bump events.
 function buildCrossingEvents(bights, mod, cumLen, totalLen) {
@@ -489,11 +505,58 @@ function buildSegmentCrossings(bights, mod, cumLen) {
   return segCrossings;
 }
 
+// Find all crossings across all components (intra- and inter-component).
+// Returns result[c][i] = [{t, x, y, isOver}] for segment i of component c.
+function buildAllSegmentCrossings(components, mod) {
+  const nC = components.length;
+  const seen = new Map();
+  for (let ci = 0; ci < nC; ci++) {
+    const bP = components[ci], np = bP.length;
+    for (let p = 0; p < np; p++) {
+      const [ax, ay] = bP[p];
+      const dxp = Math.abs(bP[(p+1)%np][1] - ay);
+      if (bP[(p+1)%np][1] - ay <= 0) continue;
+      for (let cj = 0; cj < nC; cj++) {
+        const bQ = components[cj], nq = bQ.length;
+        for (let q = 0; q < nq; q++) {
+          const [cx, cy] = bQ[q];
+          const dxq = Math.abs(bQ[(q+1)%nq][1] - cy);
+          if (bQ[(q+1)%nq][1] - cy >= 0) continue;
+          const diffY = cy - ay;
+          for (let t = 1; t < dxp; t++) {
+            const u = diffY - t;
+            if (u <= 0 || u >= dxq) continue;
+            if ((ax + t) % mod !== (cx + u) % mod) continue;
+            const key = `${(ax+t)%mod},${ay+t}`;
+            if (!seen.has(key))
+              seen.set(key, {ci, p, tP:t, cj, q, tQ:u, x:(ax+t)%mod, y:ay+t});
+          }
+        }
+      }
+    }
+  }
+
+  const list = [...seen.values()];
+  list.forEach(c => { c.pIsOver = (c.y % 2 === 0); });
+  const forFlip = list.map(c => ({p:c.p, q:c.q, tP:c.tP, tQ:c.tQ, pIsOver:c.pIsOver}));
+  if (needsParityFlip(forFlip)) list.forEach(c => { c.pIsOver = !c.pIsOver; });
+
+  const result = components.map(b => b.map(() => []));
+  for (const {ci, p, tP, cj, q, tQ, x, y, pIsOver} of list) {
+    result[ci][p].push({t:tP, x, y, isOver:  pIsOver});
+    result[cj][q].push({t:tQ, x, y, isOver: !pIsOver});
+  }
+  for (let c = 0; c < nC; c++)
+    for (let i = 0; i < components[c].length; i++)
+      result[c][i].sort((a, b) => a.t - b.t);
+  return result;
+}
+
 // Cubic Hermite spline through crossing points with analytically-derived tangents.
 // At each crossing the tangent is the exact derivative of the 3D position mapping
 // with respect to the abstract path parameter, using the segment's ±1 slope.
 class KnotCurve extends THREE.Curve {
-  constructor(bights, mod, viewT) {
+  constructor(bights, segCrossings, mod, viewT) {
     super();
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
@@ -501,12 +564,6 @@ class KnotCurve extends THREE.Curve {
     const innerR = Math.min(1.0, Math.max(0.05, 0.1 * (mod / D)));
     const outerR = 5.5;
     const delta  = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
-
-    const cumLen = [0];
-    for (let i = 0; i < n; i++)
-      cumLen.push(cumLen[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
-
-    const segCrossings = buildSegmentCrossings(bights, mod, cumLen);
 
     const to3D = (x, y, radOff = 0) => {
       const theta = (x / mod) * 2 * Math.PI;
@@ -598,42 +655,39 @@ function buildKnot(B, resumeRotation = false) {
     knotGroup.remove(c);
   }
 
-  const mod = 2 * currentC * B;
-  const bights = generateBights(B);
-  const vt     = parseFloat(document.getElementById('viewSlider').value);
-  const curve  = new KnotCurve(bights, mod, vt);
+  const mod        = 2 * currentC * B;
+  const vt         = parseFloat(document.getElementById('viewSlider').value);
+  const tubeRadius = parseFloat(document.getElementById('thickInput').value);
 
-  const tubularSegments = bights.length * 60;
-  const radialSegments  = 20;
-  const tubeRadius      = parseFloat(document.getElementById('thickInput').value);
+  const components     = generateAllComponents(B);
+  const g              = components.length;
+  const allSegCrossings = buildAllSegmentCrossings(components, mod);
 
-  const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
+  const radialSegments = 20;
+  const tmp = new THREE.Color();
 
-  // Rainbow gradient so crossing strands show distinct colours.
-  const ringCount    = tubularSegments + 1;
-  const vertsPerRing = radialSegments + 1;
-  const cols         = new Float32Array(ringCount * vertsPerRing * 3);
-  const tmp          = new THREE.Color();
+  for (let c = 0; c < g; c++) {
+    const bights = components[c];
+    const curve  = new KnotCurve(bights, allSegCrossings[c], mod, vt);
+    const tubularSegments = bights.length * 60;
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
 
-  for (let i = 0; i < ringCount; i++) {
-    tmp.setHSL(i / tubularSegments, 0.9, 0.62);
-    for (let j = 0; j < vertsPerRing; j++) {
-      const idx   = (i * vertsPerRing + j) * 3;
-      cols[idx]   = tmp.r;
-      cols[idx+1] = tmp.g;
-      cols[idx+2] = tmp.b;
+    // Each component gets 1/g of the hue spectrum for a rainbow gradient.
+    const ringCount    = tubularSegments + 1;
+    const vertsPerRing = radialSegments + 1;
+    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
+    for (let i = 0; i < ringCount; i++) {
+      tmp.setHSL(c / g + (i / tubularSegments) / g, 0.9, 0.62);
+      for (let j = 0; j < vertsPerRing; j++) {
+        const idx = (i * vertsPerRing + j) * 3;
+        cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
+      }
     }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    knotGroup.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+      vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
+    })));
   }
-
-  geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-
-  const mat = new THREE.MeshPhongMaterial({
-    vertexColors: true,
-    specular:     new THREE.Color(0xffffff),
-    shininess:    140,
-  });
-
-  knotGroup.add(new THREE.Mesh(geo, mat));
 
 
   knotGroup.rotation.set(-0.4 * vt, 0, 0);
@@ -644,16 +698,18 @@ function buildKnot(B, resumeRotation = false) {
     autoRotate = true;
   }
 
-  updateInfo(B);
+  updateInfo(B, g);
 }
 
 // ── Info panel ─────────────────────────────────────────────────────────────
 const infoName      = document.getElementById('infoName');
 const zigzagDisplay  = document.getElementById('zigzagDisplay');
 
-function updateInfo(B) {
+function updateInfo(B, g = 1) {
   const mod = 2 * currentC * B;
-  infoName.textContent = `${2 * currentC * B} bights total`;
+  infoName.textContent = g > 1
+    ? `${2 * currentC * B} bights total  ·  ${g} components`
+    : `${2 * currentC * B} bights total`;
   zigzagDisplay.textContent = `mod = ${mod}    ` +
     ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
   positionZigzagDisplay();
@@ -895,6 +951,50 @@ function computeDiagramCrossings(bights, n, mod) {
   return perSeg;
 }
 
+// Multi-component version: result[c] is a Map segIndex → [{t, isUnder}]
+function computeDiagramCrossingsAll(components, mod) {
+  const nC = components.length;
+  const seen = new Map();
+  for (let ci = 0; ci < nC; ci++) {
+    const bP = components[ci], np = bP.length;
+    for (let p = 0; p < np; p++) {
+      const [ax, ay] = bP[p];
+      if (bP[(p+1)%np][1] - ay <= 0) continue;
+      const dxp = bP[(p+1)%np][1] - ay;
+      for (let cj = 0; cj < nC; cj++) {
+        const bQ = components[cj], nq = bQ.length;
+        for (let q = 0; q < nq; q++) {
+          const [cx, cy] = bQ[q];
+          if (bQ[(q+1)%nq][1] - cy >= 0) continue;
+          const dxq = cy - bQ[(q+1)%nq][1];
+          const diffY = cy - ay;
+          for (let t = 1; t < dxp; t++) {
+            const u = diffY - t;
+            if (u <= 0 || u >= dxq) continue;
+            if ((ax + t) % mod !== (cx + u) % mod) continue;
+            const key = `${(ax+t)%mod},${ay+t}`;
+            if (!seen.has(key))
+              seen.set(key, {ci, p, t, cj, q, u, x:(ax+t)%mod, y:ay+t});
+          }
+        }
+      }
+    }
+  }
+  const list = [...seen.values()];
+  list.forEach(cr => { cr.pIsOver = (cr.y % 2 === 0); });
+  const forFlip = list.map(cr => ({p:cr.p, q:cr.q, tP:cr.t, tQ:cr.u, pIsOver:cr.pIsOver}));
+  if (needsParityFlip(forFlip)) list.forEach(cr => { cr.pIsOver = !cr.pIsOver; });
+  const result = components.map(() => new Map());
+  list.forEach(({ci, p, t, cj, q, u, pIsOver}) => {
+    if (!result[ci].has(p)) result[ci].set(p, []);
+    if (!result[cj].has(q)) result[cj].set(q, []);
+    result[ci].get(p).push({t,    isUnder: !pIsOver});
+    result[cj].get(q).push({t: u, isUnder:  pIsOver});
+  });
+  result.crossingCount = list.length;
+  return result;
+}
+
 let showDiagram = false;
 const diagramCanvas = document.getElementById('diagram');
 
@@ -981,9 +1081,47 @@ function drawDiagram() {
     ctx.stroke();
   }
 
-  const bights = generateBights(B);
+  const components   = generateAllComponents(B);
+  const g            = components.length;
+  const allCrossings = computeDiagramCrossingsAll(components, mod);
+  const rStart       = -Math.ceil(PERIOD / mod);
 
-
+  // Precompute geometry for all components.
+  // allSegs[comp][r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
+  const allSegs = components.map((bights, comp) => {
+    const crossMap = allCrossings[comp];
+    const n        = bights.length;
+    const numZigs  = Math.floor(n / D);
+    const segs = [];
+    for (let r = rStart; r < REPS; r++) {
+      const xOff = r * mod;
+      const rSegs = [];
+      for (let i = 0; i < numZigs; i++) {
+        const hue = `hsl(${(comp / g + i / numZigs / g) * 360},90%,65%)`;
+        let cumX = bights[i * D][0];
+        const iSegs = [];
+        for (let s = 0; s < D; s++) {
+          const idx = i * D + s;
+          const nxt = (idx + 1) % n;
+          const [, ay] = bights[idx];
+          const [, by] = bights[nxt];
+          const dx = Math.abs(by - ay);
+          const x1s = px(cumX + xOff), y1s = py(ay);
+          const x2s = px(cumX + xOff + dx), y2s = py(by);
+          const segLen = Math.hypot(x2s - x1s, y2s - y1s);
+          const gapF   = segLen > 0 ? 8 / segLen : 0;
+          const crosses = crossMap.get(idx) || [];
+          const underFs = crosses.filter(cr =>  cr.isUnder).map(cr => cr.t / dx);
+          const overFs  = crosses.filter(cr => !cr.isUnder).map(cr => cr.t / dx);
+          iSegs.push({x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs});
+          cumX += dx;
+        }
+        rSegs.push(iSegs);
+      }
+      segs.push(rSegs);
+    }
+    return segs;
+  });
 
   // Zigzag lines and bight dots — clipped to the diagram rectangle.
   ctx.save();
@@ -991,113 +1129,77 @@ function drawDiagram() {
   ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
   ctx.clip();
 
-  const n        = bights.length;
-  const numZigs  = Math.floor(n / D);
-  const crossMap = computeDiagramCrossings(bights, n, mod);
+  // Pass 1: draw all segments for all components
+  for (const segs of allSegs)
+    for (const rSegs of segs)
+      for (const iSegs of rSegs)
+        for (const {x1s, y1s, x2s, y2s, hue} of iSegs) {
+          ctx.lineWidth = 2; ctx.strokeStyle = hue;
+          ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
+        }
 
-  // Some zigzags have cumX up to (mod-1)+PERIOD; they need r lower than -1
-  // to land their endpoint within the visible area.
-  const rStart = -Math.ceil(PERIOD / mod);
-
-  // Precompute per-segment geometry so we can do three separate passes.
-  // segs[r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
-  const segs = [];
-  for (let r = rStart; r < REPS; r++) {
-    const xOff = r * mod;
-    const rSegs = [];
-    for (let i = 0; i < numZigs; i++) {
-      const hue = `hsl(${i / numZigs * 360},90%,65%)`;
-      let cumX = bights[i * D][0];
-      const iSegs = [];
-      for (let s = 0; s < D; s++) {
-        const idx = i * D + s;
-        const nxt = (idx + 1) % n;
-        const [, ay] = bights[idx];
-        const [, by] = bights[nxt];
-        const dx = Math.abs(by - ay);
-        const x1s = px(cumX + xOff), y1s = py(ay);
-        const x2s = px(cumX + xOff + dx), y2s = py(by);
-        const segLen = Math.hypot(x2s - x1s, y2s - y1s);
-        const gapF   = segLen > 0 ? 8 / segLen : 0;
-        const crosses = crossMap.get(idx) || [];
-        const underFs = crosses.filter(c =>  c.isUnder).map(c => c.t / dx);
-        const overFs  = crosses.filter(c => !c.isUnder).map(c => c.t / dx);
-        iSegs.push({x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs});
-        cumX += dx;
-      }
-      rSegs.push(iSegs);
-    }
-    segs.push(rSegs);
-  }
-
-  // Pass 1: draw all segments
-  for (const rSegs of segs)
-    for (const iSegs of rSegs)
-      for (const {x1s, y1s, x2s, y2s, hue} of iSegs) {
-        ctx.lineWidth = 2; ctx.strokeStyle = hue;
-        ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
-      }
-
-  // Pass 2: erase all under-crossings
+  // Pass 2: erase all under-crossings for all components
   ctx.strokeStyle = '#060610'; ctx.lineWidth = 5;
-  for (const rSegs of segs)
-    for (const iSegs of rSegs)
-      for (const {x1s, y1s, x2s, y2s, gapF, underFs} of iSegs)
-        for (const tf of underFs) {
-          const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
-          ctx.beginPath();
-          ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
-          ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
-          ctx.stroke();
-        }
+  for (const segs of allSegs)
+    for (const rSegs of segs)
+      for (const iSegs of rSegs)
+        for (const {x1s, y1s, x2s, y2s, gapF, underFs} of iSegs)
+          for (const tf of underFs) {
+            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+            ctx.beginPath();
+            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+            ctx.stroke();
+          }
 
-  // Pass 3: thicken all over-crossings
+  // Pass 3: thicken all over-crossings for all components
   ctx.lineWidth = 4;
-  for (const rSegs of segs)
-    for (const iSegs of rSegs)
-      for (const {x1s, y1s, x2s, y2s, hue, gapF, overFs} of iSegs) {
-        ctx.strokeStyle = hue;
-        for (const tf of overFs) {
-          const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
-          ctx.beginPath();
-          ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
-          ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
-          ctx.stroke();
+  for (const segs of allSegs)
+    for (const rSegs of segs)
+      for (const iSegs of rSegs)
+        for (const {x1s, y1s, x2s, y2s, hue, gapF, overFs} of iSegs) {
+          ctx.strokeStyle = hue;
+          for (const tf of overFs) {
+            const f0 = Math.max(0, tf - gapF), f1 = Math.min(1, tf + gapF);
+            ctx.beginPath();
+            ctx.moveTo(x1s + f0*(x2s-x1s), y1s + f0*(y2s-y1s));
+            ctx.lineTo(x1s + f1*(x2s-x1s), y1s + f1*(y2s-y1s));
+            ctx.stroke();
+          }
         }
-      }
 
-  // Precompute per-row labels: within each y-row, sort bights by x and number 0,1,2,...
-  const bightLabel = new Array(n);
-  const byY = new Map();
-  for (let j = 0; j < n; j++) {
-    const y = bights[j][1];
-    if (!byY.has(y)) byY.set(y, []);
-    byY.get(y).push(j);
-  }
-  for (const group of byY.values()) {
-    group.sort((a, b) => bights[a][0] - bights[b][0]);
-    group.forEach((j, idx) => { bightLabel[j] = idx; });
-  }
-
-  // Bight dots and labels
+  // Bight dots and labels for all components
   ctx.textAlign = 'center';
-  for (let r = rStart; r < REPS; r++) {
-    const xOff = r * mod;
+  for (let comp = 0; comp < g; comp++) {
+    const bights = components[comp];
+    const n      = bights.length;
+    const bightLabel = new Array(n);
+    const byY = new Map();
     for (let j = 0; j < n; j++) {
-      const [x, y] = bights[j];
-      const sx = px(x + xOff), sy = py(y);
-      const prevY = bights[(j - 1 + n) % n][1];
-      const nextY = bights[(j + 1) % n][1];
-      const isTop = prevY < y && nextY < y;
-
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = '11px monospace';
-      ctx.fillStyle = 'rgba(255,240,160,0.95)';
-      ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 19 : sy - 12);
+      const y = bights[j][1];
+      if (!byY.has(y)) byY.set(y, []);
+      byY.get(y).push(j);
+    }
+    for (const group of byY.values()) {
+      group.sort((a, b) => bights[a][0] - bights[b][0]);
+      group.forEach((j, idx) => { bightLabel[j] = idx; });
+    }
+    for (let r = rStart; r < REPS; r++) {
+      const xOff = r * mod;
+      for (let j = 0; j < n; j++) {
+        const [x, y] = bights[j];
+        const sx = px(x + xOff), sy = py(y);
+        const prevY = bights[(j - 1 + n) % n][1];
+        const nextY = bights[(j + 1) % n][1];
+        const isTop = prevY < y && nextY < y;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = '11px monospace';
+        ctx.fillStyle = 'rgba(255,240,160,0.95)';
+        ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 19 : sy - 12);
+      }
     }
   }
   ctx.restore();
@@ -1107,7 +1209,7 @@ function drawDiagram() {
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
   const xStep    = 2;
-  const topBight = bights.find(([, y]) => y === MAX_Y);
+  const topBight = components[0].find(([, y]) => y === MAX_Y);
   const topStart = topBight ? topBight[0] % xStep : 0;
   for (let x = 0; x <= totalW; x += xStep) {
     const sx = px(x);
@@ -1129,7 +1231,7 @@ function drawDiagram() {
   ctx.textAlign = 'center';
   ctx.fillText(ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → '), ox + availDiagW / 2, infoY);
   ctx.textAlign = 'right';
-  ctx.fillText(`${crossMap.crossingCount} crossings`, ox + availDiagW, infoY);
+  ctx.fillText(`${allCrossings.crossingCount} crossings`, ox + availDiagW, infoY);
 }
 
 function positionZigzagDisplay() {
