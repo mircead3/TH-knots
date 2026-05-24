@@ -121,25 +121,31 @@
       background: rgba(6,6,22,0.97);
       border: 1px solid rgba(100,130,255,0.25);
       border-radius: 8px;
-      padding: 10px;
+      padding: 8px 10px 8px 4px;
       margin-bottom: 10px;
     }
-    #abPopup table { border-collapse: separate; border-spacing: 3px; table-layout: fixed; }
-    #abPopup td, #abPopup th {
-      width: 18px; min-width: 18px; max-width: 18px;
-      height: 18px; line-height: 18px;
-      font-size: 9px; text-align: center;
-      color: rgba(160,185,255,0.4);
-      overflow: hidden; box-sizing: border-box;
-    }
-    .ab-valid {
+    .ab-wrapper   { display: flex; align-items: flex-start; }
+    .ab-label-col { display: flex; flex-direction: column; margin-right: 4px; }
+    .ab-label-col div { height: 13px; line-height: 13px; font-size: 10px;
+                        text-align: right; color: rgba(200,215,255,0.9); min-width: 14px; }
+    .ab-b-header  { position: relative; height: 14px; margin-bottom: 4px; }
+    .ab-b-label   { position: absolute; width: 20px; text-align: center;
+                    font-size: 10px; line-height: 14px; color: rgba(200,215,255,0.9); }
+    .ab-grid      { display: inline-block; }
+    .ab-grid-row  { display: flex; align-items: center; height: 13px; }
+    .ab-cell     { width: 20px; height: 13px; flex-shrink: 0;
+                   display: flex; align-items: center; justify-content: center; }
+    .ab-valid    { cursor: pointer; }
+    .ab-valid::before {
+      content: ''; display: block;
+      width: 12px; height: 12px;
+      transform: rotate(45deg);
       background: rgba(20,20,60,0.9);
       border: 1px solid rgba(100,130,255,0.18);
-      border-radius: 4px;
-      cursor: pointer;
+      border-radius: 2px;
     }
-    .ab-valid:hover  { background: rgba(60,80,180,0.7); border-color: rgba(100,130,255,0.5); }
-    .ab-selected     { background: rgba(100,130,255,0.55) !important; border-color: rgba(140,170,255,0.8) !important; }
+    .ab-valid:hover::before  { background: rgba(60,80,180,0.7); border-color: rgba(100,130,255,0.5); }
+    .ab-selected::before     { background: rgba(100,130,255,0.55) !important; border-color: rgba(140,170,255,0.8) !important; }
 
     #panel {
       z-index: 10;
@@ -743,45 +749,69 @@ function buildABGrid(m) {
   const popup = document.getElementById('abPopup');
   popup.innerHTML = '';
   const maxAB = m - 3;
-  const table = document.createElement('table');
+  const wrapper  = document.createElement('div');
+  wrapper.className = 'ab-wrapper';
+  const labelCol = document.createElement('div');
+  labelCol.className = 'ab-label-col';
+  const grid = document.createElement('div');
+  grid.className = 'ab-grid';
 
-  // Header row: b values
-  const hdr = document.createElement('tr');
-  const corner = document.createElement('th');
-  corner.textContent = 'a \\ b';
-  hdr.appendChild(corner);
-  for (let b = 0; b <= maxAB; b++) {
-    const th = document.createElement('th');
-    th.textContent = b;
-    hdr.appendChild(th);
-  }
-  table.appendChild(hdr);
+  const allBs = new Set();
+  for (let a = 0; a <= maxAB; a++)
+    for (let b = 0; a + b <= maxAB; b++)
+      if ((m - a - b) % 2 === 1) allBs.add(b);
 
-  // Data rows: a values
   for (let a = 0; a <= maxAB; a++) {
-    const row = document.createElement('tr');
-    const rh = document.createElement('th');
-    rh.textContent = a;
-    row.appendChild(rh);
-    for (let b = 0; b <= maxAB; b++) {
-      const td = document.createElement('td');
-      const valid = a + b <= maxAB && (m - a - b) % 2 === 1;
-      if (valid) {
-        td.className = 'ab-valid' + (a === currentA && b === currentB ? ' ab-selected' : '');
-        td.addEventListener('click', e => {
-          e.stopPropagation();
-          currentA = a; currentB = b;
-          document.getElementById('abDisplay').textContent = `a=${a},  b=${b}`;
-          popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
-          td.classList.add('ab-selected');
-          rebuildKnot();
-        });
-      }
-      row.appendChild(td);
+    const validBs = [];
+    for (let b = 0; a + b <= maxAB; b++)
+      if ((m - a - b) % 2 === 1) validBs.push(b);
+    if (validBs.length === 0) continue;
+
+    const label = document.createElement('div');
+    label.textContent = a;
+    labelCol.appendChild(label);
+
+    const row = document.createElement('div');
+    row.className = 'ab-grid-row';
+    const cells = document.createElement('div');
+    cells.style.cssText = `display:flex; margin-left:${validBs[0] * 10}px`;
+    for (const b of validBs) {
+      const cell = document.createElement('div');
+      cell.className = 'ab-cell ab-valid' + (a === currentA && b === currentB ? ' ab-selected' : '');
+      cell.addEventListener('click', e => {
+        e.stopPropagation();
+        currentA = a; currentB = b;
+        document.getElementById('abDisplay').textContent = `a=${a},  b=${b}`;
+        popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
+        cell.classList.add('ab-selected');
+        rebuildKnot();
+      });
+      cells.appendChild(cell);
     }
-    table.appendChild(row);
+    row.appendChild(cells);
+    grid.appendChild(row);
   }
-  popup.appendChild(table);
+
+  const bHeader = document.createElement('div');
+  bHeader.className = 'ab-b-header';
+  for (const b of [...allBs].sort((x,y) => x-y)) {
+    const lbl = document.createElement('div');
+    lbl.className = 'ab-b-label';
+    lbl.textContent = b;
+    lbl.style.left = `${b * 10}px`;
+    bHeader.appendChild(lbl);
+  }
+
+  const spacer = document.createElement('div');
+  spacer.style.height = '14px';
+  labelCol.insertBefore(spacer, labelCol.firstChild);
+
+  const rightCol = document.createElement('div');
+  rightCol.appendChild(bHeader);
+  rightCol.appendChild(grid);
+  wrapper.appendChild(labelCol);
+  wrapper.appendChild(rightCol);
+  popup.appendChild(wrapper);
 }
 
 function getAB() { return [currentA, currentB]; }
@@ -874,10 +904,7 @@ document.addEventListener('keydown', e => {
 
   currentA = na; currentB = nb;
   document.getElementById('abDisplay').textContent = `a=${na},  b=${nb}`;
-  const table = popup.querySelector('table');
-  popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
-  const row = table.querySelectorAll('tr')[na + 1];
-  if (row) { const cell = row.querySelectorAll('td')[nb]; if (cell) cell.classList.add('ab-selected'); }
+  buildABGrid(m);
   rebuildKnot();
 });
 
