@@ -255,7 +255,7 @@
   </div>
 
   <div id="knotSliders">
-    <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+    <div id="viewSliderRow" style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Flat</span><span>Cylinder</span>
     </div>
     <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
@@ -663,12 +663,19 @@ function buildKnot(B, resumeRotation = false) {
   }
 
   const mod        = 2 * currentC * B;
-  const vt         = parseFloat(document.getElementById('viewSlider').value);
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
 
   const components     = generateAllComponents(B);
   const g              = components.length;
   const allSegCrossings = buildAllSegmentCrossings(components, mod);
+
+  const slider = document.getElementById('viewSlider');
+  const sliderRow = document.getElementById('viewSliderRow');
+  const crossingYs = new Set(allSegCrossings.flat().flatMap(seg => seg.map(c => c.y)));
+  const flatDegenerate = g > 1 && crossingYs.size <= 1;
+  if (flatDegenerate) { slider.value = '1'; slider.disabled = true; sliderRow.style.opacity = '0.3'; }
+  else                { slider.disabled = false; sliderRow.style.opacity = ''; }
+  const vt = flatDegenerate ? 1.0 : parseFloat(slider.value);
 
   const radialSegments = 20;
   const tmp = new THREE.Color();
@@ -679,12 +686,12 @@ function buildKnot(B, resumeRotation = false) {
     const tubularSegments = bights.length * 60;
     const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
 
-    // Each component gets 1/g of the hue spectrum for a rainbow gradient.
+    // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
     const ringCount    = tubularSegments + 1;
     const vertsPerRing = radialSegments + 1;
     const cols         = new Float32Array(ringCount * vertsPerRing * 3);
     for (let i = 0; i < ringCount; i++) {
-      tmp.setHSL(c / g + i / tubularSegments, 0.9, 0.62);
+      tmp.setHSL(g === 1 ? i / tubularSegments : c / g, 0.9, 0.62);
       for (let j = 0; j < vertsPerRing; j++) {
         const idx = (i * vertsPerRing + j) * 3;
         cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
