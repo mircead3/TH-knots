@@ -564,7 +564,7 @@ function buildAllSegmentCrossings(components, mod) {
 // At each crossing the tangent is the exact derivative of the 3D position mapping
 // with respect to the abstract path parameter, using the segment's ±1 slope.
 class KnotCurve extends THREE.Curve {
-  constructor(bights, segCrossings, mod, viewT, closed = true) {
+  constructor(bights, segCrossings, mod, viewT, closed = true, cpsByX = null) {
     super();
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
@@ -614,21 +614,20 @@ class KnotCurve extends THREE.Curve {
     // nearest same-x control point is (e1) and whether it is a same-kind bight (e2).
     const K_DELTA = 0.25;
 
-    // Build a map from abstract x → [{y, isBight, isTop}] for all control points.
-    const cpsByX = new Map();
-    const addCP = (x, y, isBight, isTop) => {
-      let arr = cpsByX.get(x);
-      if (!arr) { arr = []; cpsByX.set(x, arr); }
-      if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
-    };
-    const nSeg0 = closed ? n : n - 1;
-    for (let i = 0; i < nSeg0; i++) {
-      for (const {x, y} of segCrossings[i]) addCP(x, y, false, null);
-      const slope0     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-      const nextSlope0 = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
-      if (slope0 !== nextSlope0) {
-        const [bx, by] = bights[(i+1)%n];
-        addCP(bx, by, true, slope0 > 0);
+    // If no global map was supplied, build one from this component's own data.
+    if (!cpsByX) {
+      cpsByX = new Map();
+      const addCP = (x, y, isBight, isTop) => {
+        let arr = cpsByX.get(x);
+        if (!arr) { arr = []; cpsByX.set(x, arr); }
+        if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
+      };
+      const nSeg0 = closed ? n : n - 1;
+      for (let i = 0; i < nSeg0; i++) {
+        for (const {x, y} of segCrossings[i]) addCP(x, y, false, null);
+        const s0 = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+        const s1 = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
+        if (s0 !== s1) addCP(bights[(i+1)%n][0], bights[(i+1)%n][1], true, s0 > 0);
       }
     }
 
@@ -642,9 +641,7 @@ class KnotCurve extends THREE.Curve {
         if (d < nearestD) { nearestD = d; sameKind = cp.isBight && cp.isTop === isTop; }
       }
       if (nearestD === Infinity) return 0.6;
-      const e1 = K_DELTA * (nearestD - 2);
-      const e2 = sameKind ? K_DELTA * 1.5 : 0;
-      return 0.6 + e1 + e2;
+      return 0.6 + K_DELTA * (nearestD - 2) + (sameKind ? K_DELTA * 1.5 : 0);
     };
 
     this.pts      = [];
@@ -737,6 +734,24 @@ function buildKnot(B, resumeRotation = false) {
   else                { slider.disabled = false; sliderRow.style.opacity = ''; }
   const vt = flatDegenerate ? 1.0 : parseFloat(slider.value);
 
+  // Build a global same-x control-point map from all components so that
+  // crossings from other components are visible to each component's bight-delta.
+  const globalCpsByX = new Map();
+  const addGCP = (x, y, isBight, isTop) => {
+    let arr = globalCpsByX.get(x);
+    if (!arr) { arr = []; globalCpsByX.set(x, arr); }
+    if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
+  };
+  for (let c2 = 0; c2 < g; c2++) {
+    const cb = components[c2], nb = cb.length;
+    for (let i = 0; i < nb; i++) {
+      for (const {x, y} of allSegCrossings[c2][i]) addGCP(x, y, false, null);
+      const s0 = Math.sign(cb[(i+1)%nb][1] - cb[i][1]);
+      const s1 = Math.sign(cb[(i+2)%nb][1] - cb[(i+1)%nb][1]);
+      if (s0 !== s1) addGCP(cb[(i+1)%nb][0], cb[(i+1)%nb][1], true, s0 > 0);
+    }
+  }
+
   const radialSegments = 60;
   const tmp = new THREE.Color();
 
@@ -747,7 +762,7 @@ function buildKnot(B, resumeRotation = false) {
     const bights = useOpen ? fullBights.slice(0, D + 1) : fullBights;
     const segCrossings = useOpen ? allSegCrossings[c].slice(0, D) : allSegCrossings[c];
     const isClosed = !useOpen;
-    const curve  = new KnotCurve(bights, segCrossings, mod, vt, isClosed);
+    const curve  = new KnotCurve(bights, segCrossings, mod, vt, isClosed, globalCpsByX);
     const tubularSegments = Math.max(bights.length * 60, curve.m * 6);
     const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, isClosed);
 
@@ -1503,7 +1518,8 @@ const clock = new THREE.Clock();
   const dt = clock.getDelta();
   if (autoRotate) {
     const vt = parseFloat(document.getElementById('viewSlider').value);
-    knotGroup.rotation.y += dt * (0.12 + 0.16 * vt);
+    const axis = camera.position.clone().sub(orbit.target).normalize();
+    knotGroup.rotateOnWorldAxis(axis, dt * (0.12 + 0.16 * vt));
   }
   orbit.update();
   renderer.render(scene, camera);
