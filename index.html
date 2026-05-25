@@ -276,6 +276,7 @@
 
   <div class="btn-row">
     <button id="diagramToggle" class="view-btn">Diagram</button>
+    <button id="componentToggle" class="view-btn">Component</button>
   </div>
 </div>
 
@@ -563,7 +564,7 @@ function buildAllSegmentCrossings(components, mod) {
 // At each crossing the tangent is the exact derivative of the 3D position mapping
 // with respect to the abstract path parameter, using the segment's ±1 slope.
 class KnotCurve extends THREE.Curve {
-  constructor(bights, segCrossings, mod, viewT) {
+  constructor(bights, segCrossings, mod, viewT, closed = true) {
     super();
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
@@ -616,10 +617,12 @@ class KnotCurve extends THREE.Curve {
     this.scales   = [];
     this.bightPts = [];
 
-    for (let i = 0; i < n; i++) {
+    const nSeg = closed ? n : n - 1;
+    for (let i = 0; i < nSeg; i++) {
       const slope     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
       const nextSlope = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
       const atBight   = slope !== nextSlope;
+      const isLastSeg = !closed && i === nSeg - 1;
 
       for (const {x, y, isOver} of segCrossings[i]) {
         this.pts.push(to3D(x, y, isOver ? delta : -delta));
@@ -627,7 +630,7 @@ class KnotCurve extends THREE.Curve {
         this.scales.push(1);
       }
 
-      if (atBight) {
+      if (atBight && !isLastSeg) {
         const [bx, by] = bights[(i+1)%n];
         const by_adj = by - slope * BIGHT_DELTA;
         const bp = to3D(bx, by_adj, 0);
@@ -637,15 +640,23 @@ class KnotCurve extends THREE.Curve {
         this.bightPts.push(bp);
       }
     }
+    if (!closed) {
+      const [bx, by] = bights[n - 1];
+      const slope = Math.sign(by - bights[n - 2][1]);
+      this.pts.push(to3D(bx, by, 0));
+      this.dirs.push(dir3D(bx, by, slope));
+      this.scales.push(1);
+    }
     this.m = this.pts.length;
+    this.closed = closed;
   }
 
   getPoint(t, out = new THREE.Vector3()) {
-    const { pts, dirs, m } = this;
-    const ft = ((t * m) % m + m) % m;
-    const i  = Math.floor(ft);
+    const { pts, dirs, m, closed } = this;
+    const ft = closed ? ((t * m) % m + m) % m : t * (m - 1);
+    const i  = Math.floor(Math.min(ft, m - 1));
     const u  = ft - i;
-    const j  = (i + 1) % m;
+    const j  = closed ? (i + 1) % m : Math.min(i + 1, m - 1);
 
     const P0 = pts[i], P1 = pts[j];
     const scale = P0.distanceTo(P1) * this.scales[i];
@@ -693,11 +704,16 @@ function buildKnot(B, resumeRotation = false) {
   const radialSegments = 60;
   const tmp = new THREE.Color();
 
-  for (let c = 0; c < g; c++) {
-    const bights = components[c];
-    const curve  = new KnotCurve(bights, allSegCrossings[c], mod, vt);
+  const gDraw = componentMode ? 1 : g;
+  for (let c = 0; c < gDraw; c++) {
+    const fullBights = components[c];
+    const useOpen = componentMode && fullBights.length > D;
+    const bights = useOpen ? fullBights.slice(0, D + 1) : fullBights;
+    const segCrossings = useOpen ? allSegCrossings[c].slice(0, D) : allSegCrossings[c];
+    const isClosed = !useOpen;
+    const curve  = new KnotCurve(bights, segCrossings, mod, vt, isClosed);
     const tubularSegments = Math.max(bights.length * 60, curve.m * 6);
-    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, isClosed);
 
     // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
     const ringCount    = tubularSegments + 1;
@@ -747,6 +763,7 @@ function updateInfo(B, g = 1) {
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
 let currentA = 1, currentB = 1;
+let componentMode = false;
 
 function validPairs(m) {
   const pairs = [];
@@ -1075,6 +1092,8 @@ function drawDiagram() {
   const ox       = PANEL_W + LABEL_W;
   const availDiagW = innerWidth - ox - padR;
   const REPS     = Math.max(1, Math.ceil(availDiagW / (mod * scaleX)));
+  const rStart   = componentMode ? 0 : -Math.ceil(PERIOD / mod);
+  const drawReps = componentMode ? 1 : REPS;
   const totalW   = mod * REPS;
   const oy       = (innerHeight + MAX_Y * scale) / 2;
 
@@ -1138,16 +1157,16 @@ function drawDiagram() {
   const components   = generateAllComponents(B);
   const g            = components.length;
   const allCrossings = computeDiagramCrossingsAll(components, mod);
-  const rStart       = -Math.ceil(PERIOD / mod);
 
   // Precompute geometry for all components.
   // allSegs[comp][r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
-  const allSegs = components.map((bights, comp) => {
+  const drawComponents = componentMode ? components.slice(0, 1) : components;
+  const allSegs = drawComponents.map((bights, comp) => {
     const crossMap = allCrossings[comp];
     const n        = bights.length;
-    const numZigs  = Math.floor(n / D);
+    const numZigs  = componentMode ? 1 : Math.floor(n / D);
     const segs = [];
-    for (let r = rStart; r < REPS; r++) {
+    for (let r = rStart; r < drawReps; r++) {
       const xOff = r * mod;
       const rSegs = [];
       for (let i = 0; i < numZigs; i++) {
@@ -1296,11 +1315,20 @@ document.getElementById('diagramToggle').addEventListener('click', () => {
   showDiagram = !showDiagram;
   diagramCanvas.style.display   = showDiagram ? 'block' : 'none';
   renderer.domElement.style.display = showDiagram ? 'none'  : 'block';
-  document.getElementById('diagramToggle').textContent = showDiagram ? 'Knot view' : 'Diagram';
+  document.getElementById('diagramToggle').textContent = showDiagram ? 'Knot' : 'Diagram';
   document.getElementById('xStretchSection').style.display = showDiagram ? '' : 'none';
   document.getElementById('knotSliders').style.display     = showDiagram ? 'none' : '';
   if (showDiagram) drawDiagram();
+  else buildKnot(parseInt(document.getElementById('bInput').value));
   positionZigzagDisplay();
+});
+
+document.getElementById('componentToggle').addEventListener('click', () => {
+  componentMode = !componentMode;
+  document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Component';
+  const B = parseInt(document.getElementById('bInput').value);
+  if (showDiagram) drawDiagram();
+  else buildKnot(B);
 });
 
 window.addEventListener('resize', () => { if (showDiagram) { drawDiagram(); positionZigzagDisplay(); } });
@@ -1313,6 +1341,7 @@ document.addEventListener('keydown', (e) => {
     document.getElementById('diagramToggle').textContent = 'Diagram';
     document.getElementById('xStretchSection').style.display = 'none';
     document.getElementById('knotSliders').style.display     = '';
+    buildKnot(parseInt(document.getElementById('bInput').value));
     positionZigzagDisplay();
   }
 });
