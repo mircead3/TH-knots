@@ -276,7 +276,7 @@
 
   <div class="btn-row">
     <button id="diagramToggle" class="view-btn">Diagram</button>
-    <button id="componentToggle" class="view-btn">Component</button>
+    <button id="componentToggle" class="view-btn">Period</button>
   </div>
 </div>
 
@@ -751,9 +751,9 @@ const zigzagDisplay  = document.getElementById('zigzagDisplay');
 
 function updateInfo(B, g = 1) {
   const mod = 2 * currentC * B;
-  infoName.textContent = g > 1
-    ? `${2 * currentC * B} bights total  ·  ${g} components`
-    : `${2 * currentC * B} bights total`;
+  const parts = [`${2 * currentC * B} bights`, `${B} periods`];
+  if (g > 1) parts.splice(1, 0, `${g} components`);
+  infoName.textContent = parts.join('  ·  ');
   zigzagDisplay.textContent = `mod = ${mod}    ` +
     ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
   positionZigzagDisplay();
@@ -1325,7 +1325,7 @@ document.getElementById('diagramToggle').addEventListener('click', () => {
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
-  document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Component';
+  document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Period';
   const B = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else buildKnot(B);
