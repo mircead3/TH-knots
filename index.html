@@ -610,7 +610,42 @@ class KnotCurve extends THREE.Curve {
     // Crossings and bights are both control points. Each bight is shifted
     // inward from its extreme position (^ bights down, V bights up) so the
     // Hermite's natural overshoot lands at the intended visual boundary.
-    const BIGHT_DELTA = 0.6;
+    // The base shift is 0.6; an adaptive correction accounts for how far the
+    // nearest same-x control point is (e1) and whether it is a same-kind bight (e2).
+    const K_DELTA = 0.25;
+
+    // Build a map from abstract x → [{y, isBight, isTop}] for all control points.
+    const cpsByX = new Map();
+    const addCP = (x, y, isBight, isTop) => {
+      let arr = cpsByX.get(x);
+      if (!arr) { arr = []; cpsByX.set(x, arr); }
+      if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
+    };
+    const nSeg0 = closed ? n : n - 1;
+    for (let i = 0; i < nSeg0; i++) {
+      for (const {x, y} of segCrossings[i]) addCP(x, y, false, null);
+      const slope0     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+      const nextSlope0 = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
+      if (slope0 !== nextSlope0) {
+        const [bx, by] = bights[(i+1)%n];
+        addCP(bx, by, true, slope0 > 0);
+      }
+    }
+
+    const bightDelta = (bx, by, isTop) => {
+      const cps = cpsByX.get(bx) || [];
+      let nearestD = Infinity, sameKind = false;
+      for (const cp of cps) {
+        if (cp.y === by) continue;
+        if (isTop ? cp.y >= by : cp.y <= by) continue;
+        const d = Math.abs(cp.y - by);
+        if (d < nearestD) { nearestD = d; sameKind = cp.isBight && cp.isTop === isTop; }
+      }
+      if (nearestD === Infinity) return 0.6;
+      const e1 = K_DELTA * (nearestD - 2);
+      const e2 = sameKind ? K_DELTA * 1.5 : 0;
+      return 0.6 + e1 + e2;
+    };
 
     this.pts      = [];
     this.dirs     = [];
@@ -632,7 +667,8 @@ class KnotCurve extends THREE.Curve {
 
       if (atBight && !isLastSeg) {
         const [bx, by] = bights[(i+1)%n];
-        const by_adj = by - slope * BIGHT_DELTA;
+        const bd = bightDelta(bx, by, slope > 0);
+        const by_adj = by - slope * bd;
         const bp = to3D(bx, by_adj, 0);
         this.pts.push(bp);
         this.dirs.push(bightDir3D(bx, by_adj));
