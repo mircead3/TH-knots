@@ -1016,6 +1016,12 @@ function setComplexity(c) {
   const bInput = document.getElementById('bInput');
   bInput.min = minBights();
   if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
+  if (c === 2) {
+    const m = parseInt(mInput.value);
+    currentA = 0;
+    currentB = m % 2 === 0 ? 1 : 0;
+    document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
+  }
   updateABSelector(parseInt(mInput.value));
   rebuildKnot();
 }
