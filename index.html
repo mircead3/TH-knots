@@ -597,31 +597,44 @@ class KnotCurve extends THREE.Curve {
       ).normalize();
     };
 
-    // Build positions and unit tangent directions for all crossings in path order.
-    // Bights are NOT hard control points — they're stored separately for display only.
+    // Tangent at a bight: average of the arriving (+1) and departing (-1) analytical
+    // directions. At viewT=1 this collapses to the pure-theta (horizontal) direction,
+    // which is the smooth tangent of the strand at its z-extremum on the cylinder.
+    const bightDir3D = (x, y) => {
+      const d1 = dir3D(x, y, +1);
+      const d2 = dir3D(x, y, -1);
+      return new THREE.Vector3(d1.x + d2.x, d1.y + d2.y, d1.z + d2.z).normalize();
+    };
+
+    // Crossings and bights are both control points. Each bight is shifted
+    // inward from its extreme position (^ bights down, V bights up) so the
+    // Hermite's natural overshoot lands at the intended visual boundary.
+    const BIGHT_DELTA = 0.6;
+
     this.pts      = [];
     this.dirs     = [];
-    this.scales   = []; // per-segment tangent scale multiplier
-    this.bightPts = []; // 3D bight positions for debug display
+    this.scales   = [];
+    this.bightPts = [];
 
     for (let i = 0; i < n; i++) {
       const slope     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
       const nextSlope = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
-      const atBight   = slope !== nextSlope; // last segment before a turn
-      for (let k = 0; k < segCrossings[i].length; k++) {
-        const {x, y, isOver} = segCrossings[i][k];
+      const atBight   = slope !== nextSlope;
+
+      for (const {x, y, isOver} of segCrossings[i]) {
         this.pts.push(to3D(x, y, isOver ? delta : -delta));
         this.dirs.push(dir3D(x, y, slope));
-        // Boost tangent scale for the last crossing before a bight and the
-        // first crossing after — this sweeps a wider arc near the turn.
-        const isLast  = k === segCrossings[i].length - 1;
-        this.scales.push(atBight && isLast ? 1.5 : 1);
+        this.scales.push(1);
       }
 
-      // Store bight 3D position for display only (not a control point)
       if (atBight) {
         const [bx, by] = bights[(i+1)%n];
-        this.bightPts.push(to3D(bx, by, 0));
+        const by_adj = by - slope * BIGHT_DELTA;
+        const bp = to3D(bx, by_adj, 0);
+        this.pts.push(bp);
+        this.dirs.push(bightDir3D(bx, by_adj));
+        this.scales.push(1);
+        this.bightPts.push(bp);
       }
     }
     this.m = this.pts.length;
@@ -677,13 +690,13 @@ function buildKnot(B, resumeRotation = false) {
   else                { slider.disabled = false; sliderRow.style.opacity = ''; }
   const vt = flatDegenerate ? 1.0 : parseFloat(slider.value);
 
-  const radialSegments = 20;
+  const radialSegments = 60;
   const tmp = new THREE.Color();
 
   for (let c = 0; c < g; c++) {
     const bights = components[c];
     const curve  = new KnotCurve(bights, allSegCrossings[c], mod, vt);
-    const tubularSegments = bights.length * 60;
+    const tubularSegments = Math.max(bights.length * 60, curve.m * 6);
     const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
 
     // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
@@ -701,6 +714,7 @@ function buildKnot(B, resumeRotation = false) {
     knotGroup.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
       vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
     })));
+
   }
 
 
