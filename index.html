@@ -256,30 +256,7 @@
   </div>
 
   <div id="c3Section" style="display:none;">
-    <div class="label">Shape</div>
-    <div class="param-row">
-      <div class="param-col">
-        <div class="sublabel">a</div>
-        <input type="number" id="c3aInput" class="b-input" value="2" min="2">
-      </div>
-      <div class="param-col">
-        <div class="sublabel">b</div>
-        <input type="number" id="c3bInput" class="b-input" value="2" min="2">
-      </div>
-    </div>
-    <div class="param-row">
-      <div class="param-col">
-        <div class="sublabel">c</div>
-        <input type="number" id="c3cInput" class="b-input" value="2" min="2">
-      </div>
-      <div class="param-col">
-        <div class="sublabel">d</div>
-        <input type="number" id="c3dInput" class="b-input" value="2" min="2">
-      </div>
-    </div>
-    <div id="c3Constraints" style="font-size:11px;line-height:1.9;margin-bottom:12px;font-family:inherit;">
-      <div id="c3mod3"></div>
-    </div>
+<div id="c3IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
   </div>
 
   <div id="knotSliders">
@@ -308,6 +285,7 @@
   </div>
 </div>
 
+<div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <canvas id="diagram"></canvas>
 <div id="zigzagDisplay"
      style="position:fixed;display:none;bottom:18px;left:310px;font-size:11px;color:rgba(160,185,255,0.55);background:rgba(0,0,20,0.5);border:1px solid rgba(100,130,255,0.13);border-radius:5px;padding:9px 11px;pointer-events:none;z-index:8;"></div>
@@ -859,6 +837,9 @@ function buildKnot(B, resumeRotation = false) {
   }
 
   updateInfo(B, g);
+  if (currentC === 3) {
+    syncC3List(LEADS, B);
+  }
 }
 
 // ── Info panel ─────────────────────────────────────────────────────────────
@@ -880,6 +861,8 @@ function updateInfo(B, g = 1) {
 // ── UI wiring ──────────────────────────────────────────────────────────────
 let currentA = 1, currentB = 1;
 let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
+let c3ValidList = [], c3ValidIdx = -1;
+let c3ListCacheM = -1, c3ListCacheB = -1;
 let componentMode = false;
 
 function validC3(m, a, b, c, d) {
@@ -888,79 +871,62 @@ function validC3(m, a, b, c, d) {
   if ((a + b) % 3 === 0 || (c + d) % 3 === 0) return false;
   if (a + b + c > 3 * m) return false;
   if (a + c + d > 3 * m) return false;
+  if (c + d > a + b) return false;
   return true;
 }
 
-function updateC3Constraints(m, a, b, c, d) {
-  const bad = 'rgba(255,100,100,0.85)';
-  const mod3bad = [];
-  if (a % 3 === 0) mod3bad.push('a');
-  if (b % 3 === 0) mod3bad.push('b');
-  if (c % 3 === 0) mod3bad.push('c');
-  if (d % 3 === 0) mod3bad.push('d');
-  if ((a + b) % 3 === 0) mod3bad.push(`a+b=${a+b}`);
-  if ((c + d) % 3 === 0) mod3bad.push(`c+d=${c+d}`);
-  const mod3El = document.getElementById('c3mod3');
-  if (mod3bad.length === 0) {
-    mod3El.textContent = '';
+
+function computeValidC3(m, B) {
+  const savedZZ = ZIGZAG, savedP = PERIOD, savedD = D, savedL = LEADS, savedMY = MAX_Y;
+  const L3 = 3 * m, mod = 6 * B;
+  const list = [];
+  for (let a = 2; a <= L3 - 4; a++) {
+    if (a % 3 === 0) continue;
+    for (let b = 2; b <= L3 - a - 2; b++) {
+      if (b % 3 === 0) continue;
+      if ((a + b) % 3 === 0) continue;
+      for (let c = 2; c <= Math.min(L3 - a - b, a + b - 2); c++) {
+        if (c % 3 === 0) continue;
+        const dMax = Math.min(L3 - a - c, a + b - c);
+        for (let d = 2; d <= dMax; d++) {
+          if (d % 3 === 0) continue;
+          if ((c + d) % 3 === 0) continue;
+          setKnotDefC3(m, a, b, c, d);
+          const comps = generateAllComponents(B);
+          const allSC = buildAllSegmentCrossings(comps, mod);
+          if (allSC.every(comp => comp.every(seg => seg.length > 0))) list.push([a, b, c, d]);
+        }
+      }
+    }
+  }
+  ZIGZAG = savedZZ; PERIOD = savedP; D = savedD; LEADS = savedL; MAX_Y = savedMY;
+  return list;
+}
+
+function syncC3List(m, B) {
+  if (m !== c3ListCacheM || B !== c3ListCacheB) {
+    c3ValidList = computeValidC3(m, B);
+    c3ListCacheM = m; c3ListCacheB = B;
+    c3ValidIdx = 0;
+    if (c3ValidList.length > 0) [c3A, c3B, c3C, c3D] = c3ValidList[0];
   } else {
-    mod3El.textContent = mod3bad.join(', ') + ' ≡ 0 (mod 3)';
-    mod3El.style.color = bad;
+    c3ValidIdx = c3ValidList.findIndex(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
+    if (c3ValidIdx < 0 && c3ValidList.length > 0) {
+      c3ValidIdx = 0;
+      [c3A, c3B, c3C, c3D] = c3ValidList[0];
+    }
   }
+  updateC3Display();
+  return c3ValidList.length > 0;
 }
 
-function updateC3Maxes(m, a, b, c, d) {
-  const L3 = 3 * m;
-  for (let pass = 0; pass < 4; pass++) {
-    const maxA = Math.min(L3 - b - c, L3 - c - d);
-    const maxB = L3 - a - c;
-    const maxC = Math.min(L3 - a - b, L3 - a - d);
-    const maxD = L3 - a - c;
-    const clamp = (v, mx) => { v = Math.min(v, mx); if (v % 3 === 0) v = Math.max(2, v - 1); return Math.max(2, v); };
-    a = clamp(a, maxA); b = clamp(b, maxB); c = clamp(c, maxC); d = clamp(d, maxD);
-  }
-  const ids = ['c3aInput','c3bInput','c3cInput','c3dInput'];
-  const maxes = [
-    Math.min(L3 - b - c, L3 - c - d),
-    L3 - a - c,
-    Math.min(L3 - a - b, L3 - a - d),
-    L3 - a - c,
-  ];
-  [a, b, c, d].forEach((v, i) => {
-    const el = document.getElementById(ids[i]);
-    el.max = maxes[i];
-    el.value = v;
-    el.dataset.prev = v;
-  });
-  return [a, b, c, d];
-}
-
-function c3SkipMod3(el) {
-  let v = parseInt(el.value);
-  if (isNaN(v) || v < 2) v = 2;
-  if (v % 3 === 0) {
-    const prev = parseInt(el.dataset.prev) || 2;
-    v = v >= prev ? v + 1 : Math.max(2, v - 1);
-    el.value = v;
-  }
-  el.dataset.prev = v;
-  return v;
-}
-
-function onC3ParamChange() {
-  const m = parseInt(document.getElementById('mInput').value);
-  let a = c3SkipMod3(document.getElementById('c3aInput'));
-  let b = c3SkipMod3(document.getElementById('c3bInput'));
-  let c = c3SkipMod3(document.getElementById('c3cInput'));
-  let d = c3SkipMod3(document.getElementById('c3dInput'));
-  [a, b, c, d] = updateC3Maxes(m, a, b, c, d);
-  updateC3Constraints(m, a, b, c, d);
-  if (!validC3(m, a, b, c, d)) return;
-  c3A = a; c3B = b; c3C = c; c3D = d;
-  setKnotDefC3(m, a, b, c, d);
-  const B = parseInt(document.getElementById('bInput').value);
-  buildKnot(B);
-  if (showDiagram) drawDiagram();
+function updateC3Display() {
+  const cnt = c3ValidList.length;
+  document.getElementById('c3IdxDisplay').textContent =
+    c3ValidIdx >= 0 ? `${c3ValidIdx + 1} / ${cnt}` : `— / ${cnt}`;
+  const pd = document.getElementById('c3ParamDisplay');
+  pd.style.display = currentC === 3 ? '' : 'none';
+  pd.textContent = `a=${c3A}  b=${c3B}  c=${c3C}  d=${c3D}`;
 }
 
 function validPairs(m) {
@@ -1088,9 +1054,8 @@ function onMChange() {
     if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
   }
   if (currentC === 3) {
-    [c3A, c3B, c3C, c3D] = updateC3Maxes(m, c3A, c3B, c3C, c3D);
-    updateC3Constraints(m, c3A, c3B, c3C, c3D);
-    if (!validC3(m, c3A, c3B, c3C, c3D)) return;
+    const B2 = parseInt(document.getElementById('bInput').value);
+    if (!syncC3List(m, B2)) return;
   }
   updateABSelector(m);
   setKnotFromUI(m);
@@ -1155,6 +1120,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
+  if (currentC === 3 && !syncC3List(m, B)) return;
   setKnotFromUI(m);
   buildKnot(B, true);
   if (showDiagram) drawDiagram();
@@ -1162,8 +1128,9 @@ document.getElementById('bInput').addEventListener('change', () => {
 
 function setComplexity(c) {
   currentC = c;
-  document.getElementById('shapeSection').style.display = c === 2 ? '' : 'none';
-  document.getElementById('c3Section').style.display    = c === 3 ? '' : 'none';
+  document.getElementById('shapeSection').style.display  = c === 2 ? '' : 'none';
+  document.getElementById('c3Section').style.display     = c === 3 ? '' : 'none';
+  document.getElementById('c3ParamDisplay').style.display = c === 3 ? '' : 'none';
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
@@ -1177,16 +1144,7 @@ function setComplexity(c) {
     document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
   }
   if (c === 3) {
-    const m = parseInt(mInput.value);
-    if (!validC3(m, c3A, c3B, c3C, c3D)) {
-      c3A = 2; c3B = 2; c3C = 2; c3D = 2;
-      ['c3aInput','c3bInput','c3cInput','c3dInput'].forEach(id => {
-        const el = document.getElementById(id);
-        el.value = 2;
-        el.dataset.prev = '2';
-      });
-    }
-    updateC3Constraints(m, c3A, c3B, c3C, c3D);
+    c3ListCacheM = -1;
   }
   updateABSelector(parseInt(mInput.value));
   rebuildKnot();
@@ -1195,10 +1153,17 @@ document.getElementById('cInput').addEventListener('change', () => {
   const c = parseInt(document.getElementById('cInput').value);
   if (!isNaN(c) && c >= 1) setComplexity(c);
 });
-['c3aInput','c3bInput','c3cInput','c3dInput'].forEach(id => {
-  const el = document.getElementById(id);
-  el.dataset.prev = el.value;
-  el.addEventListener('input', onC3ParamChange);
+document.addEventListener('keydown', e => {
+  if (currentC !== 3 || c3ValidList.length === 0) return;
+  if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  e.preventDefault();
+  const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
+  if (c3ValidIdx < 0) c3ValidIdx = dir === 1 ? 0 : c3ValidList.length - 1;
+  else c3ValidIdx = (c3ValidIdx + dir + c3ValidList.length) % c3ValidList.length;
+  [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
+  updateC3Display();
+  rebuildKnot();
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
