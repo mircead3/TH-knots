@@ -79,6 +79,19 @@
       margin-bottom: 18px;
     }
     .b-input:focus { border-color: rgba(100, 130, 255, 0.5); }
+    .c-btn {
+      flex: 1;
+      background: rgba(15, 15, 45, 0.9);
+      border: 1px solid rgba(100, 130, 255, 0.22);
+      border-radius: 6px;
+      color: #c0c8e8;
+      padding: 7px 0;
+      font-size: 18px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .c-btn:hover  { border-color: rgba(100, 130, 255, 0.5); }
+    .c-btn.active { background: rgba(100, 130, 255, 0.25); border-color: rgba(100, 130, 255, 0.7); color: #fff; }
 
     .param-row { display: flex; gap: 8px; margin-bottom: 14px; }
     .param-col { flex: 1; }
@@ -99,53 +112,6 @@
       z-index: 5;
     }
 
-    #abDisplay {
-      width: 100%;
-      background: rgba(15,15,45,0.9);
-      border: 1px solid rgba(100,130,255,0.22);
-      border-radius: 6px;
-      color: #c0c8e8;
-      padding: 8px;
-      font-size: 13px;
-      font-family: inherit;
-      text-align: center;
-      cursor: pointer;
-      margin-bottom: 6px;
-      box-sizing: border-box;
-      user-select: none;
-    }
-    #abDisplay:hover { border-color: rgba(100,130,255,0.5); }
-
-    #abPopup {
-      display: none;
-      background: rgba(6,6,22,0.97);
-      border: 1px solid rgba(100,130,255,0.25);
-      border-radius: 8px;
-      padding: 8px 10px 8px 4px;
-      margin-bottom: 10px;
-    }
-    .ab-wrapper   { display: flex; align-items: flex-start; }
-    .ab-label-col { display: flex; flex-direction: column; margin-right: 4px; }
-    .ab-label-col div { height: 13px; line-height: 13px; font-size: 10px;
-                        text-align: right; color: rgba(200,215,255,0.9); min-width: 14px; }
-    .ab-b-header  { position: relative; height: 14px; margin-bottom: 4px; }
-    .ab-b-label   { position: absolute; width: 20px; text-align: center;
-                    font-size: 10px; line-height: 14px; color: rgba(200,215,255,0.9); }
-    .ab-grid      { display: inline-block; }
-    .ab-grid-row  { display: flex; align-items: center; height: 13px; }
-    .ab-cell     { width: 20px; height: 13px; flex-shrink: 0;
-                   display: flex; align-items: center; justify-content: center; }
-    .ab-valid    { cursor: pointer; }
-    .ab-valid::before {
-      content: ''; display: block;
-      width: 12px; height: 12px;
-      transform: rotate(45deg);
-      background: rgba(20,20,60,0.9);
-      border: 1px solid rgba(100,130,255,0.18);
-      border-radius: 2px;
-    }
-    .ab-valid:hover::before  { background: rgba(60,80,180,0.7); border-color: rgba(100,130,255,0.5); }
-    .ab-selected::before     { background: rgba(100,130,255,0.55) !important; border-color: rgba(140,170,255,0.8) !important; }
 
     #panel {
       z-index: 10;
@@ -238,7 +204,11 @@
   <h1>Knot Visualizer</h1>
 
   <div class="label">Complexity</div>
-  <input type="number" id="cInput" class="b-input" value="2" min="1" max="3">
+  <div style="display:flex;gap:6px;margin-bottom:14px;">
+    <button class="c-btn" id="cBtn1">1</button>
+    <button class="c-btn" id="cBtn2">2</button>
+    <button class="c-btn" id="cBtn3">3</button>
+  </div>
 
   <div class="label">Leads</div>
   <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
@@ -250,9 +220,7 @@
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
 
   <div id="shapeSection">
-    <div class="label">Shape</div>
-    <div id="abDisplay">a=1,  b=1</div>
-    <div id="abPopup"></div>
+    <div id="ab2IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
   </div>
 
   <div id="c3Section" style="display:none;">
@@ -285,6 +253,7 @@
   </div>
 </div>
 
+<div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <canvas id="diagram"></canvas>
 <div id="zigzagDisplay"
@@ -860,6 +829,8 @@ function updateInfo(B, g = 1) {
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
 let currentA = 1, currentB = 1;
+let ab2ValidList = [], ab2ValidIdx = -1;
+let ab2ListCacheM = -1;
 let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
 let c3ValidList = [], c3ValidIdx = -1;
 let c3ListCacheM = -1, c3ListCacheB = -1;
@@ -871,7 +842,8 @@ function validC3(m, a, b, c, d) {
   if ((a + b) % 3 === 0 || (c + d) % 3 === 0) return false;
   if (a + b + c > 3 * m) return false;
   if (a + c + d > 3 * m) return false;
-  if (c + d > a + b) return false;
+  if (a + b < c + d || (a + b === c + d && b < d)) return false;
+  if (a + b + c === 3 * m && a + c + d === 3 * m && c < d) return false;
   return true;
 }
 
@@ -891,6 +863,8 @@ function computeValidC3(m, B) {
         for (let d = 2; d <= dMax; d++) {
           if (d % 3 === 0) continue;
           if ((c + d) % 3 === 0) continue;
+          if (a + b === c + d && b < d) continue;
+          if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
           const allSC = buildAllSegmentCrossings(comps, mod);
@@ -933,97 +907,37 @@ function validPairs(m) {
   const pairs = [];
   for (let a = 0; a <= m - 3; a++)
     for (let b = 0; a + b <= m - 3; b++)
-      if ((m - a - b) % 2 === 1) pairs.push([a, b]);
+      if ((m - a - b) % 2 === 1 && !(a === 0 && b === 0)) pairs.push([a, b]);
   return pairs;
 }
 
-function nearestValid(m, prefA, prefB) {
-  const pairs = validPairs(m);
-  let best = pairs[0], bestD = Infinity;
-  for (const [a, b] of pairs) {
-    const d = Math.abs(a - prefA) + Math.abs(b - prefB);
-    if (d < bestD) { bestD = d; best = [a, b]; }
-  }
-  return best;
+function updateAB2Display() {
+  const cnt = ab2ValidList.length;
+  document.getElementById('ab2IdxDisplay').textContent =
+    ab2ValidIdx >= 0 ? `${ab2ValidIdx + 1} / ${cnt}` : `— / ${cnt}`;
+  const pd = document.getElementById('abParamDisplay');
+  pd.style.display = currentC === 2 ? '' : 'none';
+  pd.textContent = `a=${currentA}  b=${currentB}`;
 }
 
-function buildABGrid(m) {
-  const popup = document.getElementById('abPopup');
-  popup.innerHTML = '';
-  const maxAB = m - 3;
-  const wrapper  = document.createElement('div');
-  wrapper.className = 'ab-wrapper';
-  const labelCol = document.createElement('div');
-  labelCol.className = 'ab-label-col';
-  const grid = document.createElement('div');
-  grid.className = 'ab-grid';
-
-  const allBs = new Set();
-  for (let a = 0; a <= maxAB; a++)
-    for (let b = 0; a + b <= maxAB; b++)
-      if ((m - a - b) % 2 === 1) allBs.add(b);
-
-  for (let a = 0; a <= maxAB; a++) {
-    const validBs = [];
-    for (let b = 0; a + b <= maxAB; b++)
-      if ((m - a - b) % 2 === 1) validBs.push(b);
-    if (validBs.length === 0) continue;
-
-    const label = document.createElement('div');
-    label.textContent = a;
-    labelCol.appendChild(label);
-
-    const row = document.createElement('div');
-    row.className = 'ab-grid-row';
-    const cells = document.createElement('div');
-    cells.style.cssText = `display:flex; margin-left:${validBs[0] * 10}px`;
-    for (const b of validBs) {
-      const cell = document.createElement('div');
-      cell.className = 'ab-cell ab-valid' + (a === currentA && b === currentB ? ' ab-selected' : '');
-      cell.addEventListener('click', e => {
-        e.stopPropagation();
-        currentA = a; currentB = b;
-        document.getElementById('abDisplay').textContent = `a=${a},  b=${b}`;
-        popup.querySelectorAll('.ab-selected').forEach(el => el.classList.remove('ab-selected'));
-        cell.classList.add('ab-selected');
-        rebuildKnot();
-      });
-      cells.appendChild(cell);
+function syncAB2List(m) {
+  if (m !== ab2ListCacheM) {
+    ab2ValidList = validPairs(m);
+    ab2ListCacheM = m;
+    ab2ValidIdx = 0;
+    if (ab2ValidList.length > 0) [currentA, currentB] = ab2ValidList[0];
+  } else {
+    ab2ValidIdx = ab2ValidList.findIndex(([a, b]) => a === currentA && b === currentB);
+    if (ab2ValidIdx < 0 && ab2ValidList.length > 0) {
+      ab2ValidIdx = 0;
+      [currentA, currentB] = ab2ValidList[0];
     }
-    row.appendChild(cells);
-    grid.appendChild(row);
   }
-
-  const bHeader = document.createElement('div');
-  bHeader.className = 'ab-b-header';
-  for (const b of [...allBs].sort((x,y) => x-y)) {
-    const lbl = document.createElement('div');
-    lbl.className = 'ab-b-label';
-    lbl.textContent = b;
-    lbl.style.left = `${b * 10}px`;
-    bHeader.appendChild(lbl);
-  }
-
-  const spacer = document.createElement('div');
-  spacer.style.height = '14px';
-  labelCol.insertBefore(spacer, labelCol.firstChild);
-
-  const rightCol = document.createElement('div');
-  rightCol.appendChild(bHeader);
-  rightCol.appendChild(grid);
-  wrapper.appendChild(labelCol);
-  wrapper.appendChild(rightCol);
-  popup.appendChild(wrapper);
+  updateAB2Display();
+  return ab2ValidList.length > 0;
 }
 
 function getAB() { return [currentA, currentB]; }
-
-function updateABSelector(m) {
-  const only = currentC === 2 && validPairs(m).length <= 1;
-  const el = document.getElementById('abDisplay');
-  el.style.opacity = only ? '0.35' : '';
-  el.style.pointerEvents = only ? 'none' : '';
-}
 
 function minLeads()  { return currentC === 2 ? 3 : 2; }
 function minBights() { return currentC === 1 ? 2 : 1; }
@@ -1032,7 +946,7 @@ function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
-  if (currentC === 2 && validPairs(m).length === 0) return;
+  if (currentC === 2 && ab2ValidList.length === 0) return;
   if (currentC === 3 && !validC3(m, c3A, c3B, c3C, c3D)) return;
   setKnotFromUI(m);
   buildKnot(B);
@@ -1047,73 +961,17 @@ function onMChange() {
     document.getElementById('mInput').value = m;
   }
   if (currentC === 2) {
-    const pairs = validPairs(m);
-    if (pairs.length === 0) return;
-    [currentA, currentB] = nearestValid(m, currentA, currentB);
-    document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
-    if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
+    if (!syncAB2List(m)) return;
   }
   if (currentC === 3) {
     const B2 = parseInt(document.getElementById('bInput').value);
     if (!syncC3List(m, B2)) return;
   }
-  updateABSelector(m);
   setKnotFromUI(m);
   buildKnot(parseInt(document.getElementById('bInput').value), true);
   if (showDiagram) drawDiagram();
 }
 
-document.getElementById('abDisplay').addEventListener('click', e => {
-  e.stopPropagation();
-  const m = parseInt(document.getElementById('mInput').value);
-  const popup = document.getElementById('abPopup');
-  if (popup.style.display === 'none') { buildABGrid(m); popup.style.display = 'block'; autoRotate = false; }
-  else popup.style.display = 'none';
-});
-
-document.addEventListener('click', e => {
-  if (!document.getElementById('abDisplay').contains(e.target) &&
-      !document.getElementById('abPopup').contains(e.target))
-    document.getElementById('abPopup').style.display = 'none';
-});
-
-document.addEventListener('keydown', e => {
-  const popup = document.getElementById('abPopup');
-  if (popup.style.display === 'none') return;
-  if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
-  e.preventDefault();
-  const m = parseInt(document.getElementById('mInput').value);
-  const maxAB = m - 3;
-  let na = currentA, nb = currentB;
-
-  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-    // Move within same row (fixed a), searching for next valid b
-    const db = e.key === 'ArrowRight' ? 1 : -1;
-    for (let b = currentB + db; b >= 0 && b <= maxAB - currentA; b += db)
-      if ((m - currentA - b) % 2 === 1) { nb = b; break; }
-    if (nb === currentB) return; // no valid b found
-  } else {
-    // Move to adjacent row (change a), pick b closest to current
-    const da = e.key === 'ArrowDown' ? 1 : -1;
-    let found = false;
-    for (let a = currentA + da; a >= 0 && a <= maxAB; a += da) {
-      const bs = [];
-      for (let b = 0; b + a <= maxAB; b++)
-        if ((m - a - b) % 2 === 1) bs.push(b);
-      if (bs.length) {
-        na = a;
-        nb = bs.reduce((p, c) => Math.abs(c - currentB) < Math.abs(p - currentB) ? c : p);
-        found = true; break;
-      }
-    }
-    if (!found) return;
-  }
-
-  currentA = na; currentB = nb;
-  document.getElementById('abDisplay').textContent = `a=${na},  b=${nb}`;
-  buildABGrid(m);
-  rebuildKnot();
-});
 
 document.getElementById('mInput').addEventListener('change', onMChange);
 document.getElementById('bInput').addEventListener('change', () => {
@@ -1128,8 +986,10 @@ document.getElementById('bInput').addEventListener('change', () => {
 
 function setComplexity(c) {
   currentC = c;
+  [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.toggle('active', n === c));
   document.getElementById('shapeSection').style.display  = c === 2 ? '' : 'none';
   document.getElementById('c3Section').style.display     = c === 3 ? '' : 'none';
+  document.getElementById('abParamDisplay').style.display  = c === 2 ? '' : 'none';
   document.getElementById('c3ParamDisplay').style.display = c === 3 ? '' : 'none';
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
@@ -1137,33 +997,30 @@ function setComplexity(c) {
   const bInput = document.getElementById('bInput');
   bInput.min = minBights();
   if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
-  if (c === 2) {
-    const m = parseInt(mInput.value);
-    currentA = 0;
-    currentB = m % 2 === 0 ? 1 : 0;
-    document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
-  }
-  if (c === 3) {
-    c3ListCacheM = -1;
-  }
-  updateABSelector(parseInt(mInput.value));
+  if (c === 2) { ab2ListCacheM = -1; syncAB2List(parseInt(mInput.value)); }
+  if (c === 3) { c3ListCacheM  = -1; }
   rebuildKnot();
 }
-document.getElementById('cInput').addEventListener('change', () => {
-  const c = parseInt(document.getElementById('cInput').value);
-  if (!isNaN(c) && c >= 1) setComplexity(c);
-});
+document.getElementById('cBtn2').classList.add('active');
+[1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).addEventListener('click', () => setComplexity(n)));
 document.addEventListener('keydown', e => {
-  if (currentC !== 3 || c3ValidList.length === 0) return;
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
-  e.preventDefault();
-  const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
-  if (c3ValidIdx < 0) c3ValidIdx = dir === 1 ? 0 : c3ValidList.length - 1;
-  else c3ValidIdx = (c3ValidIdx + dir + c3ValidList.length) % c3ValidList.length;
-  [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
-  updateC3Display();
-  rebuildKnot();
+  if (currentC === 2 && ab2ValidList.length > 0) {
+    e.preventDefault();
+    const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
+    ab2ValidIdx = (ab2ValidIdx + dir + ab2ValidList.length) % ab2ValidList.length;
+    [currentA, currentB] = ab2ValidList[ab2ValidIdx];
+    updateAB2Display();
+    rebuildKnot();
+  } else if (currentC === 3 && c3ValidList.length > 0) {
+    e.preventDefault();
+    const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
+    c3ValidIdx = (c3ValidIdx + dir + c3ValidList.length) % c3ValidList.length;
+    [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
+    updateC3Display();
+    rebuildKnot();
+  }
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
@@ -1473,11 +1330,11 @@ function drawDiagram() {
   // C=3 parameter rulers — only in component (Period) mode.
   // Endpoints are where adjacent same-slope segment lines cross the ruler's own y-level.
   if (currentC === 3 && componentMode) {
-    const midY = (py(0) + py(MAX_Y)) / 2;
+    const qtrY = py(MAX_Y * 0.25);
     const rulers = [
-      { y: midY - 10, spans: [{ name: `2a=${2*c3A}`, color: 'rgba(255,140,60,0.9)',  s0: 0, s1: 2 },
+      { y: qtrY - 10, spans: [{ name: `2a=${2*c3A}`, color: 'rgba(255,140,60,0.9)',  s0: 0, s1: 2 },
                                { name: `2b=${2*c3B}`, color: 'rgba(255,220,60,0.9)',  s0: 2, s1: 4 }] },
-      { y: midY + 10, spans: [{ name: `2d=${2*c3D}`, color: 'rgba(80,210,180,0.9)', s0: 1, s1: 3 },
+      { y: qtrY + 10, spans: [{ name: `2d=${2*c3D}`, color: 'rgba(80,210,180,0.9)', s0: 1, s1: 3 },
                                { name: `2c=${2*c3C}`, color: 'rgba(120,170,255,0.9)', s0: 3, s1: 5 }] },
     ];
     const tickH = 5;
@@ -1702,6 +1559,8 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
+syncAB2List(parseInt(document.getElementById('mInput').value));
+document.getElementById('abParamDisplay').style.display = '';
 buildKnot(4);
 
 // ── Render loop ────────────────────────────────────────────────────────────
