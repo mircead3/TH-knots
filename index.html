@@ -245,6 +245,7 @@
 
   <div class="label">Bights</div>
   <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
+  <div id="interestingWarn" style="display:none;font-size:11px;color:rgba(255,100,100,0.85);text-align:center;margin-top:-12px;margin-bottom:10px;">not interesting</div>
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
 
@@ -608,7 +609,7 @@ function buildAllSegmentCrossings(components, mod) {
 // At each crossing the tangent is the exact derivative of the 3D position mapping
 // with respect to the abstract path parameter, using the segment's ±1 slope.
 class KnotCurve extends THREE.Curve {
-  constructor(bights, segCrossings, mod, viewT, closed = true, cpsByX = null) {
+  constructor(bights, segCrossings, mod, viewT, closed = true, cpsByX = null, noBightPull = false) {
     super();
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
@@ -683,6 +684,7 @@ class KnotCurve extends THREE.Curve {
     }
 
     const bightDelta = (bx, by, isTop) => {
+      if (noBightPull) return 0;
       const cps = cpsByX.get(bx) || [];
       let nearestD = Infinity, sameKind = false;
       for (const cp of cps) {
@@ -777,6 +779,9 @@ function buildKnot(B, resumeRotation = false) {
   const g              = components.length;
   const allSegCrossings = buildAllSegmentCrossings(components, mod);
 
+  const interesting = allSegCrossings.every(c => c.every(s => s.length > 0));
+  document.getElementById('interestingWarn').style.display = interesting ? 'none' : '';
+
   const slider = document.getElementById('viewSlider');
   const sliderRow = document.getElementById('viewSliderRow');
   const crossingYs = new Set(allSegCrossings.flat().flatMap(seg => seg.map(c => c.y)));
@@ -842,7 +847,6 @@ function buildKnot(B, resumeRotation = false) {
     knotGroup.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
       vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
     })));
-
   }
 
 
