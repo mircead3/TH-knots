@@ -765,7 +765,12 @@ function buildKnot(B, resumeRotation = false) {
     }
   }
 
-  const radialSegments = 60;
+  // Boost resolution for simple knots where faceting is most visible.
+  const boostFactor =
+    (currentC === 1 && B <= 4) ? Math.max(2, 6 - B) :  // B=1→5, 2→4, 3→3, 4→2
+    (currentC === 2 && B <= 2) ? (4 - B)               :  // B=1→3, 2→2
+    1;
+  const radialSegments = 60 * boostFactor;
   const tmp = new THREE.Color();
 
   const gDraw = componentMode ? 1 : g;
@@ -776,7 +781,7 @@ function buildKnot(B, resumeRotation = false) {
     const segCrossings = useOpen ? allSegCrossings[c].slice(0, D) : allSegCrossings[c];
     const isClosed = !useOpen;
     const curve  = new KnotCurve(bights, segCrossings, mod, vt, isClosed, globalCpsByX);
-    const tubularSegments = Math.max(bights.length * 60, curve.m * 6);
+    const tubularSegments = Math.max(bights.length * 60 * boostFactor, curve.m * 6 * boostFactor);
     const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, isClosed);
 
     // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
