@@ -238,7 +238,7 @@
   <h1>Knot Visualizer</h1>
 
   <div class="label">Complexity</div>
-  <input type="number" id="cInput" class="b-input" value="2" min="1" max="2">
+  <input type="number" id="cInput" class="b-input" value="2" min="1" max="3">
 
   <div class="label">Leads</div>
   <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
@@ -252,6 +252,33 @@
     <div class="label">Shape</div>
     <div id="abDisplay">a=1,  b=1</div>
     <div id="abPopup"></div>
+  </div>
+
+  <div id="c3Section" style="display:none;">
+    <div class="label">Shape</div>
+    <div class="param-row">
+      <div class="param-col">
+        <div class="sublabel">a</div>
+        <input type="number" id="c3aInput" class="b-input" value="2" min="2">
+      </div>
+      <div class="param-col">
+        <div class="sublabel">b</div>
+        <input type="number" id="c3bInput" class="b-input" value="2" min="2">
+      </div>
+    </div>
+    <div class="param-row">
+      <div class="param-col">
+        <div class="sublabel">c</div>
+        <input type="number" id="c3cInput" class="b-input" value="2" min="2">
+      </div>
+      <div class="param-col">
+        <div class="sublabel">d</div>
+        <input type="number" id="c3dInput" class="b-input" value="2" min="2">
+      </div>
+    </div>
+    <div id="c3Constraints" style="font-size:11px;line-height:1.9;margin-bottom:12px;font-family:inherit;">
+      <div id="c3mod3"></div>
+    </div>
   </div>
 
   <div id="knotSliders">
@@ -364,11 +391,28 @@ function setKnotDefC1(m) {
   MAX_Y  = m;
 }
 
+function setKnotDefC3(m, a, b, c, d) {
+  const L = m;
+  ZIGZAG = [
+    [0,                  0              ],
+    [3*L - c - d,        3*L - c - d    ],
+    [3*L + a - c - d,    3*L - a - c - d],
+    [3*L + a - c,        3*L - a - c    ],
+    [3*L + a + b - c,    3*L - a - b - c],
+    [3*L + a + b,        3*L - a - b    ],
+  ];
+  PERIOD = 6 * m;
+  D      = 6;
+  LEADS  = m;
+  MAX_Y  = Math.max(3*L - c - d, 3*L - a - c, 3*L - a - b);
+}
+
 let currentC = 2;
 
 function setKnotFromUI(m) {
   if (currentC === 1) setKnotDefC1(m);
-  else { const [a, b] = getAB(); setKnotDef(m, a, b); }
+  else if (currentC === 2) { const [a, b] = getAB(); setKnotDef(m, a, b); }
+  else { setKnotDefC3(m, c3A, c3B, c3C, c3D); }
 }
 
 setKnotDef(5, 1, 1); // initial values match the original example
@@ -624,10 +668,17 @@ class KnotCurve extends THREE.Curve {
       };
       const nSeg0 = closed ? n : n - 1;
       for (let i = 0; i < nSeg0; i++) {
-        for (const {x, y} of segCrossings[i]) addCP(x, y, false, null);
         const s0 = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
         const s1 = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
         if (s0 !== s1) addCP(bights[(i+1)%n][0], bights[(i+1)%n][1], true, s0 > 0);
+      }
+      for (let i = 0; i < nSeg0; i++) {
+        const [ax, ay] = bights[i];
+        const [, by2] = bights[(i+1)%n];
+        const slope = Math.sign(by2 - ay);
+        const len = Math.abs(by2 - ay);
+        for (let t = 0; t <= len; t++)
+          addCP((ax + t) % mod, ay + slope * t, false, null);
       }
     }
 
@@ -745,10 +796,20 @@ function buildKnot(B, resumeRotation = false) {
   for (let c2 = 0; c2 < g; c2++) {
     const cb = components[c2], nb = cb.length;
     for (let i = 0; i < nb; i++) {
-      for (const {x, y} of allSegCrossings[c2][i]) addGCP(x, y, false, null);
       const s0 = Math.sign(cb[(i+1)%nb][1] - cb[i][1]);
       const s1 = Math.sign(cb[(i+2)%nb][1] - cb[(i+1)%nb][1]);
       if (s0 !== s1) addGCP(cb[(i+1)%nb][0], cb[(i+1)%nb][1], true, s0 > 0);
+    }
+  }
+  for (let c2 = 0; c2 < g; c2++) {
+    const cb = components[c2], nb = cb.length;
+    for (let i = 0; i < nb; i++) {
+      const [ax, ay] = cb[i];
+      const [, by2] = cb[(i+1)%nb];
+      const slope = Math.sign(by2 - ay);
+      const len = Math.abs(by2 - ay);
+      for (let t = 0; t <= len; t++)
+        addGCP((ax + t) % mod, ay + slope * t, false, null);
     }
   }
 
@@ -802,7 +863,7 @@ const zigzagDisplay  = document.getElementById('zigzagDisplay');
 
 function updateInfo(B, g = 1) {
   const mod = 2 * currentC * B;
-  const parts = [`${2 * currentC * B} bights`, `${B} periods`];
+  const parts = [`${2 * currentC * B} bights`];
   if (g > 1) parts.splice(1, 0, `${g} components`);
   infoName.textContent = parts.join('  ·  ');
   zigzagDisplay.textContent = `mod = ${mod}    ` +
@@ -814,7 +875,89 @@ function updateInfo(B, g = 1) {
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
 let currentA = 1, currentB = 1;
+let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
 let componentMode = false;
+
+function validC3(m, a, b, c, d) {
+  if (a < 2 || b < 2 || c < 2 || d < 2) return false;
+  if (a % 3 === 0 || b % 3 === 0 || c % 3 === 0 || d % 3 === 0) return false;
+  if ((a + b) % 3 === 0 || (c + d) % 3 === 0) return false;
+  if (a + b + c > 3 * m) return false;
+  if (a + c + d > 3 * m) return false;
+  return true;
+}
+
+function updateC3Constraints(m, a, b, c, d) {
+  const bad = 'rgba(255,100,100,0.85)';
+  const mod3bad = [];
+  if (a % 3 === 0) mod3bad.push('a');
+  if (b % 3 === 0) mod3bad.push('b');
+  if (c % 3 === 0) mod3bad.push('c');
+  if (d % 3 === 0) mod3bad.push('d');
+  if ((a + b) % 3 === 0) mod3bad.push(`a+b=${a+b}`);
+  if ((c + d) % 3 === 0) mod3bad.push(`c+d=${c+d}`);
+  const mod3El = document.getElementById('c3mod3');
+  if (mod3bad.length === 0) {
+    mod3El.textContent = '';
+  } else {
+    mod3El.textContent = mod3bad.join(', ') + ' ≡ 0 (mod 3)';
+    mod3El.style.color = bad;
+  }
+}
+
+function updateC3Maxes(m, a, b, c, d) {
+  const L3 = 3 * m;
+  for (let pass = 0; pass < 4; pass++) {
+    const maxA = Math.min(L3 - b - c, L3 - c - d);
+    const maxB = L3 - a - c;
+    const maxC = Math.min(L3 - a - b, L3 - a - d);
+    const maxD = L3 - a - c;
+    const clamp = (v, mx) => { v = Math.min(v, mx); if (v % 3 === 0) v = Math.max(2, v - 1); return Math.max(2, v); };
+    a = clamp(a, maxA); b = clamp(b, maxB); c = clamp(c, maxC); d = clamp(d, maxD);
+  }
+  const ids = ['c3aInput','c3bInput','c3cInput','c3dInput'];
+  const maxes = [
+    Math.min(L3 - b - c, L3 - c - d),
+    L3 - a - c,
+    Math.min(L3 - a - b, L3 - a - d),
+    L3 - a - c,
+  ];
+  [a, b, c, d].forEach((v, i) => {
+    const el = document.getElementById(ids[i]);
+    el.max = maxes[i];
+    el.value = v;
+    el.dataset.prev = v;
+  });
+  return [a, b, c, d];
+}
+
+function c3SkipMod3(el) {
+  let v = parseInt(el.value);
+  if (isNaN(v) || v < 2) v = 2;
+  if (v % 3 === 0) {
+    const prev = parseInt(el.dataset.prev) || 2;
+    v = v >= prev ? v + 1 : Math.max(2, v - 1);
+    el.value = v;
+  }
+  el.dataset.prev = v;
+  return v;
+}
+
+function onC3ParamChange() {
+  const m = parseInt(document.getElementById('mInput').value);
+  let a = c3SkipMod3(document.getElementById('c3aInput'));
+  let b = c3SkipMod3(document.getElementById('c3bInput'));
+  let c = c3SkipMod3(document.getElementById('c3cInput'));
+  let d = c3SkipMod3(document.getElementById('c3dInput'));
+  [a, b, c, d] = updateC3Maxes(m, a, b, c, d);
+  updateC3Constraints(m, a, b, c, d);
+  if (!validC3(m, a, b, c, d)) return;
+  c3A = a; c3B = b; c3C = c; c3D = d;
+  setKnotDefC3(m, a, b, c, d);
+  const B = parseInt(document.getElementById('bInput').value);
+  buildKnot(B);
+  if (showDiagram) drawDiagram();
+}
 
 function validPairs(m) {
   const pairs = [];
@@ -920,6 +1063,7 @@ function rebuildKnot() {
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
   if (currentC === 2 && validPairs(m).length === 0) return;
+  if (currentC === 3 && !validC3(m, c3A, c3B, c3C, c3D)) return;
   setKnotFromUI(m);
   buildKnot(B);
   if (showDiagram) drawDiagram();
@@ -938,6 +1082,11 @@ function onMChange() {
     [currentA, currentB] = nearestValid(m, currentA, currentB);
     document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
     if (document.getElementById('abPopup').style.display !== 'none') buildABGrid(m);
+  }
+  if (currentC === 3) {
+    [c3A, c3B, c3C, c3D] = updateC3Maxes(m, c3A, c3B, c3C, c3D);
+    updateC3Constraints(m, c3A, c3B, c3C, c3D);
+    if (!validC3(m, c3A, c3B, c3C, c3D)) return;
   }
   updateABSelector(m);
   setKnotFromUI(m);
@@ -1010,6 +1159,7 @@ document.getElementById('bInput').addEventListener('change', () => {
 function setComplexity(c) {
   currentC = c;
   document.getElementById('shapeSection').style.display = c === 2 ? '' : 'none';
+  document.getElementById('c3Section').style.display    = c === 3 ? '' : 'none';
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
@@ -1022,12 +1172,29 @@ function setComplexity(c) {
     currentB = m % 2 === 0 ? 1 : 0;
     document.getElementById('abDisplay').textContent = `a=${currentA},  b=${currentB}`;
   }
+  if (c === 3) {
+    const m = parseInt(mInput.value);
+    if (!validC3(m, c3A, c3B, c3C, c3D)) {
+      c3A = 2; c3B = 2; c3C = 2; c3D = 2;
+      ['c3aInput','c3bInput','c3cInput','c3dInput'].forEach(id => {
+        const el = document.getElementById(id);
+        el.value = 2;
+        el.dataset.prev = '2';
+      });
+    }
+    updateC3Constraints(m, c3A, c3B, c3C, c3D);
+  }
   updateABSelector(parseInt(mInput.value));
   rebuildKnot();
 }
 document.getElementById('cInput').addEventListener('change', () => {
   const c = parseInt(document.getElementById('cInput').value);
   if (!isNaN(c) && c >= 1) setComplexity(c);
+});
+['c3aInput','c3bInput','c3cInput','c3dInput'].forEach(id => {
+  const el = document.getElementById(id);
+  el.dataset.prev = el.value;
+  el.addEventListener('input', onC3ParamChange);
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
@@ -1143,7 +1310,7 @@ function drawDiagram() {
   const LABEL_W  = 40;
   const padR     = 30;
   const diagH    = innerHeight * 0.75;
-  const scale    = diagH / (2 * LEADS);
+  const scale    = diagH / Math.max(MAX_Y, 2 * LEADS);
   const xStretch = parseFloat(document.getElementById('xStretchSlider').value);
   const scaleX   = scale * xStretch;
   const ox       = PANEL_W + LABEL_W;
@@ -1482,7 +1649,9 @@ function generateTyingSequence() {
   const m = parseInt(document.getElementById('mInput').value);
   const lines = [
     `# Turk's Head Knot tying sequence`,
-    `# ${m} leads × ${B} bights, complexity=${currentC}` + (currentC === 2 ? `  (a=${currentA}, b=${currentB})` : ''),
+    `# ${m} leads × ${B} bights, complexity=${currentC}` +
+      (currentC === 2 ? `  (a=${currentA}, b=${currentB})` : '') +
+      (currentC === 3 ? `  (a=${c3A}, b=${c3B}, c=${c3C}, d=${c3D})` : ''),
     `# ${n} path bights, mod=${mod}, ${crossList.length} crossings`,
     ``
   ];
