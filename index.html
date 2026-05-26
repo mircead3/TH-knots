@@ -266,7 +266,7 @@
     <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
            style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
 
-    <input type="range" id="thickInput" min="0.02" max="0.25" step="0.01" value="0.13"
+    <input type="range" id="thickInput" min="0.02" max="0.19" step="0.01" value="0.11"
            style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
   </div>
 
@@ -1464,11 +1464,61 @@ function drawDiagram() {
         ctx.fill();
         ctx.font = '11px monospace';
         ctx.fillStyle = 'rgba(255,240,160,0.95)';
-        ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 19 : sy - 12);
+        ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 23 : sy - 16);
       }
     }
   }
   ctx.restore();
+
+  // C=3 parameter rulers — only in component (Period) mode.
+  // Endpoints are where adjacent same-slope segment lines cross the ruler's own y-level.
+  if (currentC === 3 && componentMode) {
+    const midY = (py(0) + py(MAX_Y)) / 2;
+    const rulers = [
+      { y: midY - 10, spans: [{ name: `2a=${2*c3A}`, color: 'rgba(255,140,60,0.9)',  s0: 0, s1: 2 },
+                               { name: `2b=${2*c3B}`, color: 'rgba(255,220,60,0.9)',  s0: 2, s1: 4 }] },
+      { y: midY + 10, spans: [{ name: `2d=${2*c3D}`, color: 'rgba(80,210,180,0.9)', s0: 1, s1: 3 },
+                               { name: `2c=${2*c3C}`, color: 'rgba(120,170,255,0.9)', s0: 3, s1: 5 }] },
+    ];
+    const tickH = 5;
+    const comp0 = components[0];
+    const n0    = comp0.length;
+    let cumX = comp0[0][0];
+    const xs = [cumX], ys = [comp0[0][1]];
+    for (let s = 0; s < D; s++) {
+      const [, ay] = comp0[s];
+      const [, by] = comp0[(s + 1) % n0];
+      cumX += Math.abs(by - ay);
+      xs.push(cumX);
+      ys.push(by);
+    }
+    // x where segment s's line crosses diagram y-level yDiag
+    const xAtLevel = (s, yDiag) => s % 2 === 0
+      ? xs[s] + (yDiag - ys[s])   // ascending slope +1
+      : xs[s] - (yDiag - ys[s]);  // descending slope -1
+
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    for (const { y: rulerY, spans } of rulers) {
+      const yDiag = (oy - rulerY) / scale;
+      for (const { name, color, s0, s1 } of spans) {
+        const rx0 = px(xAtLevel(s0, yDiag));
+        const rx1 = px(xAtLevel(s1, yDiag));
+        if (rx1 < ox || rx0 > ox + availDiagW) continue;
+        const crx0 = Math.max(rx0, ox);
+        const crx1 = Math.min(rx1, ox + availDiagW);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(crx0, rulerY); ctx.lineTo(crx1, rulerY); ctx.stroke();
+        if (rx0 >= ox)              { ctx.beginPath(); ctx.moveTo(rx0, rulerY - tickH); ctx.lineTo(rx0, rulerY + tickH); ctx.stroke(); }
+        if (rx1 <= ox + availDiagW) { ctx.beginPath(); ctx.moveTo(rx1, rulerY - tickH); ctx.lineTo(rx1, rulerY + tickH); ctx.stroke(); }
+        if (rx1 - rx0 > 20) {
+          ctx.fillStyle = color;
+          ctx.fillText(name, (crx0 + crx1) / 2, rulerY - tickH - 2);
+        }
+      }
+    }
+  }
 
   // x-axis tick labels every 2 units below diagram, and above starting at first top-row bight
   ctx.fillStyle = 'rgba(180,205,255,0.75)';
