@@ -912,11 +912,13 @@ function computeValidC3(m) {
     for (let b = bStart; b <= L3 - a - 2; b += 3) {
       for (let c = 2; c <= Math.min(L3 - a - b, a + b - 2); c++) {
         if (c % 3 === 0) continue;
-        const dMax   = Math.min(L3 - a - c, a + b - c);
-        // d must have d%3 === c%3 to avoid d%3=0 and (c+d)%3=0; step by 3.
-        const dRem   = c % 3;
-        const dStart = 2 + (dRem + 1) % 3;  // smallest >= 2 with value%3 === dRem
-        for (let d = dStart; d <= dMax; d += 3) {
+        const dMax = Math.min(L3 - a - c, a + b - c);
+        // d%3=0 always bad (adjacent descending segs always overlap).
+        // (c+d)%3=0 bad only when c+d > b (first and third descending segs overlap);
+        // when c+d <= b their y-ranges are disjoint so no triple crossing is possible.
+        for (let d = 2; d <= dMax; d++) {
+          if (d % 3 === 0) continue;
+          if ((c + d) % 3 === 0 && c + d > b) continue;
           if (a + b === c + d && b < d) continue;
           if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
           if (a + c + d === L3 && a <= d) continue;
