@@ -242,7 +242,7 @@
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Narrow</span><span>Wide</span>
     </div>
-    <input type="range" id="xStretchSlider" min="0.3" max="3" step="0.05" value="1"
+    <input type="range" id="xStretchSlider" min="0.3" max="1.65" step="0.05" value="1"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
     <button id="downloadBtn" class="view-btn" style="margin-bottom:8px;">Download tying sequence</button>
   </div>
@@ -854,27 +854,73 @@ function validC3(m, a, b, c, d) {
 }
 
 
+// Fast validity check: every segment must have at least one crossing.
+// Solves 2t ≡ (cx−ax+diffY) (mod mod) algebraically (at most 2 candidates),
+// avoiding the O(m) t-loop used in the full crossing builder.
+function hasAllCrossings(components, mod) {
+  const nC = components.length;
+  const covered = components.map(comp => new Uint8Array(comp.length));
+  let remaining = components.reduce((s, c) => s + c.length, 0);
+  const halfMod = mod >> 1;  // mod = 6B is always even
+
+  outer:
+  for (let ci = 0; ci < nC; ci++) {
+    const bP = components[ci], np = bP.length;
+    for (let p = 0; p < np; p++) {
+      const [ax, ay] = bP[p];
+      const dxp = bP[(p+1)%np][1] - ay;
+      if (dxp <= 0) continue;  // ascending segments only as p
+      for (let cj = 0; cj < nC; cj++) {
+        const bQ = components[cj], nq = bQ.length;
+        for (let q = 0; q < nq; q++) {
+          if (covered[ci][p] && covered[cj][q]) continue;
+          const [cx, cy] = bQ[q];
+          const dxq = cy - bQ[(q+1)%nq][1];
+          if (dxq <= 0) continue;  // descending segments only as q
+          const diffY = cy - ay;
+          // Solve 2t ≡ (cx - ax + diffY) (mod mod). Two candidates: t0 and t0 + halfMod.
+          const kval = ((cx - ax + diffY) % mod + mod) % mod;
+          if (kval & 1) continue;  // odd → no integer solution
+          const t0 = kval >> 1;
+          for (let r = 0; r < 2; r++) {
+            const t = t0 + r * halfMod;
+            if (t <= 0 || t >= dxp) continue;
+            const u = diffY - t;
+            if (u <= 0 || u >= dxq) continue;
+            if (!covered[ci][p]) { covered[ci][p] = 1; remaining--; }
+            if (!covered[cj][q]) { covered[cj][q] = 1; remaining--; }
+            if (remaining === 0) break outer;
+            break;  // one crossing found for this (p,q) pair is enough
+          }
+        }
+      }
+    }
+  }
+  return remaining === 0;
+}
+
 function computeValidC3(m, B) {
   const savedZZ = ZIGZAG, savedP = PERIOD, savedD = D, savedL = LEADS, savedMY = MAX_Y;
   const L3 = 3 * m, mod = 6 * B;
   const list = [];
   for (let a = 2; a <= L3 - 4; a++) {
     if (a % 3 === 0) continue;
-    for (let b = 2; b <= L3 - a - 2; b++) {
-      if (b % 3 === 0) continue;
-      if ((a + b) % 3 === 0) continue;
+    // b must have b%3 === a%3 to avoid b%3=0 and (a+b)%3=0; step by 3.
+    const bRem   = a % 3;
+    const bStart = 2 + (bRem + 1) % 3;  // smallest >= 2 with value%3 === bRem
+    for (let b = bStart; b <= L3 - a - 2; b += 3) {
       for (let c = 2; c <= Math.min(L3 - a - b, a + b - 2); c++) {
         if (c % 3 === 0) continue;
-        const dMax = Math.min(L3 - a - c, a + b - c);
-        for (let d = 2; d <= dMax; d++) {
-          if (d % 3 === 0) continue;
-          if ((c + d) % 3 === 0) continue;
+        const dMax   = Math.min(L3 - a - c, a + b - c);
+        // d must have d%3 === c%3 to avoid d%3=0 and (c+d)%3=0; step by 3.
+        const dRem   = c % 3;
+        const dStart = 2 + (dRem + 1) % 3;  // smallest >= 2 with value%3 === dRem
+        for (let d = dStart; d <= dMax; d += 3) {
           if (a + b === c + d && b < d) continue;
           if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
-          const allSC = buildAllSegmentCrossings(comps, mod);
-          if (allSC.every(comp => comp.every(seg => seg.length > 0))) list.push([a, b, c, d]);
+          if (hasAllCrossings(comps, mod)) list.push([a, b, c, d]);
         }
       }
     }
