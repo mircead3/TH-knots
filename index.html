@@ -813,7 +813,7 @@ function buildKnot(B, resumeRotation = false) {
 
   updateInfo(B, g);
   if (currentC === 3) {
-    syncC3List(LEADS, B);
+    syncC3List(LEADS);
   }
 }
 
@@ -839,7 +839,7 @@ let ab2ValidList = [], ab2ValidIdx = -1;
 let ab2ListCacheM = -1;
 let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
 let c3ValidList = [], c3ValidIdx = -1;
-let c3ListCacheM = -1, c3ListCacheB = -1;
+let c3ListCacheM = -1;
 let componentMode = false;
 
 function validC3(m, a, b, c, d) {
@@ -900,9 +900,9 @@ function hasAllCrossings(components, mod) {
   return remaining === 0;
 }
 
-function computeValidC3(m, B) {
+function computeValidC3(m) {
   const savedZZ = ZIGZAG, savedP = PERIOD, savedD = D, savedL = LEADS, savedMY = MAX_Y;
-  const L3 = 3 * m, mod = 6 * B;
+  const L3 = 3 * m, B = m + 1, mod = 6 * B;
   const list = [];
   for (let a = 2; a <= L3 - 4; a++) {
     if (a % 3 === 0) continue;
@@ -931,10 +931,10 @@ function computeValidC3(m, B) {
   return list;
 }
 
-function syncC3List(m, B) {
-  if (m !== c3ListCacheM || B !== c3ListCacheB) {
-    c3ValidList = computeValidC3(m, B);
-    c3ListCacheM = m; c3ListCacheB = B;
+function syncC3List(m) {
+  if (m !== c3ListCacheM) {
+    c3ValidList = computeValidC3(m);
+    c3ListCacheM = m;
     c3ValidIdx = 0;
     if (c3ValidList.length > 0) [c3A, c3B, c3C, c3D] = c3ValidList[0];
   } else {
@@ -1019,7 +1019,7 @@ function onMChange() {
   }
   if (currentC === 3) {
     const B2 = parseInt(document.getElementById('bInput').value);
-    if (!syncC3List(m, B2)) return;
+    if (!syncC3List(m)) return;
   }
   setKnotFromUI(m);
   buildKnot(parseInt(document.getElementById('bInput').value), true);
@@ -1032,7 +1032,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
-  if (currentC === 3 && !syncC3List(m, B)) return;
+  if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
   buildKnot(B, true);
   if (showDiagram) drawDiagram();
@@ -1545,7 +1545,7 @@ document.addEventListener('keydown', (e) => {
 window.findSameYSets = function(m) {
   const B = parseInt(document.getElementById('bInput').value);
   if (currentC !== 3) { console.log('Switch to C=3 first'); return; }
-  syncC3List(m, B);
+  syncC3List(m);
   const L3 = 3 * m;
   const groups = new Map();
   c3ValidList.forEach(([a, b, c, d], idx) => {
