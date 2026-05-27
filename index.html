@@ -878,15 +878,16 @@ function hasAllCrossings(components, mod) {
           const dxq = cy - bQ[(q+1)%nq][1];
           if (dxq <= 0) continue;  // descending segments only as q
           const diffY = cy - ay;
-          // Solve 2t ≡ (cx - ax + diffY) (mod mod). Two candidates: t0 and t0 + halfMod.
+          // Solve 2t ≡ (cx - ax + diffY) (mod mod). Solutions: t0, t0+halfMod, t0+mod, …
+          // When dxp > mod there can be more than 2 solutions, so iterate all of them.
           const kval = ((cx - ax + diffY) % mod + mod) % mod;
           if (kval & 1) continue;  // odd → no integer solution
           const t0 = kval >> 1;
-          for (let r = 0; r < 2; r++) {
-            const t = t0 + r * halfMod;
-            if (t <= 0 || t >= dxp) continue;
+          const startT = t0 === 0 ? halfMod : t0;  // t=0 is a boundary, skip it
+          for (let t = startT; t < dxp; t += halfMod) {
             const u = diffY - t;
-            if (u <= 0 || u >= dxq) continue;
+            if (u <= 0) break;   // u only decreases as t increases
+            if (u >= dxq) continue;
             if (!covered[ci][p]) { covered[ci][p] = 1; remaining--; }
             if (!covered[cj][q]) { covered[cj][q] = 1; remaining--; }
             if (remaining === 0) break outer;
@@ -918,6 +919,7 @@ function computeValidC3(m, B) {
         for (let d = dStart; d <= dMax; d += 3) {
           if (a + b === c + d && b < d) continue;
           if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
+          if (a + c + d === L3 && a <= d && !(a === b && b === c && c === d)) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
           if (hasAllCrossings(comps, mod)) list.push([a, b, c, d]);
@@ -1537,6 +1539,38 @@ document.addEventListener('keydown', (e) => {
     positionZigzagDisplay();
   }
 });
+
+// Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
+// Call from browser console: findSameYSets()
+window.findSameYSets = function(m) {
+  const B = parseInt(document.getElementById('bInput').value);
+  if (currentC !== 3) { console.log('Switch to C=3 first'); return; }
+  syncC3List(m, B);
+  const L3 = 3 * m;
+  const groups = new Map();
+  c3ValidList.forEach(([a, b, c, d], idx) => {
+    const s = [L3-c-d, a, d, b, c, L3-a-b];
+    // Canonical form: lexicographically smallest even rotation (by 0, 2, or 4 positions).
+    // Rotations by odd amounts swap ascending/descending roles so are not equivalent flat.
+    const rots = [
+      [s[0],s[1],s[2],s[3],s[4],s[5]],
+      [s[2],s[3],s[4],s[5],s[0],s[1]],
+      [s[4],s[5],s[0],s[1],s[2],s[3]],
+    ];
+    const key = rots.map(r => r.join(',')).sort().at(0);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ idx: idx + 1, a, b, c, d });
+  });
+  let found = 0;
+  for (const [key, entries] of groups) {
+    if (entries.length > 1) {
+      found++;
+      console.log(`seq=[${key}]: ` +
+        entries.map(e => `#${e.idx}(a=${e.a},b=${e.b},c=${e.c},d=${e.d})`).join('  '));
+    }
+  }
+  console.log(`${found} group(s) with rotationally equivalent segment sequence  (${c3ValidList.length} total)`);
+};
 
 document.getElementById('viewSlider').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
