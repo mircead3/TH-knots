@@ -919,7 +919,7 @@ function computeValidC3(m) {
         for (let d = dStart; d <= dMax; d += 3) {
           if (a + b === c + d && b < d) continue;
           if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
-          if (a + c + d === L3 && a <= d && !(a === b && b === c && c === d)) continue;
+          if (a + c + d === L3 && a <= d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
           if (hasAllCrossings(comps, mod)) list.push([a, b, c, d]);
