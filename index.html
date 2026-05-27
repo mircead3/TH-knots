@@ -844,8 +844,9 @@ let componentMode = false;
 
 function validC3(m, a, b, c, d) {
   if (a < 2 || b < 2 || c < 2 || d < 2) return false;
-  if (a % 3 === 0 || b % 3 === 0 || c % 3 === 0 || d % 3 === 0) return false;
-  if ((a + b) % 3 === 0 || (c + d) % 3 === 0) return false;
+  if (a % 3 === 0 || c % 3 === 0 || d % 3 === 0) return false;
+  if ((a + b) % 3 === 0) return false;
+  if ((b % 3 === 0 || (c + d) % 3 === 0) && c + d > b) return false;
   if (a + b + c > 3 * m) return false;
   if (a + c + d > 3 * m) return false;
   if (a + b < c + d || (a + b === c + d && b < d)) return false;
@@ -907,18 +908,19 @@ function computeValidC3(m) {
   for (let a = 2; a <= L3 - 4; a++) {
     if (a % 3 === 0) continue;
     // b must have b%3 === a%3 to avoid b%3=0 and (a+b)%3=0; step by 3.
-    const bRem   = a % 3;
-    const bStart = 2 + (bRem + 1) % 3;  // smallest >= 2 with value%3 === bRem
-    for (let b = bStart; b <= L3 - a - 2; b += 3) {
+    const bRem = a % 3;
+    // Only skip b where (a+b)%3=0: structurally impossible (needs d >= a+b, but d <= a+b-c with c>=2).
+    // b%3=0 is allowed when c+d <= b (ascending segs 2&4 have disjoint y-ranges then).
+    for (let b = 2; b <= L3 - a - 2; b++) {
+      if (b % 3 === (3 - bRem) % 3) continue;
       for (let c = 2; c <= Math.min(L3 - a - b, a + b - 2); c++) {
         if (c % 3 === 0) continue;
         const dMax = Math.min(L3 - a - c, a + b - c);
         // d%3=0 always bad (adjacent descending segs always overlap).
-        // (c+d)%3=0 bad only when c+d > b (first and third descending segs overlap);
-        // when c+d <= b their y-ranges are disjoint so no triple crossing is possible.
+        // b%3=0 or (c+d)%3=0 bad only when c+d > b; when c+d <= b y-ranges are disjoint.
         for (let d = 2; d <= dMax; d++) {
           if (d % 3 === 0) continue;
-          if ((c + d) % 3 === 0 && c + d > b) continue;
+          if ((b % 3 === 0 || (c + d) % 3 === 0) && c + d > b) continue;
           if (a + b === c + d && b < d) continue;
           if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
           if (a + c + d === L3 && a <= d) continue;
@@ -1054,7 +1056,7 @@ function setComplexity(c) {
   bInput.min = minBights();
   if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
   if (c === 2) { ab2ListCacheM = -1; syncAB2List(parseInt(mInput.value)); }
-  if (c === 3) { c3ListCacheM  = -1; }
+  if (c === 3) { c3ListCacheM  = -1; syncC3List(parseInt(mInput.value)); }
   rebuildKnot();
 }
 document.getElementById('cBtn2').classList.add('active');
