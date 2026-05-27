@@ -250,6 +250,7 @@
   <div class="btn-row">
     <button id="diagramToggle" class="view-btn">Diagram</button>
     <button id="componentToggle" class="view-btn">Period</button>
+    <button id="bightsToggle" class="view-btn">Bights</button>
   </div>
 </div>
 
@@ -800,6 +801,17 @@ function buildKnot(B, resumeRotation = false) {
     knotGroup.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
       vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
     })));
+    if (showBights) {
+      const sphereR = tubeRadius * 1.5;
+      for (const bp of curve.bightPts) {
+        const s = new THREE.Mesh(
+          new THREE.SphereGeometry(sphereR, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        s.position.copy(bp);
+        knotGroup.add(s);
+      }
+    }
   }
 
 
@@ -1174,6 +1186,7 @@ function computeDiagramCrossingsAll(components, mod) {
   return result;
 }
 
+let showBights = false;
 let showDiagram = false;
 const diagramCanvas = document.getElementById('diagram');
 
@@ -1527,6 +1540,12 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   const B = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else buildKnot(B);
+});
+
+document.getElementById('bightsToggle').addEventListener('click', () => {
+  showBights = !showBights;
+  document.getElementById('bightsToggle').classList.toggle('active', showBights);
+  buildKnot(parseInt(document.getElementById('bInput').value));
 });
 
 window.addEventListener('resize', () => { if (showDiagram) { drawDiagram(); positionZigzagDisplay(); } });
