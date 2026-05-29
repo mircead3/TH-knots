@@ -857,6 +857,10 @@ function buildTubeDiagram() {
   const xStretch   = parseFloat(document.getElementById('xStretchSlider').value);
   const scaleY     = 8;
   const delta      = tubeRadius * 3;
+  const bightInset = 0.5;
+  // Per-vertex inset: direction = sign of next segment's Δy (local min → up, local max → down)
+  const bightYAdj = ZIGZAG.map((pt, i) =>
+    pt[1] + (ZIGZAG[(i + 1) % D][1] >= pt[1] ? bightInset : -bightInset));
   const pad        = tubeRadius * 2;
   const oH         = scaleY * 1.6 + pad;
 
@@ -971,12 +975,12 @@ function buildTubeDiagram() {
         const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
         const By = ZIGZAG[sn][1];
 
-        if (pts.length === 0) pts.push(toFlat(Ax, Ay, 0));
+        if (pts.length === 0) pts.push(toFlat(Ax, bightYAdj[s], 0));
 
         for (const {t, y, isOver} of strandCrossings[k][s])
           pts.push(toFlat(Ax + t, y, isOver ? delta : -delta));
 
-        pts.push(toFlat(Bx, By, 0));
+        pts.push(toFlat(Bx, bightYAdj[sn], 0));
       }
     }
 
@@ -1000,6 +1004,27 @@ function buildTubeDiagram() {
     }));
     mesh.frustumCulled = false;
     knotGroup.add(mesh);
+  }
+
+  if (showBights) {
+    const sphereR   = tubeRadius * 0.75;
+    const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    for (let k = 0; k < strandCount; k++) {
+      const xk = k * step;
+      for (let r = -1; r < REPS; r++) {
+        const rOff = r * PERIOD + xk;
+        for (let s = 0; s < D; s++) {
+          const sn = (s + 1) % D;
+          const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
+          const By = ZIGZAG[sn][1];
+          const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+          sphere.position.copy(toFlat(Bx, By, 0));
+          sphere.frustumCulled = false;
+          knotGroup.add(sphere);
+        }
+      }
+    }
   }
 }
 
@@ -1421,7 +1446,7 @@ function enterBraidMode() {
   document.getElementById('xStretchSection').style.display = '';
   document.getElementById('downloadBtn').style.display = '';
   document.getElementById('bInput').disabled = true;
-  document.getElementById('bightsToggle').disabled = true;
+  document.getElementById('bightsToggle').disabled = false;
   const ct = document.getElementById('componentToggle');
   ct.disabled = false;
   ct.textContent = componentMode ? 'Full' : 'Solo';
