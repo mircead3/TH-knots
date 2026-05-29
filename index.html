@@ -251,6 +251,7 @@
     <button id="diagramToggle" class="view-btn">Diagram</button>
     <button id="componentToggle" class="view-btn">Period</button>
     <button id="bightsToggle" class="view-btn">Bights</button>
+    <button id="tubeDiagToggle" class="view-btn">Tube Diag</button>
   </div>
 </div>
 
@@ -281,6 +282,10 @@ scene.fog = new THREE.FogExp2(0x060610, 0.018);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
 camera.position.set(0, 0, 14);
+const orthoCamera = new THREE.OrthographicCamera(-8, 8, 4, -4, 0.1, 100);
+orthoCamera.position.set(0, 0, 20);
+orthoCamera.lookAt(0, 0, 0);
+let activeCamera = camera;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -708,6 +713,7 @@ class KnotCurve extends THREE.Curve {
   }
 }
 
+
 // ── Scene objects ──────────────────────────────────────────────────────────
 const knotGroup = new THREE.Group();
 scene.add(knotGroup);
@@ -826,6 +832,162 @@ function buildKnot(B, resumeRotation = false) {
   updateInfo(B, g);
   if (currentC === 3) {
     syncC3List(LEADS);
+  }
+}
+
+function buildTubeDiagram() {
+  while (knotGroup.children.length) {
+    const child = knotGroup.children[0];
+    child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
+  }
+  knotGroup.rotation.set(0, 0, 0);
+
+  const tubeRadius = parseFloat(document.getElementById('thickInput').value);
+  const xStretch   = parseFloat(document.getElementById('xStretchSlider').value);
+  const scaleY     = 8;
+  const delta      = tubeRadius * 3;
+  const pad        = tubeRadius * 2;
+  const oH         = scaleY * 1.6 + pad;
+
+  const unitScaleY = scaleY / MAX_Y;
+  const unitScaleX = unitScaleY * xStretch;
+
+  // step = PERIOD / LEADS = D (always, since PERIOD = D*m and LEADS = m)
+  const step = PERIOD / LEADS;
+
+  // Camera: fixed aspect, content scales with xStretch
+  const PANEL_W    = 235;
+  const aspect     = (innerWidth - PANEL_W) / innerHeight;
+  const oW         = oH * aspect;
+  const REPS       = Math.max(1, Math.ceil(oW / (PERIOD * unitScaleX)));
+  const centerAbsX = PERIOD * REPS / 2;
+
+  orthoCamera.left = -oW / 2; orthoCamera.right = oW / 2;
+  orthoCamera.top  =  oH / 2; orthoCamera.bottom = -oH / 2;
+  orthoCamera.updateProjectionMatrix();
+
+  const toFlat = (absX, y, z = 0) => new THREE.Vector3(
+    (absX - centerAbsX) * unitScaleX,
+    (y    - MAX_Y / 2)  * unitScaleY,
+    z
+  );
+
+  // ── B-free crossing computation ────────────────────────────────────────────
+  // Find all crossings between the LEADS strands from ZIGZAG geometry alone.
+  // Each upward segment of strand k1 is intersected with each downward segment
+  // of strand k2 (k1 ≠ k2), trying a small range of period offsets r2.
+  const strandCrossings = Array.from({length: LEADS}, () =>
+    Array.from({length: D}, () => []));
+
+  const raw = [];
+  for (let k1 = 0; k1 < LEADS; k1++) {
+    const xk1 = k1 * step;
+    for (let s1 = 0; s1 < D; s1++) {
+      const s1n = (s1 + 1) % D;
+      const A1x = ZIGZAG[s1][0] + xk1;
+      const A1y = ZIGZAG[s1][1];
+      const B1y = ZIGZAG[s1n][1];
+      if (B1y <= A1y) continue;           // upward segments only for k1
+      const len1 = B1y - A1y;             // segment length (slope=±1 ⟹ |dx|=|dy|)
+
+      for (let k2 = 0; k2 < LEADS; k2++) {
+        if (k1 === k2) continue;
+        const xk2 = k2 * step;
+        for (let s2 = 0; s2 < D; s2++) {
+          const s2n = (s2 + 1) % D;
+          const A2y = ZIGZAG[s2][1];
+          const B2y = ZIGZAG[s2n][1];
+          if (B2y >= A2y) continue;       // downward segments only for k2
+          const len2 = A2y - B2y;
+
+          for (let r2 = -2; r2 <= 2; r2++) {
+            const A2x = ZIGZAG[s2][0] + xk2 + r2 * PERIOD;
+            const t1  = (A2x + A2y - A1x - A1y) / 2;
+            const t2  = (A2y - A1y + A1x - A2x) / 2;
+            const yc  = A1y + t1;
+            if (t1 <= 0 || t1 >= len1) continue;
+            if (t2 <= 0 || t2 >= len2) continue;
+            if (yc  <= 0 || yc  >= MAX_Y) continue;
+            raw.push({k1, s1, t1, k2, s2, t2, y: yc});
+          }
+        }
+      }
+    }
+  }
+
+  // Over/under: even y-rank → k1 is over, then apply parity flip if needed.
+  const yVals = [...new Set(raw.map(c => c.y))].sort((a, b) => a - b);
+  const yRank = new Map(yVals.map((y, i) => [y, i]));
+  raw.forEach(c => { c.k1IsOver = (yRank.get(c.y) % 2 === 0); });
+
+  // Parity flip: the crossing where the "later" strand (max segment index)
+  // first appears should be the over-crossing — same rule as needsParityFlip.
+  let bestSeg = Infinity, bestT = Infinity, firstIsOver = true;
+  for (const c of raw) {
+    const laterSeg    = Math.max(c.s1, c.s2);
+    const tOnLater    = c.s1 > c.s2 ? c.t1 : c.t2;
+    const isOverLater = c.s1 > c.s2 ? c.k1IsOver : !c.k1IsOver;
+    if (laterSeg < bestSeg || (laterSeg === bestSeg && tOnLater < bestT)) {
+      bestSeg = laterSeg; bestT = tOnLater; firstIsOver = isOverLater;
+    }
+  }
+  if (!firstIsOver) raw.forEach(c => { c.k1IsOver = !c.k1IsOver; });
+
+  for (const c of raw) {
+    strandCrossings[c.k1][c.s1].push({t: c.t1, y: c.y, isOver:  c.k1IsOver});
+    strandCrossings[c.k2][c.s2].push({t: c.t2, y: c.y, isOver: !c.k1IsOver});
+  }
+  for (let k = 0; k < LEADS; k++)
+    for (let s = 0; s < D; s++)
+      strandCrossings[k][s].sort((a, b) => a.t - b.t);
+
+  // ── One tube per strand ────────────────────────────────────────────────────
+  const tmp        = new THREE.Color();
+  const radialSegs = 32;
+
+  for (let k = 0; k < LEADS; k++) {
+    const xk  = k * step;
+    const pts = [];
+
+    for (let r = -1; r < REPS; r++) {
+      const rOff = r * PERIOD + xk;
+
+      for (let s = 0; s < D; s++) {
+        const sn = (s + 1) % D;
+        const Ax = ZIGZAG[s][0]  + rOff;
+        const Ay = ZIGZAG[s][1];
+        const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
+        const By = ZIGZAG[sn][1];
+
+        if (pts.length === 0) pts.push(toFlat(Ax, Ay, 0));
+
+        for (const {t, y, isOver} of strandCrossings[k][s])
+          pts.push(toFlat(Ax + t, y, isOver ? delta : -delta));
+
+        pts.push(toFlat(Bx, By, 0));
+      }
+    }
+
+    if (pts.length < 2) continue;
+
+    tmp.setHSL(k / LEADS, 0.9, 0.62);
+
+    const curve       = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
+    const tubularSegs = Math.max(pts.length * 12, 60);
+    const geo         = new THREE.TubeGeometry(curve, tubularSegs, tubeRadius, radialSegs, false);
+
+    const ringCount    = tubularSegs + 1;
+    const vertsPerRing = radialSegs + 1;
+    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
+    for (let vi = 0; vi < ringCount * vertsPerRing; vi++) {
+      cols[vi*3] = tmp.r; cols[vi*3+1] = tmp.g; cols[vi*3+2] = tmp.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+      vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
+    }));
+    mesh.frustumCulled = false;
+    knotGroup.add(mesh);
   }
 }
 
@@ -1019,8 +1181,9 @@ function rebuildKnot() {
   if (currentC === 2 && ab2ValidList.length === 0) return;
   if (currentC === 3 && !validC3(m, c3A, c3B, c3C, c3D)) return;
   setKnotFromUI(m);
-  buildKnot(B);
   if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
+  else buildKnot(B);
 }
 
 function onMChange() {
@@ -1038,8 +1201,10 @@ function onMChange() {
     if (!syncC3List(m)) return;
   }
   setKnotFromUI(m);
-  buildKnot(parseInt(document.getElementById('bInput').value), true);
+  const B_m = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
+  else buildKnot(B_m, true);
 }
 
 
@@ -1050,8 +1215,9 @@ document.getElementById('bInput').addEventListener('change', () => {
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
   if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
-  buildKnot(B, true);
   if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
+  else buildKnot(B, true);
 });
 
 function setComplexity(c) {
@@ -1094,7 +1260,8 @@ document.addEventListener('keydown', e => {
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
-  buildKnot(B);
+  if (showTubeDiag) buildTubeDiagram();
+  else buildKnot(B);
 });
 
 // ── Diagram view ───────────────────────────────────────────────────────────
@@ -1186,9 +1353,48 @@ function computeDiagramCrossingsAll(components, mod) {
   return result;
 }
 
-let showBights = false;
-let showDiagram = false;
+let showBights   = false;
+let showDiagram  = false;
+let showTubeDiag = false;
 const diagramCanvas = document.getElementById('diagram');
+
+function enterKnotMode() {
+  showDiagram = false; showTubeDiag = false;
+  activeCamera = camera; orbit.enabled = true;
+  diagramCanvas.style.display = 'none';
+  renderer.domElement.style.display = 'block';
+  document.getElementById('diagramToggle').textContent = 'Diagram';
+  document.getElementById('tubeDiagToggle').classList.remove('active');
+  document.getElementById('xStretchSection').style.display = 'none';
+  document.getElementById('knotSliders').style.display = '';
+  buildKnot(parseInt(document.getElementById('bInput').value));
+  positionZigzagDisplay();
+}
+
+function enterDiagramMode() {
+  showDiagram = true; showTubeDiag = false;
+  activeCamera = camera; orbit.enabled = false;
+  diagramCanvas.style.display = 'block';
+  renderer.domElement.style.display = 'none';
+  document.getElementById('diagramToggle').textContent = 'Knot';
+  document.getElementById('tubeDiagToggle').classList.remove('active');
+  document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('knotSliders').style.display = 'none';
+  drawDiagram();
+  positionZigzagDisplay();
+}
+
+function enterTubeDiagMode() {
+  showDiagram = false; showTubeDiag = true;
+  activeCamera = orthoCamera; orbit.enabled = false; autoRotate = false;
+  diagramCanvas.style.display = 'none';
+  renderer.domElement.style.display = 'block';
+  document.getElementById('diagramToggle').textContent = 'Diagram';
+  document.getElementById('tubeDiagToggle').classList.add('active');
+  document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('knotSliders').style.display = '';
+  buildTubeDiagram();
+}
 
 function drawDiagram() {
   const B   = parseInt(document.getElementById('bInput').value);
@@ -1523,15 +1729,13 @@ function positionZigzagDisplay() {
 }
 
 document.getElementById('diagramToggle').addEventListener('click', () => {
-  showDiagram = !showDiagram;
-  diagramCanvas.style.display   = showDiagram ? 'block' : 'none';
-  renderer.domElement.style.display = showDiagram ? 'none'  : 'block';
-  document.getElementById('diagramToggle').textContent = showDiagram ? 'Knot' : 'Diagram';
-  document.getElementById('xStretchSection').style.display = showDiagram ? '' : 'none';
-  document.getElementById('knotSliders').style.display     = showDiagram ? 'none' : '';
-  if (showDiagram) drawDiagram();
-  else buildKnot(parseInt(document.getElementById('bInput').value));
-  positionZigzagDisplay();
+  if (showDiagram) enterKnotMode();
+  else enterDiagramMode();
+});
+
+document.getElementById('tubeDiagToggle').addEventListener('click', () => {
+  if (showTubeDiag) enterKnotMode();
+  else enterTubeDiagMode();
 });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
@@ -1539,28 +1743,20 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Period';
   const B = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
   else buildKnot(B);
 });
 
 document.getElementById('bightsToggle').addEventListener('click', () => {
   showBights = !showBights;
   document.getElementById('bightsToggle').classList.toggle('active', showBights);
-  buildKnot(parseInt(document.getElementById('bInput').value));
+  const B = parseInt(document.getElementById('bInput').value);
+  if (showTubeDiag) buildTubeDiagram();
+  else buildKnot(B);
 });
 
-window.addEventListener('resize', () => { if (showDiagram) { drawDiagram(); positionZigzagDisplay(); } });
-
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && showDiagram) {
-    showDiagram = false;
-    diagramCanvas.style.display = 'none';
-    renderer.domElement.style.display = 'block';
-    document.getElementById('diagramToggle').textContent = 'Diagram';
-    document.getElementById('xStretchSection').style.display = 'none';
-    document.getElementById('knotSliders').style.display     = '';
-    buildKnot(parseInt(document.getElementById('bInput').value));
-    positionZigzagDisplay();
-  }
+  if (e.key === 'Escape' && (showDiagram || showTubeDiag)) enterKnotMode();
 });
 
 // Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
@@ -1596,12 +1792,12 @@ window.findSameYSets = function(m) {
 };
 
 document.getElementById('viewSlider').addEventListener('input', () => {
-  const B = parseInt(document.getElementById('bInput').value);
-  buildKnot(B);
+  if (!showTubeDiag) buildKnot(parseInt(document.getElementById('bInput').value));
 });
 
 document.getElementById('xStretchSlider').addEventListener('input', () => {
   if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
 });
 
 // ── Tying sequence ─────────────────────────────────────────────────────────
@@ -1724,7 +1920,7 @@ const clock = new THREE.Clock();
     knotGroup.rotateOnWorldAxis(axis, dt * (0.12 + 0.16 * vt));
   }
   orbit.update();
-  renderer.render(scene, camera);
+  renderer.render(scene, activeCamera);
 })();
 
 // ── Resize ─────────────────────────────────────────────────────────────────
@@ -1732,6 +1928,8 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (showDiagram) { drawDiagram(); positionZigzagDisplay(); }
+  if (showTubeDiag) buildTubeDiagram();
 });
 </script>
 </body>
