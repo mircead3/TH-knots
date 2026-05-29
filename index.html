@@ -135,7 +135,9 @@
       cursor: pointer;
       outline: none;
     }
-    .view-btn:hover  { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
+    .view-btn:hover    { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
+    .view-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+    input:disabled     { opacity: 0.3; cursor: default; }
 
     #info {
       font-size: 11px;
@@ -228,12 +230,16 @@
   </div>
 
   <div id="knotSliders">
-    <div id="viewSliderRow" style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
-      <span>Flat</span><span>Cylinder</span>
+    <div id="flatCylSection">
+      <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+        <span>Flat</span><span>Cylinder</span>
+      </div>
+      <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
+             style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
     </div>
-    <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
-           style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
-
+    <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+      <span>Thin</span><span>Thick</span>
+    </div>
     <input type="range" id="thickInput" min="0.02" max="0.19" step="0.01" value="0.11"
            style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
   </div>
@@ -244,15 +250,18 @@
     </div>
     <input type="range" id="xStretchSlider" min="0.3" max="1.65" step="0.05" value="1"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
-    <button id="downloadBtn" class="view-btn" style="margin-bottom:8px;">Download tying sequence</button>
   </div>
 
   <div class="btn-row">
-    <button id="diagramToggle" class="view-btn">Diagram</button>
-    <button id="componentToggle" class="view-btn">Period</button>
-    <button id="bightsToggle" class="view-btn">Bights</button>
-    <button id="tubeDiagToggle" class="view-btn">Tube Diag</button>
+    <button id="knotToggle"  class="view-btn" style="display:none">Knot</button>
+    <button id="braidToggle" class="view-btn">Braid</button>
+    <button id="diagToggle"  class="view-btn">Diagram</button>
   </div>
+  <div class="btn-row">
+    <button id="componentToggle" class="view-btn">Solo</button>
+    <button id="bightsToggle"    class="view-btn">Bights</button>
+  </div>
+  <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
 </div>
 
 <div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
@@ -736,8 +745,13 @@ function buildKnot(B, resumeRotation = false) {
   const interesting = allSegCrossings.every(c => c.every(s => s.length > 0));
   document.getElementById('interestingWarn').style.display = interesting ? 'none' : '';
 
+  const ct = document.getElementById('componentToggle');
+  if (g === 1) { componentMode = false; ct.disabled = true; }
+  else         { ct.disabled = false; }
+  ct.textContent = componentMode ? 'Full' : 'Solo';
+
   const slider = document.getElementById('viewSlider');
-  const sliderRow = document.getElementById('viewSliderRow');
+  const sliderRow = document.getElementById('flatCylSection');
   const crossingYs = new Set(allSegCrossings.flat().flatMap(seg => seg.map(c => c.y)));
   const flatDegenerate = g > 1 && crossingYs.size <= 1;
   if (flatDegenerate) { slider.value = '1'; slider.disabled = true; sliderRow.style.opacity = '0.3'; }
@@ -783,14 +797,11 @@ function buildKnot(B, resumeRotation = false) {
 
   const gDraw = componentMode ? 1 : g;
   for (let c = 0; c < gDraw; c++) {
-    const fullBights = components[c];
-    const useOpen = componentMode && fullBights.length > D;
-    const bights = useOpen ? fullBights.slice(0, D + 1) : fullBights;
-    const segCrossings = useOpen ? allSegCrossings[c].slice(0, D) : allSegCrossings[c];
-    const isClosed = !useOpen;
-    const curve  = new KnotCurve(bights, segCrossings, mod, vt, isClosed, globalCpsByX);
+    const bights      = components[c];
+    const segCrossings = allSegCrossings[c];
+    const curve  = new KnotCurve(bights, segCrossings, mod, vt, true, globalCpsByX);
     const tubularSegments = Math.max(bights.length * 60 * boostFactor, curve.m * 6 * boostFactor);
-    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, isClosed);
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
 
     // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
     const ringCount    = tubularSegments + 1;
@@ -945,7 +956,8 @@ function buildTubeDiagram() {
   const tmp        = new THREE.Color();
   const radialSegs = 32;
 
-  for (let k = 0; k < LEADS; k++) {
+  const strandCount = componentMode ? 1 : LEADS;
+  for (let k = 0; k < strandCount; k++) {
     const xk  = k * step;
     const pts = [];
 
@@ -1358,15 +1370,24 @@ let showDiagram  = false;
 let showTubeDiag = false;
 const diagramCanvas = document.getElementById('diagram');
 
+function setViewButtons(current) {
+  document.getElementById('knotToggle').style.display  = current === 'knot'  ? 'none' : '';
+  document.getElementById('braidToggle').style.display = current === 'braid' ? 'none' : '';
+  document.getElementById('diagToggle').style.display  = current === 'diag'  ? 'none' : '';
+}
+
 function enterKnotMode() {
   showDiagram = false; showTubeDiag = false;
   activeCamera = camera; orbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
-  document.getElementById('diagramToggle').textContent = 'Diagram';
-  document.getElementById('tubeDiagToggle').classList.remove('active');
-  document.getElementById('xStretchSection').style.display = 'none';
+  setViewButtons('knot');
+  document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
+  document.getElementById('xStretchSection').style.display = 'none';
+  document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('bInput').disabled = false;
+  document.getElementById('bightsToggle').disabled = false;
   buildKnot(parseInt(document.getElementById('bInput').value));
   positionZigzagDisplay();
 }
@@ -1376,23 +1397,34 @@ function enterDiagramMode() {
   activeCamera = camera; orbit.enabled = false;
   diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
-  document.getElementById('diagramToggle').textContent = 'Knot';
-  document.getElementById('tubeDiagToggle').classList.remove('active');
-  document.getElementById('xStretchSection').style.display = '';
+  setViewButtons('diag');
   document.getElementById('knotSliders').style.display = 'none';
+  document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('downloadBtn').style.display = '';
+  document.getElementById('bInput').disabled = false;
+  document.getElementById('bightsToggle').disabled = true;
+  const ct = document.getElementById('componentToggle');
+  ct.disabled = false;
+  ct.textContent = componentMode ? 'Full' : 'Solo';
   drawDiagram();
   positionZigzagDisplay();
 }
 
-function enterTubeDiagMode() {
+function enterBraidMode() {
   showDiagram = false; showTubeDiag = true;
   activeCamera = orthoCamera; orbit.enabled = false; autoRotate = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
-  document.getElementById('diagramToggle').textContent = 'Diagram';
-  document.getElementById('tubeDiagToggle').classList.add('active');
-  document.getElementById('xStretchSection').style.display = '';
+  setViewButtons('braid');
+  document.getElementById('flatCylSection').style.display = 'none';
   document.getElementById('knotSliders').style.display = '';
+  document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('downloadBtn').style.display = '';
+  document.getElementById('bInput').disabled = true;
+  document.getElementById('bightsToggle').disabled = true;
+  const ct = document.getElementById('componentToggle');
+  ct.disabled = false;
+  ct.textContent = componentMode ? 'Full' : 'Solo';
   buildTubeDiagram();
 }
 
@@ -1728,19 +1760,13 @@ function positionZigzagDisplay() {
   document.getElementById('zigzagDisplay').style.display = 'none';
 }
 
-document.getElementById('diagramToggle').addEventListener('click', () => {
-  if (showDiagram) enterKnotMode();
-  else enterDiagramMode();
-});
-
-document.getElementById('tubeDiagToggle').addEventListener('click', () => {
-  if (showTubeDiag) enterKnotMode();
-  else enterTubeDiagMode();
-});
+document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
+document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
+document.getElementById('diagToggle').addEventListener('click', enterDiagramMode);
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
-  document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Period';
+  document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Solo';
   const B = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
