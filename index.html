@@ -875,7 +875,7 @@ function buildTubeDiagram() {
   const aspect     = (innerWidth - PANEL_W) / innerHeight;
   const oW         = oH * aspect;
   const REPS       = Math.max(1, Math.ceil(oW / (PERIOD * unitScaleX)));
-  const centerAbsX = PERIOD * REPS / 2;
+  const centerAbsX = oW / (2 * unitScaleX);
 
   orthoCamera.left = -oW / 2; orthoCamera.right = oW / 2;
   orthoCamera.top  =  oH / 2; orthoCamera.bottom = -oH / 2;
