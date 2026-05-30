@@ -1066,44 +1066,34 @@ function validC3(m, a, b, c, d) {
 }
 
 
-// Fast validity check: every segment must have at least one crossing.
-// Solves 2t ≡ (cx−ax+diffY) (mod mod) algebraically (at most 2 candidates),
-// avoiding the O(m) t-loop used in the full crossing builder.
 function hasAllCrossings(components, mod) {
   const nC = components.length;
   const covered = components.map(comp => new Uint8Array(comp.length));
   let remaining = components.reduce((s, c) => s + c.length, 0);
-  const halfMod = mod >> 1;  // mod = 6B is always even
-
   outer:
   for (let ci = 0; ci < nC; ci++) {
     const bP = components[ci], np = bP.length;
     for (let p = 0; p < np; p++) {
       const [ax, ay] = bP[p];
       const dxp = bP[(p+1)%np][1] - ay;
-      if (dxp <= 0) continue;  // ascending segments only as p
+      if (dxp <= 0) continue;
       for (let cj = 0; cj < nC; cj++) {
         const bQ = components[cj], nq = bQ.length;
         for (let q = 0; q < nq; q++) {
           if (covered[ci][p] && covered[cj][q]) continue;
           const [cx, cy] = bQ[q];
           const dxq = cy - bQ[(q+1)%nq][1];
-          if (dxq <= 0) continue;  // descending segments only as q
+          if (dxq <= 0) continue;
           const diffY = cy - ay;
-          // Solve 2t ≡ (cx - ax + diffY) (mod mod). Solutions: t0, t0+halfMod, t0+mod, …
-          // When dxp > mod there can be more than 2 solutions, so iterate all of them.
-          const kval = ((cx - ax + diffY) % mod + mod) % mod;
-          if (kval & 1) continue;  // odd → no integer solution
-          const t0 = kval >> 1;
-          const startT = t0 === 0 ? halfMod : t0;  // t=0 is a boundary, skip it
-          for (let t = startT; t < dxp; t += halfMod) {
+          for (let t = 1; t < dxp; t++) {
             const u = diffY - t;
-            if (u <= 0) break;   // u only decreases as t increases
+            if (u <= 0) break;
             if (u >= dxq) continue;
+            if ((ax + t) % mod !== (cx + u) % mod) continue;
             if (!covered[ci][p]) { covered[ci][p] = 1; remaining--; }
             if (!covered[cj][q]) { covered[cj][q] = 1; remaining--; }
             if (remaining === 0) break outer;
-            break;  // one crossing found for this (p,q) pair is enough
+            break;
           }
         }
       }
@@ -1137,6 +1127,7 @@ function computeValidC3(m) {
           if (a + c + d === L3 && a <= d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
+          if (comps[0].length !== mod) continue;  // bight collision: path closes at non-start bight
           if (hasAllCrossings(comps, mod)) list.push([a, b, c, d]);
         }
       }
