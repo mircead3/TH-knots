@@ -882,10 +882,8 @@ function buildTubeDiagram() {
   const xStretch   = parseFloat(document.getElementById('xStretchSlider').value);
   const scaleY     = 8;
   const delta      = tubeRadius * 3;
-  const bightInset = 0.5;
-  // Per-vertex inset: direction = sign of next segment's Δy (local min → up, local max → down)
-  const bightYAdj = ZIGZAG.map((pt, i) =>
-    pt[1] + (ZIGZAG[(i + 1) % D][1] >= pt[1] ? bightInset : -bightInset));
+  const bightInset      = 0.5;
+  const bightInsetExtra = 0.7;  // added when no crossing within t=1 on either adjacent segment
   const pad        = tubeRadius * 2;
   const oH         = scaleY * 1.6 + pad;
 
@@ -1019,6 +1017,20 @@ function buildTubeDiagram() {
     for (let s = 0; s < D; s++)
       strandCrossings[k][s].sort((a, b) => a.t - b.t);
 
+  // Per-strand bight y-adjustment: inset inward; use larger inset when no
+  // crossing is within diagonal-distance 1 (t=1) on either adjacent segment.
+  const bightYAdj = Array.from({length: LEADS}, (_, k) =>
+    ZIGZAG.map((pt, s) => {
+      const dir    = ZIGZAG[(s + 1) % D][1] >= pt[1] ? 1 : -1;
+      const inSeg  = (s - 1 + D) % D;
+      const lenIn  = Math.abs(pt[1] - ZIGZAG[inSeg][1]);
+      const closeIn  = strandCrossings[k][inSeg].some(c => c.t >= lenIn - 1);
+      const closeOut = strandCrossings[k][s].some(c => c.t <= 1);
+      const inset  = bightInset + (closeIn || closeOut ? 0 : bightInsetExtra);
+      return pt[1] + dir * inset;
+    })
+  );
+
   // ── One tube per strand ────────────────────────────────────────────────────
   const tmp        = new THREE.Color();
   const radialSegs = 32;
@@ -1038,12 +1050,12 @@ function buildTubeDiagram() {
         const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
         const By = ZIGZAG[sn][1];
 
-        if (pts.length === 0) pts.push(toFlat(Ax, bightYAdj[s], 0));
+        if (pts.length === 0) pts.push(toFlat(Ax, bightYAdj[k][s], 0));
 
         for (const {t, y, isOver} of strandCrossings[k][s])
           pts.push(toFlat(Ax + t, y, isOver ? delta : -delta));
 
-        pts.push(toFlat(Bx, bightYAdj[sn], 0));
+        pts.push(toFlat(Bx, bightYAdj[k][sn], 0));
       }
     }
 
