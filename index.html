@@ -401,6 +401,21 @@ function generateBights(B) {
   return bights;
 }
 
+// Sort all crossing encounters (ascending + descending) by path position and
+// assign alternating over/under. Returns bool[] where true = ascending is over.
+function alternatingOverUnder(ascPos, descPos) {
+  const n = ascPos.length;
+  const enc = [];
+  for (let i = 0; i < n; i++) {
+    enc.push({pos: ascPos[i], idx: i, asc: true});
+    enc.push({pos: descPos[i], idx: i, asc: false});
+  }
+  enc.sort((a, b) => a.pos - b.pos);
+  const rank = new Array(n);
+  enc.forEach((e, r) => { if (e.asc) rank[e.idx] = r; });
+  return rank.map(r => r % 2 === 0);
+}
+
 // Return true if the parity of crossing assignments should be flipped so that
 // the first crossing encountered during tying (min segment index, then min t)
 // is an over-crossing for the later strand.
@@ -551,8 +566,18 @@ function buildAllSegmentCrossings(components, mod) {
   }
 
   const list = [...seen.values()];
-  const yRank = new Map([...new Set(list.map(c => c.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
-  list.forEach(c => { c.pIsOver = (yRank.get(c.y) % 2 === 0); });
+  if (nC === 1) {
+    const bP = components[0], n = bP.length;
+    const cumLen = [0];
+    for (let i = 0; i < n; i++)
+      cumLen.push(cumLen[i] + Math.abs(bP[(i+1)%n][1] - bP[i][1]));
+    const isOver = alternatingOverUnder(list.map(c => cumLen[c.p] + c.tP),
+                                        list.map(c => cumLen[c.q] + c.tQ));
+    list.forEach((c, i) => { c.pIsOver = isOver[i]; });
+  } else {
+    const yRank = new Map([...new Set(list.map(c => c.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
+    list.forEach(c => { c.pIsOver = (yRank.get(c.y) % 2 === 0); });
+  }
   const forFlip = list.map(c => ({p:c.p, q:c.q, tP:c.tP, tQ:c.tQ, pIsOver:c.pIsOver}));
   if (needsParityFlip(forFlip)) list.forEach(c => { c.pIsOver = !c.pIsOver; });
 
@@ -930,10 +955,48 @@ function buildTubeDiagram() {
     }
   }
 
-  // Over/under: even y-rank → k1 is over, then apply parity flip if needed.
-  const yVals = [...new Set(raw.map(c => c.y))].sort((a, b) => a - b);
-  const yRank = new Map(yVals.map((y, i) => [y, i]));
-  raw.forEach(c => { c.k1IsOver = (yRank.get(c.y) % 2 === 0); });
+  // Over/under: BFS through strands, each processed in its own path order.
+  // alternatingOverUnder() cannot be used here because the two sides of each
+  // crossing are on *different* strands, so mixing their positions is meaningless.
+  const segCumLen = [0];
+  for (let s = 0; s < D; s++)
+    segCumLen.push(segCumLen[s] + Math.abs(ZIGZAG[(s+1)%D][1] - ZIGZAG[s][1]));
+
+  const strandEnc = Array.from({length: LEADS}, () => []);
+  raw.forEach((c, i) => {
+    strandEnc[c.k1].push({pos: segCumLen[c.s1] + c.t1, idx: i, asK1: true});
+    strandEnc[c.k2].push({pos: segCumLen[c.s2] + c.t2, idx: i, asK1: false});
+  });
+  for (let k = 0; k < LEADS; k++) strandEnc[k].sort((a, b) => a.pos - b.pos);
+
+  const rankOf = strandEnc.map(enc => {
+    const m = new Map();
+    enc.forEach((e, r) => m.set(e.idx, r));
+    return m;
+  });
+
+  const k1IsOverArr  = new Array(raw.length).fill(null);
+  const strandFlip   = new Array(LEADS).fill(null);
+  strandFlip[0] = false;
+  const bfsQueue = [0];
+  while (bfsQueue.length) {
+    const k    = bfsQueue.shift();
+    const flip = strandFlip[k];
+    for (const {idx, asK1} of strandEnc[k]) {
+      const r      = rankOf[k].get(idx);
+      const myOver = ((r % 2 === 0) !== flip);
+      const k1Over = asK1 ? myOver : !myOver;
+      if (k1IsOverArr[idx] === null) k1IsOverArr[idx] = k1Over;
+      const otherK   = asK1 ? raw[idx].k2 : raw[idx].k1;
+      if (strandFlip[otherK] === null) {
+        const otherR   = rankOf[otherK].get(idx);
+        const otherExp = asK1 ? !k1Over : k1Over;
+        strandFlip[otherK] = ((otherR % 2 === 0) !== otherExp);
+        bfsQueue.push(otherK);
+      }
+    }
+  }
+  raw.forEach((c, i) => { c.k1IsOver = k1IsOverArr[i] ?? true; });
 
   // Parity flip: the crossing where the "later" strand (max segment index)
   // first appears should be the over-crossing — same rule as needsParityFlip.
@@ -1366,8 +1429,18 @@ function computeDiagramCrossingsAll(components, mod) {
     }
   }
   const list = [...seen.values()];
-  const yRank = new Map([...new Set(list.map(cr => cr.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
-  list.forEach(cr => { cr.pIsOver = (yRank.get(cr.y) % 2 === 0); });
+  if (nC === 1) {
+    const bP = components[0], n = bP.length;
+    const cumLen = [0];
+    for (let i = 0; i < n; i++)
+      cumLen.push(cumLen[i] + Math.abs(bP[(i+1)%n][1] - bP[i][1]));
+    const isOver = alternatingOverUnder(list.map(cr => cumLen[cr.p] + cr.t),
+                                        list.map(cr => cumLen[cr.q] + cr.u));
+    list.forEach((cr, i) => { cr.pIsOver = isOver[i]; });
+  } else {
+    const yRank = new Map([...new Set(list.map(cr => cr.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
+    list.forEach(cr => { cr.pIsOver = (yRank.get(cr.y) % 2 === 0); });
+  }
   const forFlip = list.map(cr => ({p:cr.p, q:cr.q, tP:cr.t, tQ:cr.u, pIsOver:cr.pIsOver}));
   if (needsParityFlip(forFlip)) list.forEach(cr => { cr.pIsOver = !cr.pIsOver; });
   const result = components.map(() => new Map());
