@@ -596,7 +596,7 @@ function buildAllSegmentCrossings(components, mod) {
 // At each crossing the tangent is the exact derivative of the 3D position mapping
 // with respect to the abstract path parameter, using the segment's ±1 slope.
 class KnotCurve extends THREE.Curve {
-  constructor(bights, segCrossings, mod, viewT, closed = true, cpsByX = null, noBightPull = false) {
+  constructor(bights, segCrossings, mod, viewT, closed = true, globalBightsByX = null) {
     super();
     const n      = bights.length;
     const tubeR  = parseFloat(document.getElementById('thickInput').value);
@@ -639,57 +639,40 @@ class KnotCurve extends THREE.Curve {
       return new THREE.Vector3(d1.x + d2.x, d1.y + d2.y, d1.z + d2.z).normalize();
     };
 
-    // Crossings and bights are both control points. Each bight is shifted
-    // inward from its extreme position (^ bights down, V bights up) so the
-    // Hermite's natural overshoot lands at the intended visual boundary.
-    // The base shift is 0.6; an adaptive correction accounts for how far the
-    // nearest same-x control point is (e1) and whether it is a same-kind bight (e2).
-    const K_DELTA = 0.25;
+    const bightInset      = 0.5;
+    const bightInsetExtra = 0.7;
 
-    // If no global map was supplied, build one from this component's own data.
-    if (!cpsByX) {
-      cpsByX = new Map();
-      const addCP = (x, y, isBight, isTop) => {
-        let arr = cpsByX.get(x);
-        if (!arr) { arr = []; cpsByX.set(x, arr); }
-        if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
-      };
-      const nSeg0 = closed ? n : n - 1;
-      for (let i = 0; i < nSeg0; i++) {
-        const s0 = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-        const s1 = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
-        if (s0 !== s1) addCP(bights[(i+1)%n][0], bights[(i+1)%n][1], true, s0 > 0);
-      }
-      for (let i = 0; i < nSeg0; i++) {
-        const [ax, ay] = bights[i];
-        const [, by2] = bights[(i+1)%n];
-        const slope = Math.sign(by2 - ay);
-        const len = Math.abs(by2 - ay);
-        for (let t = 0; t <= len; t++)
-          addCP((ax + t) % mod, ay + slope * t, false, null);
-      }
-    }
-
-    const bightDelta = (bx, by, isTop) => {
-      if (noBightPull) return 0;
-      const cps = cpsByX.get(bx) || [];
-      let nearestD = Infinity, sameKind = false;
-      for (const cp of cps) {
-        if (cp.y === by) continue;
-        if (isTop ? cp.y >= by : cp.y <= by) continue;
-        const d = Math.abs(cp.y - by);
-        if (d < nearestD) { nearestD = d; sameKind = cp.isBight && cp.isTop === isTop; }
-      }
-      if (nearestD === Infinity) return 0.6;
-      return 0.6 + K_DELTA * (nearestD - 2) + (sameKind ? K_DELTA * 1.5 : 0);
-    };
-
-    this.pts      = [];
-    this.dirs     = [];
-    this.scales   = [];
-    this.bightPts = [];
-
+    // Pre-pass: find outer top y level; use global bight map if supplied.
     const nSeg = closed ? n : n - 1;
+    const topYs = new Set();
+    for (let j = 0; j < nSeg; j++) {
+      const s0 = Math.sign(bights[(j+1)%n][1] - bights[j][1]);
+      const s1 = Math.sign(bights[(j+2)%n][1] - bights[(j+1)%n][1]);
+      if (s0 !== s1 && s0 > 0) topYs.add(bights[(j+1)%n][1]);
+    }
+    const outerTopY  = topYs.size ? Math.max(...topYs) : -Infinity;
+
+    const bightsByX  = globalBightsByX ?? (() => {
+      const m = new Map();
+      for (let j = 0; j < nSeg; j++) {
+        const s0 = Math.sign(bights[(j+1)%n][1] - bights[j][1]);
+        const s1 = Math.sign(bights[(j+2)%n][1] - bights[(j+1)%n][1]);
+        if (s0 !== s1) {
+          const [bx, by] = bights[(j+1)%n];
+          if (!m.has(bx)) m.set(bx, []);
+          m.get(bx).push({y: by, isTop: s0 > 0});
+        }
+      }
+      return m;
+    })();
+
+    this.pts                = [];
+    this.dirs               = [];
+    this.scales             = [];
+    this.bightPts           = [];
+    this.trueBightPts       = [];
+    this.otherBightPts      = [];
+
     for (let i = 0; i < nSeg; i++) {
       const slope     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
       const nextSlope = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
@@ -704,13 +687,34 @@ class KnotCurve extends THREE.Curve {
 
       if (atBight && !isLastSeg) {
         const [bx, by] = bights[(i+1)%n];
-        const bd = bightDelta(bx, by, slope > 0);
-        const by_adj = by - slope * bd;
-        const bp = to3D(bx, by_adj, 0);
-        this.pts.push(bp);
-        this.dirs.push(bightDir3D(bx, by_adj));
-        this.scales.push(1);
-        this.bightPts.push(bp);
+        const isTop  = slope > 0;
+        const isOuter = isTop && by === outerTopY;
+
+        const targetY    = isTop ? by - 2 : by + 2;
+        const others     = bightsByX.get(bx) || [];
+        const hasCloseOpp = others.some(o => o.isTop !== isTop && o.y === targetY);
+
+        let bd = null;
+        if (hasCloseOpp || isOuter) {
+          const lenIn    = Math.abs(by - bights[i][1]);
+          const closeIn  = segCrossings[i].some(c => c.t >= lenIn - 1);
+          const closeOut = segCrossings[(i+1)%n].some(c => c.t <= 1);
+          bd = bightInset + (closeIn || closeOut ? 0 : bightInsetExtra) - (isTop ? 0 : 0.2);
+        }
+        // else: 'other' — omit from control points
+
+        const truePos = to3D(bx, by, 0);
+        if (bd !== null) {
+          const by_adj = by - slope * bd;
+          const bp = to3D(bx, by_adj, 0);
+          this.pts.push(bp);
+          this.dirs.push(bightDir3D(bx, by_adj));
+          this.scales.push(1);
+          this.bightPts.push(bp);
+          this.trueBightPts.push(truePos);
+        } else {
+          this.otherBightPts.push(truePos);
+        }
       }
     }
     if (!closed) {
@@ -783,31 +787,19 @@ function buildKnot(B, resumeRotation = false) {
   else                { slider.disabled = false; sliderRow.style.opacity = ''; }
   const vt = flatDegenerate ? 1.0 : parseFloat(slider.value);
 
-  // Build a global same-x control-point map from all components so that
-  // crossings from other components are visible to each component's bight-delta.
-  const globalCpsByX = new Map();
-  const addGCP = (x, y, isBight, isTop) => {
-    let arr = globalCpsByX.get(x);
-    if (!arr) { arr = []; globalCpsByX.set(x, arr); }
-    if (!arr.some(cp => cp.y === y)) arr.push({y, isBight, isTop});
-  };
-  for (let c2 = 0; c2 < g; c2++) {
-    const cb = components[c2], nb = cb.length;
-    for (let i = 0; i < nb; i++) {
-      const s0 = Math.sign(cb[(i+1)%nb][1] - cb[i][1]);
-      const s1 = Math.sign(cb[(i+2)%nb][1] - cb[(i+1)%nb][1]);
-      if (s0 !== s1) addGCP(cb[(i+1)%nb][0], cb[(i+1)%nb][1], true, s0 > 0);
-    }
-  }
-  for (let c2 = 0; c2 < g; c2++) {
-    const cb = components[c2], nb = cb.length;
-    for (let i = 0; i < nb; i++) {
-      const [ax, ay] = cb[i];
-      const [, by2] = cb[(i+1)%nb];
-      const slope = Math.sign(by2 - ay);
-      const len = Math.abs(by2 - ay);
-      for (let t = 0; t <= len; t++)
-        addGCP((ax + t) % mod, ay + slope * t, false, null);
+  // Global bightsByX across all components for cross-component "close" detection.
+  const globalBightsByX = new Map();
+  for (const comp of components) {
+    const nb = comp.length;
+    for (let j = 0; j < nb; j++) {
+      const s0 = Math.sign(comp[(j+1)%nb][1] - comp[j][1]);
+      const s1 = Math.sign(comp[(j+2)%nb][1] - comp[(j+1)%nb][1]);
+      if (s0 !== s1) {
+        const [bx, by] = comp[(j+1)%nb];
+        const isTop = s0 > 0;
+        if (!globalBightsByX.has(bx)) globalBightsByX.set(bx, []);
+        globalBightsByX.get(bx).push({y: by, isTop});
+      }
     }
   }
 
@@ -824,7 +816,7 @@ function buildKnot(B, resumeRotation = false) {
   for (let c = 0; c < gDraw; c++) {
     const bights      = components[c];
     const segCrossings = allSegCrossings[c];
-    const curve  = new KnotCurve(bights, segCrossings, mod, vt, true, globalCpsByX);
+    const curve  = new KnotCurve(bights, segCrossings, mod, vt, true, globalBightsByX);
     const tubularSegments = Math.max(bights.length * 60 * boostFactor, curve.m * 6 * boostFactor);
     const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
 
@@ -844,12 +836,15 @@ function buildKnot(B, resumeRotation = false) {
       vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
     })));
     if (showBights) {
-      const sphereR = tubeRadius * 1.5;
-      for (const bp of curve.bightPts) {
-        const s = new THREE.Mesh(
-          new THREE.SphereGeometry(sphereR, 8, 8),
-          new THREE.MeshBasicMaterial({ color: 0xffffff })
-        );
+      const sphereR   = tubeRadius * 1.5;
+      const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
+      for (const bp of curve.trueBightPts) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        s.position.copy(bp);
+        knotGroup.add(s);
+      }
+      for (const bp of curve.otherBightPts) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff8800 }));
         s.position.copy(bp);
         knotGroup.add(s);
       }
