@@ -666,6 +666,59 @@ class KnotCurve extends THREE.Curve {
       return m;
     })();
 
+    const bightIsOther      = new Array(nSeg).fill(false);
+    const replaceIncomingC1 = new Array(nSeg).fill(false);
+    const replaceOutgoingC1 = new Array(nSeg).fill(false);
+    for (let i = 0; i < nSeg; i++) {
+      const sl  = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+      const nsl = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
+      if (sl === nsl) continue;
+      const [bx, by] = bights[(i+1)%n];
+      const isTop  = sl > 0;
+      const targetY = isTop ? by - 2 : by + 2;
+      const others  = bightsByX.get(bx) || [];
+      bightIsOther[i] = !(isTop && by === outerTopY) &&
+                        !others.some(o => o.isTop !== isTop && o.y === targetY);
+      if (bightIsOther[i]) {
+        const lenIn = Math.abs(by - bights[i][1]);
+        replaceIncomingC1[i] = segCrossings[i].some(c => c.t === lenIn - 1) &&
+                               segCrossings[(i+1)%n].some(c => c.t === 2) &&
+                              !segCrossings[(i+1)%n].some(c => c.t === 1);
+        replaceOutgoingC1[i] = segCrossings[(i+1)%n].some(c => c.t === 1) &&
+                               segCrossings[i].some(c => c.t === lenIn - 2) &&
+                              !segCrossings[i].some(c => c.t === lenIn - 1);
+      }
+    }
+
+    this.debugC1 = []; this.debugC2 = []; this.debugC3 = []; this.debugC4 = [];
+    for (let i = 0; i < nSeg; i++) {
+      if (!bightIsOther[i]) continue;
+      const [bx, by] = bights[(i+1)%n];
+      const lenIn = Math.abs(by - bights[i][1]);
+      const sl = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
+      const dbgZ = delta * 3;
+      if (replaceIncomingC1[i]) {
+        const c1 = segCrossings[i].find(c => c.t === lenIn - 1);
+        const c2 = segCrossings[(i+1)%n].find(c => c.t === 2);
+        if (c1 && c2) {
+          this.debugC1.push(to3D(c1.x, c1.y, dbgZ));
+          this.debugC2.push(to3D(c2.x - 1/3, c2.y - sl/3, dbgZ));
+          this.debugC3.push(to3D(c1.x + c2.x - bx, c1.y + c2.y - by, dbgZ));
+          this.debugC4.push(to3D(bx, by - 2 * sl, dbgZ));
+        }
+      }
+      if (replaceOutgoingC1[i]) {
+        const c1 = segCrossings[(i+1)%n].find(c => c.t === 1);
+        const c2 = segCrossings[i].find(c => c.t === lenIn - 2);
+        if (c1 && c2) {
+          this.debugC1.push(to3D(c1.x, c1.y, dbgZ));
+          this.debugC2.push(to3D(c2.x + 1/3, c2.y - sl/3, dbgZ));
+          this.debugC3.push(to3D(c1.x + c2.x - bx, c1.y + c2.y - by, dbgZ));
+          this.debugC4.push(to3D(bx, by - 2 * sl, dbgZ));
+        }
+      }
+    }
+
     this.pts                = [];
     this.dirs               = [];
     this.scales             = [];
@@ -679,9 +732,33 @@ class KnotCurve extends THREE.Curve {
       const atBight   = slope !== nextSlope;
       const isLastSeg = !closed && i === nSeg - 1;
 
-      for (const {x, y, isOver} of segCrossings[i]) {
-        this.pts.push(to3D(x, y, isOver ? delta : -delta));
-        this.dirs.push(dir3D(x, y, slope));
+      const lenSeg    = Math.abs(bights[(i+1)%n][1] - bights[i][1]);
+      const nextOther = bightIsOther[i];
+      const prevIdx   = (i - 1 + nSeg) % nSeg;
+      const prevOther = bightIsOther[prevIdx];
+      for (const {x, y, isOver, t} of segCrossings[i]) {
+        let cx = x, cy = y, cslope = slope;
+        if (nextOther && replaceIncomingC1[i] && t === lenSeg - 1) {
+          const [bx, by] = bights[(i+1)%n];
+          cx = bx; cy = by - 2 * slope; cslope = -slope / 11;
+        } else if (prevOther && replaceOutgoingC1[prevIdx] && t === 1) {
+          const [bx, by] = bights[i];
+          cx = bx; cy = by + 2 * slope; cslope = -slope / 11;
+        } else if (nextOther && replaceOutgoingC1[i] && t === lenSeg - 2) {
+          cx = x + 1/3; cy = y - slope / 3; cslope = slope / 3;
+        } else if (prevOther && replaceIncomingC1[prevIdx] && t === 2) {
+          cx = x - 1/3; cy = y + slope / 3; cslope = slope / 3;
+        } else if (nextOther && replaceIncomingC1[i] && t === lenSeg - 2) {
+          cslope = 0;
+        } else if (prevOther && replaceIncomingC1[prevIdx] && t === 3) {
+          cslope = slope / 2;
+        } else if (nextOther && replaceOutgoingC1[i] && t === lenSeg - 3) {
+          cslope = slope / 2;
+        } else if (prevOther && replaceOutgoingC1[prevIdx] && t === 2) {
+          cslope = 0;
+        }
+        this.pts.push(to3D(cx, cy, isOver ? delta : -delta));
+        this.dirs.push(dir3D(cx, cy, cslope));
         this.scales.push(1);
       }
 
@@ -845,8 +922,23 @@ function buildKnot(B, resumeRotation = false) {
       }
       for (const bp of curve.otherBightPts) {
         const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff8800 }));
-        s.position.copy(bp);
-        knotGroup.add(s);
+        s.position.copy(bp); knotGroup.add(s);
+      }
+      for (const bp of curve.debugC1) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+        s.position.copy(bp); knotGroup.add(s);
+      }
+      for (const bp of curve.debugC2) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x0000ff }));
+        s.position.copy(bp); knotGroup.add(s);
+      }
+      for (const bp of curve.debugC3) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x00cc00 }));
+        s.position.copy(bp); knotGroup.add(s);
+      }
+      for (const bp of curve.debugC4) {
+        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+        s.position.copy(bp); knotGroup.add(s);
       }
     }
   }
