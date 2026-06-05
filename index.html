@@ -252,10 +252,20 @@
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
   </div>
 
+  <div id="roundSection" style="display:none;">
+    <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Inner radius</div>
+    <input type="range" id="roundInnerSlider" min="10" max="180" step="5" value="60"
+           style="width:100%;margin-bottom:8px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Outer radius</div>
+    <input type="range" id="roundOuterSlider" min="80" max="400" step="10" value="220"
+           style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+  </div>
+
   <div class="btn-row">
     <button id="knotToggle"  class="view-btn" style="display:none">Knot</button>
     <button id="braidToggle" class="view-btn">Braid</button>
     <button id="diagToggle"  class="view-btn">Diagram</button>
+    <button id="roundToggle" class="view-btn">Round</button>
   </div>
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
@@ -1373,6 +1383,7 @@ function rebuildKnot() {
   setKnotFromUI(m);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
   else buildKnot(B);
 }
 
@@ -1394,6 +1405,7 @@ function onMChange() {
   const B_m = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
   else buildKnot(B_m, true);
 }
 
@@ -1407,6 +1419,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   setKnotFromUI(m);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
   else buildKnot(B, true);
 });
 
@@ -1556,16 +1569,18 @@ function computeDiagramCrossingsAll(components, mod) {
 let showBights   = false;
 let showDiagram  = false;
 let showTubeDiag = false;
+let showRoundDiag = false;
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
   document.getElementById('knotToggle').style.display  = current === 'knot'  ? 'none' : '';
   document.getElementById('braidToggle').style.display = current === 'braid' ? 'none' : '';
   document.getElementById('diagToggle').style.display  = current === 'diag'  ? 'none' : '';
+  document.getElementById('roundToggle').style.display = current === 'round' ? 'none' : '';
 }
 
 function enterKnotMode() {
-  showDiagram = false; showTubeDiag = false;
+  showDiagram = false; showTubeDiag = false; showRoundDiag = false;
   activeCamera = camera; orbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
@@ -1573,6 +1588,7 @@ function enterKnotMode() {
   document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
   document.getElementById('xStretchSection').style.display = 'none';
+  document.getElementById('roundSection').style.display = 'none';
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = false;
@@ -1581,13 +1597,14 @@ function enterKnotMode() {
 }
 
 function enterDiagramMode() {
-  showDiagram = true; showTubeDiag = false;
+  showDiagram = true; showTubeDiag = false; showRoundDiag = false;
   activeCamera = camera; orbit.enabled = false;
   diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
   setViewButtons('diag');
   document.getElementById('knotSliders').style.display = 'none';
   document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('roundSection').style.display = 'none';
   document.getElementById('downloadBtn').style.display = '';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = true;
@@ -1599,7 +1616,7 @@ function enterDiagramMode() {
 }
 
 function enterBraidMode() {
-  showDiagram = false; showTubeDiag = true;
+  showDiagram = false; showTubeDiag = true; showRoundDiag = false;
   activeCamera = orthoCamera; orbit.enabled = false; autoRotate = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
@@ -1607,6 +1624,7 @@ function enterBraidMode() {
   document.getElementById('flatCylSection').style.display = 'none';
   document.getElementById('knotSliders').style.display = '';
   document.getElementById('xStretchSection').style.display = '';
+  document.getElementById('roundSection').style.display = 'none';
   document.getElementById('downloadBtn').style.display = '';
   document.getElementById('bInput').disabled = true;
   document.getElementById('bightsToggle').disabled = false;
@@ -1703,6 +1721,7 @@ function drawDiagram() {
 
   const components   = generateAllComponents(B);
   const g            = components.length;
+  updateInfo(B, g);
   const allCrossings = computeDiagramCrossingsAll(components, mod);
 
   // Precompute geometry for all components.
@@ -1948,9 +1967,245 @@ function positionZigzagDisplay() {
   document.getElementById('zigzagDisplay').style.display = 'none';
 }
 
+function enterRoundMode() {
+  showDiagram = false; showTubeDiag = false; showRoundDiag = true;
+  activeCamera = camera; orbit.enabled = false;
+  diagramCanvas.style.display = 'block';
+  renderer.domElement.style.display = 'none';
+  setViewButtons('round');
+  document.getElementById('knotSliders').style.display = 'none';
+  document.getElementById('xStretchSection').style.display = 'none';
+  document.getElementById('roundSection').style.display = '';
+  document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('bInput').disabled = false;
+  document.getElementById('bightsToggle').disabled = true;
+  const ct = document.getElementById('componentToggle');
+  ct.disabled = false;
+  ct.textContent = componentMode ? 'Full' : 'Solo';
+  drawRoundDiagram();
+  positionZigzagDisplay();
+}
+
+function drawRoundDiagram() {
+  const B   = parseInt(document.getElementById('bInput').value);
+  const mod = 2 * currentC * B;
+
+  diagramCanvas.width  = innerWidth;
+  diagramCanvas.height = innerHeight;
+  const ctx = diagramCanvas.getContext('2d');
+  ctx.fillStyle = '#060610';
+  ctx.fillRect(0, 0, innerWidth, innerHeight);
+
+  const PANEL_W = 235;
+  const cx = (innerWidth + PANEL_W) / 2;
+  const cy = innerHeight / 2;
+  const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
+  const outerR = parseFloat(document.getElementById('roundOuterSlider').value);
+
+  // Abstract (rawX, y) → canvas. Uses full mod period for one circle,
+  // so all mod bights land at distinct angular positions.
+  const toC = (rawX, y) => {
+    const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
+    const r = innerR + (y / MAX_Y) * (outerR - innerR);
+    return [cx + r * Math.cos(theta), cy + r * Math.sin(theta)];
+  };
+
+  // Concentric circles and radial lines — same style as flat diagram diagonal grid
+  const zigzagYs = new Set([0, ...ZIGZAG.map(p => p[1])]);
+  ctx.strokeStyle = 'rgba(100,130,255,0.55)';
+  ctx.lineWidth = 1;
+
+  for (let y = 0; y <= MAX_Y; y++) {
+    const r = innerR + (y / MAX_Y) * (outerR - innerR);
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke();
+  }
+
+  for (let x = 0; x < mod; x++) {
+    const [x1, y1] = toC(x, 0);
+    const [x2, y2] = toC(x, MAX_Y);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+
+  // X-value labels outside the outer circle, one per radius
+  ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(180,205,255,0.75)';
+  for (let x = 0; x < mod; x++) {
+    const theta = (x / mod) * 2 * Math.PI - Math.PI / 2;
+    const ar = outerR + 16;
+    ctx.fillText(String(x), cx + ar * Math.cos(theta), cy + ar * Math.sin(theta) + 4);
+  }
+
+  // Y-value labels along x=0 radius (top of diagram)
+  ctx.textAlign = 'left'; ctx.font = '10px monospace';
+  for (let y = 0; y <= MAX_Y; y++) {
+    ctx.fillStyle = zigzagYs.has(y) ? 'rgba(255,240,160,0.9)' : 'rgba(180,205,255,0.5)';
+    const [lx, ly] = toC(0, y);
+    ctx.fillText(String(y), lx + 5, ly + 4);
+  }
+
+  const components   = generateAllComponents(B);
+  const g            = components.length;
+  updateInfo(B, g);
+  const allCrossings = computeDiagramCrossingsAll(components, mod);
+  const drawComponents = componentMode ? components.slice(0, 1) : components;
+
+  // Precompute segments with cumulative raw x
+  const STEPS = 8; // subdivisions per unit for curve smoothness
+
+  const allSegs = drawComponents.map((bights, comp) => {
+    const crossMap = allCrossings[comp];
+    const n = bights.length;
+    const numSegs = componentMode ? D : n;
+    const numZigsR = Math.max(1, Math.floor(numSegs / D));
+    const segs = [];
+    let rawX = bights[0][0];
+    for (let i = 0; i < numSegs; i++) {
+      const ay = bights[i][1];
+      const by = bights[(i+1)%n][1];
+      const dx = Math.abs(by - ay);
+      const zi = Math.floor(i / D);
+      const hue = `hsl(${(comp/g + zi/numZigsR/g)*360},90%,65%)`;
+      const crosses = crossMap.get(i) || [];
+      const bx2 = rawX + dx;
+      // Per-crossing gapF: 8px / local canvas arc speed at that crossing
+      const crossGapF = (tf) => {
+        const eps = 0.01, t0 = Math.max(0,tf-eps), t1 = Math.min(1,tf+eps);
+        const [x0,y0] = toC(rawX+t0*(bx2-rawX), ay+t0*(by-ay));
+        const [x1,y1] = toC(rawX+t1*(bx2-rawX), ay+t1*(by-ay));
+        const spd = Math.hypot(x1-x0, y1-y0) / (t1-t0);
+        return spd > 0 ? 8 / spd : 0.06;
+      };
+      const underCrs = crosses.filter(c =>  c.isUnder).map(c => ({tf: c.t/dx, gapF: crossGapF(c.t/dx)}));
+      const overCrs  = crosses.filter(c => !c.isUnder).map(c => ({tf: c.t/dx, gapF: crossGapF(c.t/dx)}));
+      const allCrossFs = [...underCrs, ...overCrs].map(c => c.tf).sort((a,b) => a-b);
+      segs.push({rawX, ay, bx: bx2, by, dx, hue, underCrs, overCrs, allCrossFs});
+      rawX += dx;
+    }
+    return segs;
+  });
+
+  const drawArc = (rawX1, ay, rawX2, by, n = STEPS) => {
+    const [sx, sy] = toC(rawX1, ay); ctx.moveTo(sx, sy);
+    for (let k = 1; k <= n; k++) {
+      const f = k / n;
+      const [px, py] = toC(rawX1 + f*(rawX2-rawX1), ay + f*(by-ay));
+      ctx.lineTo(px, py);
+    }
+  };
+
+  const drawGap = (rawX, ay, bx, by, f0, f1) => {
+    const rx0 = rawX + f0*(bx-rawX), ry0 = ay + f0*(by-ay);
+    const rx1 = rawX + f1*(bx-rawX), ry1 = ay + f1*(by-ay);
+    ctx.beginPath(); drawArc(rx0, ry0, rx1, ry1, 4); ctx.stroke();
+  };
+
+  // Pass 1: one open smooth sub-path per zigzag, colour changes each zigzag.
+  // Crossing points inserted twice so the midpoint bezier hits them exactly.
+  const buildPts = (zigSegs, addFinal) => {
+    const pts = [];
+    for (const {rawX, ay, bx, by, allCrossFs} of zigSegs) {
+      let cfi = 0;
+      for (let k = 0; k < STEPS; k++) {
+        const f = k / STEPS;
+        while (cfi < allCrossFs.length && allCrossFs[cfi] < f) {
+          const cp = toC(rawX + allCrossFs[cfi]*(bx-rawX), ay + allCrossFs[cfi]*(by-ay));
+          pts.push(cp, cp);
+          cfi++;
+        }
+        pts.push(toC(rawX + f*(bx-rawX), ay + f*(by-ay)));
+      }
+      while (cfi < allCrossFs.length) {
+        const cp = toC(rawX + allCrossFs[cfi]*(bx-rawX), ay + allCrossFs[cfi]*(by-ay));
+        pts.push(cp, cp);
+        cfi++;
+      }
+    }
+    if (addFinal) {
+      const last = zigSegs[zigSegs.length - 1];
+      pts.push(toC(last.bx, last.by));
+    }
+    return pts;
+  };
+
+  const drawOpenPts = (pts) => {
+    const np = pts.length;
+    if (!np) return;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k = 0; k < np - 1; k++) {
+      const [px, py] = pts[k], [qx, qy] = pts[k+1];
+      ctx.quadraticCurveTo(px, py, (px+qx)/2, (py+qy)/2);
+    }
+    ctx.lineTo(pts[np-1][0], pts[np-1][1]);
+    ctx.stroke();
+  };
+
+  ctx.lineWidth = 2;
+  for (const segs of allSegs) {
+    if (!segs.length) continue;
+    const total = segs.length;
+    for (let zi = 0; zi * D < total; zi++) {
+      const zigSegs = segs.slice(zi * D, (zi + 1) * D);
+      ctx.strokeStyle = zigSegs[0].hue;
+      drawOpenPts(buildPts(zigSegs, true));
+    }
+  }
+
+  // Pass 2: erase under-crossings
+  ctx.strokeStyle = '#060610'; ctx.lineWidth = 5;
+  for (const segs of allSegs)
+    for (const {rawX, ay, bx, by, underCrs} of segs)
+      for (const {tf, gapF} of underCrs)
+        drawGap(rawX, ay, bx, by, Math.max(0, tf-gapF), Math.min(1, tf+gapF));
+
+  // Pass 3: thicken over-crossings
+  ctx.lineWidth = 4;
+  for (const segs of allSegs)
+    for (const {rawX, ay, bx, by, hue, overCrs} of segs) {
+      ctx.strokeStyle = hue;
+      for (const {tf, gapF} of overCrs)
+        drawGap(rawX, ay, bx, by, Math.max(0, tf-gapF), Math.min(1, tf+gapF));
+    }
+
+  // Bight dots and labels — one dot per bight, numbered within each y-level
+  for (let comp = 0; comp < (componentMode ? 1 : g); comp++) {
+    const bights = components[comp];
+    const n = bights.length;
+    const numBights = componentMode ? D + 1 : n;
+    // Assign within-y-level index
+    const byY = new Map();
+    for (let j = 0; j < n; j++) {
+      const y = bights[j][1];
+      if (!byY.has(y)) byY.set(y, []);
+      byY.get(y).push(j);
+    }
+    const bightLabel = new Array(n);
+    for (const group of byY.values()) {
+      group.sort((a, b) => bights[a][0] - bights[b][0]);
+      group.forEach((j, idx) => { bightLabel[j] = idx; });
+    }
+    ctx.textAlign = 'center';
+    for (let j = 0; j < numBights; j++) {
+      const [x, y] = bights[j];
+      const [bsx, bsy] = toC(x, y);
+      const prevY = bights[(j - 1 + n) % n][1];
+      const nextY = bights[(j + 1) % n][1];
+      const isTop = prevY < y && nextY < y;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(bsx, bsy, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '11px monospace';
+      ctx.fillStyle = 'rgba(255,240,160,0.95)';
+      ctx.fillText(String(bightLabel[j]), bsx, isTop ? bsy + 23 : bsy - 16);
+    }
+  }
+}
+
 document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
 document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
 document.getElementById('diagToggle').addEventListener('click', enterDiagramMode);
+document.getElementById('roundToggle').addEventListener('click', enterRoundMode);
+document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); });
+document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
@@ -1958,6 +2213,7 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   const B = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
   else buildKnot(B);
 });
 
@@ -2012,6 +2268,7 @@ document.getElementById('viewSlider').addEventListener('input', () => {
 document.getElementById('xStretchSlider').addEventListener('input', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
 });
 
 // ── Tying sequence ─────────────────────────────────────────────────────────
@@ -2144,6 +2401,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   if (showDiagram) { drawDiagram(); positionZigzagDisplay(); }
   if (showTubeDiag) buildTubeDiagram();
+  if (showRoundDiag) drawRoundDiagram();
 });
 </script>
 </body>
