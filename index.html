@@ -2099,55 +2099,44 @@ function drawRoundDiagram() {
     ctx.beginPath(); drawArc(rx0, ry0, rx1, ry1, 4); ctx.stroke();
   };
 
-  // Pass 1: one open smooth sub-path per zigzag, colour changes each zigzag.
-  // Crossing points inserted twice so the midpoint bezier hits them exactly.
-  const buildPts = (zigSegs, addFinal) => {
-    const pts = [];
-    for (const {rawX, ay, bx, by, allCrossFs} of zigSegs) {
-      let cfi = 0;
-      for (let k = 0; k < STEPS; k++) {
-        const f = k / STEPS;
-        while (cfi < allCrossFs.length && allCrossFs[cfi] < f) {
-          const cp = toC(rawX + allCrossFs[cfi]*(bx-rawX), ay + allCrossFs[cfi]*(by-ay));
-          pts.push(cp, cp);
-          cfi++;
-        }
-        pts.push(toC(rawX + f*(bx-rawX), ay + f*(by-ay)));
-      }
-      while (cfi < allCrossFs.length) {
-        const cp = toC(rawX + allCrossFs[cfi]*(bx-rawX), ay + allCrossFs[cfi]*(by-ay));
-        pts.push(cp, cp);
-        cfi++;
-      }
-    }
-    if (addFinal) {
-      const last = zigSegs[zigSegs.length - 1];
-      pts.push(toC(last.bx, last.by));
-    }
-    return pts;
+  // Analytical canvas tangent at (rawXt, yt) for segment direction (dRawX, dY).
+  const canvasTangent = (rawXt, yt, dRawX, dY) => {
+    const theta = (rawXt / mod) * 2 * Math.PI - Math.PI / 2;
+    const r     = innerR + (yt / MAX_Y) * (outerR - innerR);
+    const dtheta = (dRawX / mod) * 2 * Math.PI;
+    const dr     = (dY    / MAX_Y) * (outerR - innerR);
+    return [dr*Math.cos(theta) - r*Math.sin(theta)*dtheta,
+            dr*Math.sin(theta) + r*Math.cos(theta)*dtheta];
   };
 
-  const drawOpenPts = (pts) => {
-    const np = pts.length;
-    if (!np) return;
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let k = 0; k < np - 1; k++) {
-      const [px, py] = pts[k], [qx, qy] = pts[k+1];
-      ctx.quadraticCurveTo(px, py, (px+qx)/2, (py+qy)/2);
-    }
-    ctx.lineTo(pts[np-1][0], pts[np-1][1]);
-    ctx.stroke();
-  };
-
+  // Pass 1: cubic bezier per sub-segment — smooth arcs, sharp only at bights.
   ctx.lineWidth = 2;
   for (const segs of allSegs) {
     if (!segs.length) continue;
-    const total = segs.length;
-    for (let zi = 0; zi * D < total; zi++) {
+    for (let zi = 0; zi * D < segs.length; zi++) {
       const zigSegs = segs.slice(zi * D, (zi + 1) * D);
       ctx.strokeStyle = zigSegs[0].hue;
-      drawOpenPts(buildPts(zigSegs, true));
+      ctx.beginPath();
+      let first = true;
+      for (const {rawX, ay, bx, by, allCrossFs} of zigSegs) {
+        const dX = bx - rawX, dY = by - ay;
+        const fracs = [0, ...allCrossFs, 1];
+        for (let fi = 0; fi < fracs.length - 1; fi++) {
+          const f0 = fracs[fi], f1 = fracs[fi + 1];
+          const rX0 = rawX + f0*dX, y0 = ay + f0*dY;
+          const rX1 = rawX + f1*dX, y1 = ay + f1*dY;
+          const [px0, py0] = toC(rX0, y0);
+          const [px1, py1] = toC(rX1, y1);
+          const T0 = canvasTangent(rX0, y0, dX, dY);
+          const T1 = canvasTangent(rX1, y1, dX, dY);
+          const dt = f1 - f0;
+          if (first) { ctx.moveTo(px0, py0); first = false; }
+          ctx.bezierCurveTo(px0+T0[0]*dt/3, py0+T0[1]*dt/3,
+                            px1-T1[0]*dt/3, py1-T1[1]*dt/3,
+                            px1, py1);
+        }
+      }
+      ctx.stroke();
     }
   }
 
