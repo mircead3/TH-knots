@@ -217,7 +217,6 @@
 
   <div class="label">Bights</div>
   <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
-  <div id="interestingWarn" style="display:none;font-size:11px;color:rgba(255,100,100,0.85);text-align:center;margin-top:-12px;margin-bottom:10px;">not interesting</div>
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
 
@@ -301,14 +300,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // ── Scene ──────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x060610);
-scene.fog = new THREE.FogExp2(0x060610, 0.018);
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 0, 14);
 const orthoCamera = new THREE.OrthographicCamera(-8, 8, 4, -4, 0.1, 100);
 orthoCamera.position.set(0, 0, 20);
 orthoCamera.lookAt(0, 0, 0);
-let activeCamera = camera;
+let activeCamera = orthoCamera;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -316,19 +312,12 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.prepend(renderer.domElement);
 
 // ── Controls ───────────────────────────────────────────────────────────────
-const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.enableDamping = true;
-orbit.dampingFactor = 0.07;
-orbit.minDistance = 3;
-orbit.maxDistance = 50;
 
 const orthoOrbit = new OrbitControls(orthoCamera, renderer.domElement);
 orthoOrbit.enableDamping = true;
 orthoOrbit.dampingFactor = 0.07;
 orthoOrbit.enabled = false;
 
-let autoRotate = true;
-orbit.addEventListener('start', () => { autoRotate = false; });
 
 // ── Lights ─────────────────────────────────────────────────────────────────
 scene.add(new THREE.AmbientLight(0x18183a, 4));
@@ -468,514 +457,10 @@ function generateAllComponents(B) {
   return components;
 }
 
-// Find all crossings between slope+1 and slope-1 segments, assign alternating
-// over/under by sorting encounters along the strand, return as bump events.
-function buildCrossingEvents(bights, mod, cumLen, totalLen) {
-  const n = bights.length;
-  const seen = new Map(); // key `cx,cy` → {sP, sQ, p, q, tP, tQ}
-
-  for (let p = 0; p < n; p++) {
-    const [ax, ay] = bights[p];
-    const [px2, py2] = bights[(p + 1) % n];
-    const dxp = Math.abs(py2 - ay);
-    if (py2 - ay <= 0) continue; // slope+1 segments only
-
-    for (let q = 0; q < n; q++) {
-      const [cx, cy] = bights[q];
-      const [qx2, qy2] = bights[(q + 1) % n];
-      const dxq = Math.abs(qy2 - cy);
-      if (qy2 - cy >= 0) continue; // slope-1 segments only
-
-      const diffY = cy - ay;
-      for (let t = 1; t < dxp; t++) {
-        const u = diffY - t;
-        if (u <= 0 || u >= dxq) continue;
-        if ((ax + t) % mod !== (cx + u) % mod) continue;
-
-        const key = `${(ax + t) % mod},${ay + t}`;
-        if (!seen.has(key))
-          seen.set(key, { sP: cumLen[p] + t, sQ: cumLen[q] + u, p, q, tP: t, tQ: u });
-      }
-    }
-  }
-
-  const crossings = [...seen.values()];
-  crossings.sort((a, b) => a.sP - b.sP);
-  crossings.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
-  const flip = needsParityFlip(crossings);
-  if (flip) crossings.forEach(c => { c.pIsOver = !c.pIsOver; });
-
-  const events = [];
-  for (const { sP, sQ, pIsOver } of crossings) {
-    for (const offset of [0, -totalLen, totalLen]) {
-      events.push({ s_c: sP + offset, isOver:  pIsOver });
-      events.push({ s_c: sQ + offset, isOver: !pIsOver });
-    }
-  }
-  return events;
-}
-
-// Per-segment crossing data with exact (x,y) coordinates and over/under assignments.
-function buildSegmentCrossings(bights, mod, cumLen) {
-  const n = bights.length;
-  const seen = new Map();
-  for (let p = 0; p < n; p++) {
-    const [ax, ay] = bights[p];
-    const dxp = Math.abs(bights[(p+1)%n][1] - ay);
-    if (bights[(p+1)%n][1] - ay <= 0) continue;
-    for (let q = 0; q < n; q++) {
-      const [cx, cy] = bights[q];
-      const dxq = Math.abs(bights[(q+1)%n][1] - cy);
-      if (bights[(q+1)%n][1] - cy >= 0) continue;
-      const diffY = cy - ay;
-      for (let t = 1; t < dxp; t++) {
-        const u = diffY - t;
-        if (u <= 0 || u >= dxq) continue;
-        if ((ax + t) % mod !== (cx + u) % mod) continue;
-        const key = `${(ax+t)%mod},${ay+t}`;
-        if (!seen.has(key))
-          seen.set(key, { p, q, tP: t, tQ: u, sP: cumLen[p]+t, x: (ax+t)%mod, y: ay+t });
-      }
-    }
-  }
-
-  const crossings = [...seen.values()].sort((a, b) => a.sP - b.sP);
-  crossings.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
-  const flip = needsParityFlip(crossings);
-  if (flip) crossings.forEach(c => { c.pIsOver = !c.pIsOver; });
-
-  const segCrossings = Array.from({length: n}, () => []);
-  for (const {p, q, tP, tQ, x, y, pIsOver} of crossings) {
-    segCrossings[p].push({t: tP, x, y, isOver:  pIsOver});
-    segCrossings[q].push({t: tQ, x, y, isOver: !pIsOver});
-  }
-  for (let i = 0; i < n; i++) segCrossings[i].sort((a, b) => a.t - b.t);
-  return segCrossings;
-}
-
-// Find all crossings across all components (intra- and inter-component).
-// Returns result[c][i] = [{t, x, y, isOver}] for segment i of component c.
-function buildAllSegmentCrossings(components, mod) {
-  const nC = components.length;
-  const seen = new Map();
-  for (let ci = 0; ci < nC; ci++) {
-    const bP = components[ci], np = bP.length;
-    for (let p = 0; p < np; p++) {
-      const [ax, ay] = bP[p];
-      const dxp = Math.abs(bP[(p+1)%np][1] - ay);
-      if (bP[(p+1)%np][1] - ay <= 0) continue;
-      for (let cj = 0; cj < nC; cj++) {
-        const bQ = components[cj], nq = bQ.length;
-        for (let q = 0; q < nq; q++) {
-          const [cx, cy] = bQ[q];
-          const dxq = Math.abs(bQ[(q+1)%nq][1] - cy);
-          if (bQ[(q+1)%nq][1] - cy >= 0) continue;
-          const diffY = cy - ay;
-          for (let t = 1; t < dxp; t++) {
-            const u = diffY - t;
-            if (u <= 0 || u >= dxq) continue;
-            if ((ax + t) % mod !== (cx + u) % mod) continue;
-            const key = `${(ax+t)%mod},${ay+t}`;
-            if (!seen.has(key))
-              seen.set(key, {ci, p, tP:t, cj, q, tQ:u, x:(ax+t)%mod, y:ay+t});
-          }
-        }
-      }
-    }
-  }
-
-  const list = [...seen.values()];
-  if (nC === 1) {
-    const bP = components[0], n = bP.length;
-    const cumLen = [0];
-    for (let i = 0; i < n; i++)
-      cumLen.push(cumLen[i] + Math.abs(bP[(i+1)%n][1] - bP[i][1]));
-    const isOver = alternatingOverUnder(list.map(c => cumLen[c.p] + c.tP),
-                                        list.map(c => cumLen[c.q] + c.tQ));
-    list.forEach((c, i) => { c.pIsOver = isOver[i]; });
-  } else {
-    const yRank = new Map([...new Set(list.map(c => c.y))].sort((a,b) => a-b).map((y,i) => [y,i]));
-    list.forEach(c => { c.pIsOver = (yRank.get(c.y) % 2 === 0); });
-  }
-  const forFlip = list.map(c => ({p:c.p, q:c.q, tP:c.tP, tQ:c.tQ, pIsOver:c.pIsOver}));
-  if (needsParityFlip(forFlip)) list.forEach(c => { c.pIsOver = !c.pIsOver; });
-
-  const result = components.map(b => b.map(() => []));
-  for (const {ci, p, tP, cj, q, tQ, x, y, pIsOver} of list) {
-    result[ci][p].push({t:tP, x, y, isOver:  pIsOver});
-    result[cj][q].push({t:tQ, x, y, isOver: !pIsOver});
-  }
-  for (let c = 0; c < nC; c++)
-    for (let i = 0; i < components[c].length; i++)
-      result[c][i].sort((a, b) => a.t - b.t);
-  return result;
-}
-
-// Cubic Hermite spline through crossing points with analytically-derived tangents.
-// At each crossing the tangent is the exact derivative of the 3D position mapping
-// with respect to the abstract path parameter, using the segment's ±1 slope.
-class KnotCurve extends THREE.Curve {
-  constructor(bights, segCrossings, mod, viewT, closed = true, globalBightsByX = null) {
-    super();
-    const n      = bights.length;
-    const tubeR  = parseFloat(document.getElementById('thickInput').value);
-    const R      = 4.5, H = 8;
-    const innerR = Math.min(1.0, Math.max(0.05, 0.1 * (mod / D)));
-    const outerR = 5.5;
-    const delta  = 0.18 * Math.max(0.3, 1.25 * tubeR / 0.25);
-
-    const to3D = (x, y, radOff = 0) => {
-      const theta = (x / mod) * 2 * Math.PI;
-      const rFlat = innerR + (y / MAX_Y) * (outerR - innerR);
-      const zCyl  = (y / MAX_Y) * H - H / 2;
-      const r     = (1 - viewT) * rFlat + viewT * (R + radOff);
-      const z     = (1 - viewT) * radOff  + viewT * zCyl;
-      return new THREE.Vector3(r * Math.cos(theta), r * Math.sin(theta), z);
-    };
-
-    // Analytical unit tangent: derivative of to3D w.r.t. abstract parameter,
-    // using base radius (no radOff) since radOff is a fixed offset, not varying.
-    const dir3D = (x, y, slope) => {
-      const theta  = (x / mod) * 2 * Math.PI;
-      const rFlat  = innerR + (y / MAX_Y) * (outerR - innerR);
-      const r      = (1 - viewT) * rFlat + viewT * R;
-      const dtheta = 2 * Math.PI / mod;                          // d(theta)/d(abstract_x)
-      const dr     = (1 - viewT) * slope * (outerR - innerR) / MAX_Y;
-      const dz     = viewT * slope * H / MAX_Y;
-      return new THREE.Vector3(
-        dr * Math.cos(theta) - r * Math.sin(theta) * dtheta,
-        dr * Math.sin(theta) + r * Math.cos(theta) * dtheta,
-        dz
-      ).normalize();
-    };
-
-    // Tangent at a bight: average of the arriving (+1) and departing (-1) analytical
-    // directions. At viewT=1 this collapses to the pure-theta (horizontal) direction,
-    // which is the smooth tangent of the strand at its z-extremum on the cylinder.
-    const bightDir3D = (x, y) => {
-      const d1 = dir3D(x, y, +1);
-      const d2 = dir3D(x, y, -1);
-      return new THREE.Vector3(d1.x + d2.x, d1.y + d2.y, d1.z + d2.z).normalize();
-    };
-
-    const bightInset      = 0.5;
-    const bightInsetExtra = 0.7;
-
-    // Pre-pass: find outer top y level; use global bight map if supplied.
-    const nSeg = closed ? n : n - 1;
-    const topYs = new Set();
-    for (let j = 0; j < nSeg; j++) {
-      const s0 = Math.sign(bights[(j+1)%n][1] - bights[j][1]);
-      const s1 = Math.sign(bights[(j+2)%n][1] - bights[(j+1)%n][1]);
-      if (s0 !== s1 && s0 > 0) topYs.add(bights[(j+1)%n][1]);
-    }
-    const outerTopY  = topYs.size ? Math.max(...topYs) : -Infinity;
-
-    const bightsByX  = globalBightsByX ?? (() => {
-      const m = new Map();
-      for (let j = 0; j < nSeg; j++) {
-        const s0 = Math.sign(bights[(j+1)%n][1] - bights[j][1]);
-        const s1 = Math.sign(bights[(j+2)%n][1] - bights[(j+1)%n][1]);
-        if (s0 !== s1) {
-          const [bx, by] = bights[(j+1)%n];
-          if (!m.has(bx)) m.set(bx, []);
-          m.get(bx).push({y: by, isTop: s0 > 0});
-        }
-      }
-      return m;
-    })();
-
-    const bightIsOther      = new Array(nSeg).fill(false);
-    const replaceIncomingC1 = new Array(nSeg).fill(false);
-    const replaceOutgoingC1 = new Array(nSeg).fill(false);
-    for (let i = 0; i < nSeg; i++) {
-      const sl  = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-      const nsl = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
-      if (sl === nsl) continue;
-      const [bx, by] = bights[(i+1)%n];
-      const isTop  = sl > 0;
-      const targetY = isTop ? by - 2 : by + 2;
-      const others  = bightsByX.get(bx) || [];
-      bightIsOther[i] = !(isTop && by === outerTopY) &&
-                        !others.some(o => o.isTop !== isTop && o.y === targetY);
-      if (bightIsOther[i]) {
-        const lenIn = Math.abs(by - bights[i][1]);
-        replaceIncomingC1[i] = segCrossings[i].some(c => c.t === lenIn - 1) &&
-                               segCrossings[(i+1)%n].some(c => c.t === 2) &&
-                              !segCrossings[(i+1)%n].some(c => c.t === 1);
-        replaceOutgoingC1[i] = segCrossings[(i+1)%n].some(c => c.t === 1) &&
-                               segCrossings[i].some(c => c.t === lenIn - 2) &&
-                              !segCrossings[i].some(c => c.t === lenIn - 1);
-      }
-    }
-
-    this.debugC1 = []; this.debugC2 = []; this.debugC3 = []; this.debugC4 = [];
-    for (let i = 0; i < nSeg; i++) {
-      if (!bightIsOther[i]) continue;
-      const [bx, by] = bights[(i+1)%n];
-      const lenIn = Math.abs(by - bights[i][1]);
-      const sl = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-      const dbgZ = delta * 3;
-      if (replaceIncomingC1[i]) {
-        const c1 = segCrossings[i].find(c => c.t === lenIn - 1);
-        const c2 = segCrossings[(i+1)%n].find(c => c.t === 2);
-        if (c1 && c2) {
-          this.debugC1.push(to3D(c1.x, c1.y, dbgZ));
-          this.debugC2.push(to3D(c2.x - 1/3, c2.y - sl/3, dbgZ));
-          this.debugC3.push(to3D(c1.x + c2.x - bx, c1.y + c2.y - by, dbgZ));
-          this.debugC4.push(to3D(bx, by - 2 * sl, dbgZ));
-        }
-      }
-      if (replaceOutgoingC1[i]) {
-        const c1 = segCrossings[(i+1)%n].find(c => c.t === 1);
-        const c2 = segCrossings[i].find(c => c.t === lenIn - 2);
-        if (c1 && c2) {
-          this.debugC1.push(to3D(c1.x, c1.y, dbgZ));
-          this.debugC2.push(to3D(c2.x + 1/3, c2.y - sl/3, dbgZ));
-          this.debugC3.push(to3D(c1.x + c2.x - bx, c1.y + c2.y - by, dbgZ));
-          this.debugC4.push(to3D(bx, by - 2 * sl, dbgZ));
-        }
-      }
-    }
-
-    this.pts                = [];
-    this.dirs               = [];
-    this.scales             = [];
-    this.bightPts           = [];
-    this.trueBightPts       = [];
-    this.otherBightPts      = [];
-
-    for (let i = 0; i < nSeg; i++) {
-      const slope     = Math.sign(bights[(i+1)%n][1] - bights[i][1]);
-      const nextSlope = Math.sign(bights[(i+2)%n][1] - bights[(i+1)%n][1]);
-      const atBight   = slope !== nextSlope;
-      const isLastSeg = !closed && i === nSeg - 1;
-
-      const lenSeg    = Math.abs(bights[(i+1)%n][1] - bights[i][1]);
-      const nextOther = bightIsOther[i];
-      const prevIdx   = (i - 1 + nSeg) % nSeg;
-      const prevOther = bightIsOther[prevIdx];
-      for (const {x, y, isOver, t} of segCrossings[i]) {
-        let cx = x, cy = y, cslope = slope;
-        if (nextOther && replaceIncomingC1[i] && t === lenSeg - 1) {
-          const [bx, by] = bights[(i+1)%n];
-          cx = bx; cy = by - 2 * slope; cslope = -slope / 11;
-        } else if (prevOther && replaceOutgoingC1[prevIdx] && t === 1) {
-          const [bx, by] = bights[i];
-          cx = bx; cy = by + 2 * slope; cslope = -slope / 11;
-        } else if (nextOther && replaceOutgoingC1[i] && t === lenSeg - 2) {
-          cx = x + 1/3; cy = y - slope / 3; cslope = slope / 3;
-        } else if (prevOther && replaceIncomingC1[prevIdx] && t === 2) {
-          cx = x - 1/3; cy = y + slope / 3; cslope = slope / 3;
-        } else if (nextOther && replaceIncomingC1[i] && t === lenSeg - 2) {
-          cslope = 0;
-        } else if (prevOther && replaceIncomingC1[prevIdx] && t === 3) {
-          cslope = slope / 2;
-        } else if (nextOther && replaceOutgoingC1[i] && t === lenSeg - 3) {
-          cslope = slope / 2;
-        } else if (prevOther && replaceOutgoingC1[prevIdx] && t === 2) {
-          cslope = 0;
-        }
-        this.pts.push(to3D(cx, cy, isOver ? delta : -delta));
-        this.dirs.push(dir3D(cx, cy, cslope));
-        this.scales.push(1);
-      }
-
-      if (atBight && !isLastSeg) {
-        const [bx, by] = bights[(i+1)%n];
-        const isTop  = slope > 0;
-        const isOuter = isTop && by === outerTopY;
-
-        const targetY    = isTop ? by - 2 : by + 2;
-        const others     = bightsByX.get(bx) || [];
-        const hasCloseOpp = others.some(o => o.isTop !== isTop && o.y === targetY);
-
-        let bd = null;
-        if (hasCloseOpp || isOuter) {
-          const lenIn    = Math.abs(by - bights[i][1]);
-          const closeIn  = segCrossings[i].some(c => c.t >= lenIn - 1);
-          const closeOut = segCrossings[(i+1)%n].some(c => c.t <= 1);
-          bd = bightInset + (closeIn || closeOut ? 0 : bightInsetExtra) - (isTop ? 0 : 0.2);
-        }
-        // else: 'other' — omit from control points
-
-        const truePos = to3D(bx, by, 0);
-        if (bd !== null) {
-          const by_adj = by - slope * bd;
-          const bp = to3D(bx, by_adj, 0);
-          this.pts.push(bp);
-          this.dirs.push(bightDir3D(bx, by_adj));
-          this.scales.push(1);
-          this.bightPts.push(bp);
-          this.trueBightPts.push(truePos);
-        } else {
-          this.otherBightPts.push(truePos);
-        }
-      }
-    }
-    if (!closed) {
-      const [bx, by] = bights[n - 1];
-      const slope = Math.sign(by - bights[n - 2][1]);
-      this.pts.push(to3D(bx, by, 0));
-      this.dirs.push(dir3D(bx, by, slope));
-      this.scales.push(1);
-    }
-    this.m = this.pts.length;
-    this.closed = closed;
-  }
-
-  getPoint(t, out = new THREE.Vector3()) {
-    const { pts, dirs, m, closed } = this;
-    const ft = closed ? ((t * m) % m + m) % m : t * (m - 1);
-    const i  = Math.floor(Math.min(ft, m - 1));
-    const u  = ft - i;
-    const j  = closed ? (i + 1) % m : Math.min(i + 1, m - 1);
-
-    const P0 = pts[i], P1 = pts[j];
-    const scale = P0.distanceTo(P1) * this.scales[i];
-
-    const h00 =  2*u*u*u - 3*u*u + 1;
-    const h10 =    u*u*u - 2*u*u + u;
-    const h01 = -2*u*u*u + 3*u*u;
-    const h11 =    u*u*u -   u*u;
-
-    return out.set(
-      h00*P0.x + h10*scale*dirs[i].x + h01*P1.x + h11*scale*dirs[j].x,
-      h00*P0.y + h10*scale*dirs[i].y + h01*P1.y + h11*scale*dirs[j].y,
-      h00*P0.z + h10*scale*dirs[i].z + h01*P1.z + h11*scale*dirs[j].z
-    );
-  }
-}
-
 
 // ── Scene objects ──────────────────────────────────────────────────────────
 const knotGroup = new THREE.Group();
 scene.add(knotGroup);
-
-function buildKnot(B, resumeRotation = false) {
-  while (knotGroup.children.length) {
-    const c = knotGroup.children[0];
-    c.geometry.dispose();
-    c.material.dispose();
-    knotGroup.remove(c);
-  }
-
-  const mod        = 2 * currentC * B;
-  const tubeRadius = parseFloat(document.getElementById('thickInput').value);
-
-  const components     = generateAllComponents(B);
-  const g              = components.length;
-  const allSegCrossings = buildAllSegmentCrossings(components, mod);
-
-  const interesting = allSegCrossings.every(c => c.every(s => s.length > 0));
-  document.getElementById('interestingWarn').style.display = interesting ? 'none' : '';
-
-  const ct = document.getElementById('componentToggle');
-  if (g === 1) { componentMode = false; ct.disabled = true; }
-  else         { ct.disabled = false; }
-  ct.textContent = componentMode ? 'Full' : 'Solo';
-
-  const slider = document.getElementById('viewSlider');
-  const sliderRow = document.getElementById('flatCylSection');
-  const crossingYs = new Set(allSegCrossings.flat().flatMap(seg => seg.map(c => c.y)));
-  const flatDegenerate = g > 1 && crossingYs.size <= 1;
-  if (flatDegenerate) { slider.value = '1'; slider.disabled = true; sliderRow.style.opacity = '0.3'; }
-  else                { slider.disabled = false; sliderRow.style.opacity = ''; }
-  const vt = flatDegenerate ? 1.0 : parseFloat(slider.value);
-
-  // Global bightsByX across all components for cross-component "close" detection.
-  const globalBightsByX = new Map();
-  for (const comp of components) {
-    const nb = comp.length;
-    for (let j = 0; j < nb; j++) {
-      const s0 = Math.sign(comp[(j+1)%nb][1] - comp[j][1]);
-      const s1 = Math.sign(comp[(j+2)%nb][1] - comp[(j+1)%nb][1]);
-      if (s0 !== s1) {
-        const [bx, by] = comp[(j+1)%nb];
-        const isTop = s0 > 0;
-        if (!globalBightsByX.has(bx)) globalBightsByX.set(bx, []);
-        globalBightsByX.get(bx).push({y: by, isTop});
-      }
-    }
-  }
-
-  // Boost resolution for simple knots where faceting is most visible.
-  const boostFactor =
-    (currentC === 1 && B <= 4) ? Math.max(2, 6 - B) :  // B=1→5, 2→4, 3→3, 4→2
-    (currentC === 2 && B <= 2) ? (4 - B)             :  // B=1→3, 2→2
-    (currentC === 3 && B <= 2) ? (4 - B)             :  // B=1→3, 2→2
-    1;
-  const radialSegments = 60 * boostFactor;
-  const tmp = new THREE.Color();
-
-  const gDraw = componentMode ? 1 : g;
-  for (let c = 0; c < gDraw; c++) {
-    const bights      = components[c];
-    const segCrossings = allSegCrossings[c];
-    const curve  = new KnotCurve(bights, segCrossings, mod, vt, true, globalBightsByX);
-    const tubularSegments = Math.max(bights.length * 60 * boostFactor, curve.m * 6 * boostFactor);
-    const geo = new THREE.TubeGeometry(curve, tubularSegments, tubeRadius, radialSegments, true);
-
-    // Knots (g=1): full rainbow gradient. Links (g>1): flat distinct hue per component.
-    const ringCount    = tubularSegments + 1;
-    const vertsPerRing = radialSegments + 1;
-    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
-    for (let i = 0; i < ringCount; i++) {
-      tmp.setHSL(g === 1 ? i / tubularSegments : c / g, 0.9, 0.62);
-      for (let j = 0; j < vertsPerRing; j++) {
-        const idx = (i * vertsPerRing + j) * 3;
-        cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
-      }
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    knotGroup.add(new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
-      vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
-    })));
-    if (showBights) {
-      const sphereR   = tubeRadius * 1.5;
-      const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
-      for (const bp of curve.trueBightPts) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-        s.position.copy(bp);
-        knotGroup.add(s);
-      }
-      for (const bp of curve.otherBightPts) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff8800 }));
-        s.position.copy(bp); knotGroup.add(s);
-      }
-      for (const bp of curve.debugC1) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff0000 }));
-        s.position.copy(bp); knotGroup.add(s);
-      }
-      for (const bp of curve.debugC2) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x0000ff }));
-        s.position.copy(bp); knotGroup.add(s);
-      }
-      for (const bp of curve.debugC3) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x00cc00 }));
-        s.position.copy(bp); knotGroup.add(s);
-      }
-      for (const bp of curve.debugC4) {
-        const s = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0xffff00 }));
-        s.position.copy(bp); knotGroup.add(s);
-      }
-    }
-  }
-
-
-  knotGroup.rotation.set(-0.4 * vt, 0, 0);
-  if (resumeRotation) {
-    camera.position.set(0, 4 * vt, 14);
-    orbit.target.set(0, 0, 0);
-    orbit.update();
-    autoRotate = true;
-  }
-
-  updateInfo(B, g);
-  if (currentC === 3) {
-    syncC3List(LEADS);
-  }
-}
 
 function buildTubeDiagram() {
   while (knotGroup.children.length) {
@@ -1592,14 +1077,10 @@ function setViewButtons(current) {
   document.getElementById('rosetteToggle').style.display = current === 'rosette' ? 'none' : '';
 }
 
-function enterKnotMode() {
-  enterRosetteMode();
-}
 
 function enterDiagramMode() {
   showTubeDiag = false; showRosette = false;
-  activeCamera = camera; orbit.enabled = false; orthoOrbit.enabled = false;
-  diagramCanvas.style.display = 'block';
+    diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
   setViewButtons('diag');
   document.getElementById('knotSliders').style.display = 'none';
@@ -1629,7 +1110,7 @@ function enterDiagramMode() {
 
 function enterBraidMode() {
   showDiagram = false; showTubeDiag = true; showRoundDiag = false; showRosette = false;
-  activeCamera = orthoCamera; orbit.enabled = false; orthoOrbit.enabled = false; autoRotate = false;
+  activeCamera = orthoCamera; orthoOrbit.enabled = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('braid');
@@ -1980,26 +1461,6 @@ function positionZigzagDisplay() {
   document.getElementById('zigzagDisplay').style.display = 'none';
 }
 
-function enterRoundMode() {
-  showDiagram = false; showTubeDiag = false; showRoundDiag = true; showRosette = false;
-  activeCamera = camera; orbit.enabled = false; orthoOrbit.enabled = false;
-  diagramCanvas.style.display = 'block';
-  renderer.domElement.style.display = 'none';
-  setViewButtons('round');
-  document.getElementById('knotSliders').style.display = 'none';
-  document.getElementById('xStretchSection').style.display = 'none';
-  document.getElementById('roundSection').style.display = '';
-  document.getElementById('outerRadiusSection').style.display = '';
-  document.getElementById('downloadBtn').style.display = 'none';
-  document.getElementById('bInput').disabled = false;
-  document.getElementById('bightsToggle').disabled = true;
-  const ct = document.getElementById('componentToggle');
-  ct.disabled = false;
-  ct.textContent = componentMode ? 'Full' : 'Solo';
-  drawRoundDiagram();
-  positionZigzagDisplay();
-}
-
 function drawRoundDiagram() {
   const B   = parseInt(document.getElementById('bInput').value);
   const mod = 2 * currentC * B;
@@ -2205,7 +1666,7 @@ function drawRoundDiagram() {
 
 function enterRosetteMode() {
   showDiagram = false; showTubeDiag = false; showRoundDiag = false; showRosette = true;
-  activeCamera = orthoCamera; orbit.enabled = false; orthoOrbit.enabled = true; autoRotate = false;
+  activeCamera = orthoCamera; orthoOrbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('rosette');
@@ -2427,7 +1888,7 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showRosette)) enterKnotMode();
+  if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showRosette)) enterRosetteMode();
 });
 
 // Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
@@ -2582,25 +2043,14 @@ document.getElementById('abParamDisplay').style.display = '';
 enterRosetteMode();
 
 // ── Render loop ────────────────────────────────────────────────────────────
-const clock = new THREE.Clock();
-
 (function animate() {
   requestAnimationFrame(animate);
-  const dt = clock.getDelta();
-  if (autoRotate) {
-    const vt = parseFloat(document.getElementById('viewSlider').value);
-    const axis = camera.position.clone().sub(orbit.target).normalize();
-    knotGroup.rotateOnWorldAxis(axis, dt * (0.12 + 0.16 * vt));
-  }
-  orbit.update();
   if (showRosette) orthoOrbit.update();
   renderer.render(scene, activeCamera);
 })();
 
 // ── Resize ─────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   if (showDiagram) { drawDiagram(); positionZigzagDisplay(); }
   if (showTubeDiag) buildTubeDiagram();
