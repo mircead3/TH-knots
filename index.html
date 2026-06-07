@@ -256,16 +256,19 @@
     <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Inner radius</div>
     <input type="range" id="roundInnerSlider" min="10" max="180" step="5" value="60"
            style="width:100%;margin-bottom:8px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    <div id="outerRadiusSection">
     <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Outer radius</div>
     <input type="range" id="roundOuterSlider" min="80" max="400" step="10" value="220"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    </div>
   </div>
 
   <div class="btn-row">
-    <button id="knotToggle"  class="view-btn" style="display:none">Knot</button>
-    <button id="braidToggle" class="view-btn">Braid</button>
-    <button id="diagToggle"  class="view-btn">Diagram</button>
-    <button id="roundToggle" class="view-btn">Round</button>
+    <button id="knotToggle"    class="view-btn" style="display:none">Knot</button>
+    <button id="braidToggle"  class="view-btn">Braid</button>
+    <button id="diagToggle"   class="view-btn">Diagram</button>
+    <button id="roundToggle"  class="view-btn">Round</button>
+    <button id="rosetteToggle" class="view-btn">Rosette</button>
   </div>
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
@@ -317,6 +320,11 @@ orbit.enableDamping = true;
 orbit.dampingFactor = 0.07;
 orbit.minDistance = 3;
 orbit.maxDistance = 50;
+
+const orthoOrbit = new OrbitControls(orthoCamera, renderer.domElement);
+orthoOrbit.enableDamping = true;
+orthoOrbit.dampingFactor = 0.07;
+orthoOrbit.enabled = false;
 
 let autoRotate = true;
 orbit.addEventListener('start', () => { autoRotate = false; });
@@ -1384,6 +1392,7 @@ function rebuildKnot() {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B);
 }
 
@@ -1406,6 +1415,7 @@ function onMChange() {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B_m, true);
 }
 
@@ -1420,6 +1430,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B, true);
 });
 
@@ -1464,6 +1475,7 @@ document.addEventListener('keydown', e => {
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
   if (showTubeDiag) buildTubeDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B);
 });
 
@@ -1570,18 +1582,20 @@ let showBights   = false;
 let showDiagram  = false;
 let showTubeDiag = false;
 let showRoundDiag = false;
+let showRosette  = false;
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
-  document.getElementById('knotToggle').style.display  = current === 'knot'  ? 'none' : '';
-  document.getElementById('braidToggle').style.display = current === 'braid' ? 'none' : '';
-  document.getElementById('diagToggle').style.display  = current === 'diag'  ? 'none' : '';
-  document.getElementById('roundToggle').style.display = current === 'round' ? 'none' : '';
+  document.getElementById('knotToggle').style.display    = current === 'knot'    ? 'none' : '';
+  document.getElementById('braidToggle').style.display   = current === 'braid'   ? 'none' : '';
+  document.getElementById('diagToggle').style.display    = current === 'diag'    ? 'none' : '';
+  document.getElementById('roundToggle').style.display   = current === 'round'   ? 'none' : '';
+  document.getElementById('rosetteToggle').style.display = current === 'rosette' ? 'none' : '';
 }
 
 function enterKnotMode() {
-  showDiagram = false; showTubeDiag = false; showRoundDiag = false;
-  activeCamera = camera; orbit.enabled = true;
+  showDiagram = false; showTubeDiag = false; showRoundDiag = false; showRosette = false;
+  activeCamera = camera; orbit.enabled = true; orthoOrbit.enabled = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('knot');
@@ -1597,8 +1611,8 @@ function enterKnotMode() {
 }
 
 function enterDiagramMode() {
-  showDiagram = true; showTubeDiag = false; showRoundDiag = false;
-  activeCamera = camera; orbit.enabled = false;
+  showDiagram = true; showTubeDiag = false; showRoundDiag = false; showRosette = false;
+  activeCamera = camera; orbit.enabled = false; orthoOrbit.enabled = false;
   diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
   setViewButtons('diag');
@@ -1616,8 +1630,8 @@ function enterDiagramMode() {
 }
 
 function enterBraidMode() {
-  showDiagram = false; showTubeDiag = true; showRoundDiag = false;
-  activeCamera = orthoCamera; orbit.enabled = false; autoRotate = false;
+  showDiagram = false; showTubeDiag = true; showRoundDiag = false; showRosette = false;
+  activeCamera = orthoCamera; orbit.enabled = false; orthoOrbit.enabled = false; autoRotate = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('braid');
@@ -1968,14 +1982,15 @@ function positionZigzagDisplay() {
 }
 
 function enterRoundMode() {
-  showDiagram = false; showTubeDiag = false; showRoundDiag = true;
-  activeCamera = camera; orbit.enabled = false;
+  showDiagram = false; showTubeDiag = false; showRoundDiag = true; showRosette = false;
+  activeCamera = camera; orbit.enabled = false; orthoOrbit.enabled = false;
   diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
   setViewButtons('round');
   document.getElementById('knotSliders').style.display = 'none';
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
+  document.getElementById('outerRadiusSection').style.display = '';
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = true;
@@ -2189,12 +2204,166 @@ function drawRoundDiagram() {
   }
 }
 
+function enterRosetteMode() {
+  showDiagram = false; showTubeDiag = false; showRoundDiag = false; showRosette = true;
+  activeCamera = orthoCamera; orbit.enabled = false; orthoOrbit.enabled = true; autoRotate = false;
+  diagramCanvas.style.display = 'none';
+  renderer.domElement.style.display = 'block';
+  setViewButtons('rosette');
+  document.getElementById('flatCylSection').style.display = 'none';
+  document.getElementById('knotSliders').style.display = '';
+  document.getElementById('xStretchSection').style.display = 'none';
+  document.getElementById('roundSection').style.display = '';
+  document.getElementById('outerRadiusSection').style.display = 'none';
+  document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('bInput').disabled = false;
+  document.getElementById('bightsToggle').disabled = false;
+  const ct = document.getElementById('componentToggle');
+  ct.disabled = false;
+  ct.textContent = componentMode ? 'Full' : 'Solo';
+  buildRosette();
+}
+
+function buildRosette() {
+  while (knotGroup.children.length) {
+    const child = knotGroup.children[0];
+    child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
+  }
+  knotGroup.rotation.set(0, 0, 0);
+
+  const B          = parseInt(document.getElementById('bInput').value);
+  const mod        = 2 * currentC * B;
+  const tubeRadius = parseFloat(document.getElementById('thickInput').value);
+  const delta      = tubeRadius;
+  const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
+  const outerR_raw = 220; // fixed; zoom controls viewing scale
+
+  // Camera half-height matches the braid view so tube radius looks the same
+  // size at the same slider value.  pxToWorld converts slider pixel values to
+  // world units using the same factor as the screen projection, so the rings
+  // appear at exactly the same pixel radii as in the round diagram.
+  // The center shifts right by PANEL_W/2 px to match the round diagram's cx.
+  const PANEL_W   = 235;
+  const aspect    = innerWidth / innerHeight;
+  const camR      = 6.5;
+  const pxToWorld = 2 * camR / innerHeight;
+  const worldOuterR = outerR_raw * pxToWorld;
+  const worldInnerR = innerR_raw * pxToWorld;
+  const xCenter     = PANEL_W * camR / innerHeight;
+  orthoCamera.left   = -camR * aspect;
+  orthoCamera.right  =  camR * aspect;
+  orthoCamera.top    =  camR;
+  orthoCamera.bottom = -camR;
+  orthoCamera.updateProjectionMatrix();
+
+  const toR = (rawX, y, z = 0) => {
+    const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
+    const r     = worldInnerR + (y / MAX_Y) * (worldOuterR - worldInnerR);
+    return new THREE.Vector3(xCenter + r * Math.cos(theta), r * Math.sin(theta), z);
+  };
+
+  const components     = generateAllComponents(B);
+  const g              = components.length;
+  updateInfo(B, g);
+  const allCrossings   = computeDiagramCrossingsAll(components, mod);
+  const drawComponents = componentMode ? components.slice(0, 1) : components;
+
+  const tmp        = new THREE.Color();
+  const radialSegs = 24;
+
+  for (let comp = 0; comp < drawComponents.length; comp++) {
+    const bights   = drawComponents[comp];
+    const n        = bights.length;
+    const crossMap = allCrossings[comp];
+    const numSegs  = componentMode ? D : n;
+    const closed   = !componentMode;
+
+    // STEPS arc samples per sub-segment so CatmullRom follows the polar arc.
+    const STEPS = 8;
+
+    const pts = [];
+    let rawX = bights[0][0];
+
+    for (let i = 0; i < numSegs; i++) {
+      const ay     = bights[i][1];
+      const by     = bights[(i + 1) % n][1];
+      const dx     = Math.abs(by - ay);
+      const crosses = (crossMap.get(i) || []).slice().sort((a, b) => a.t - b.t);
+
+      const keyFs = [0, ...crosses.map(c => c.t / dx)];
+      const keyZs = [0, ...crosses.map(c => c.isUnder ? -delta : delta)];
+
+      for (let ki = 0; ki < keyFs.length; ki++) {
+        const f0 = keyFs[ki];
+        const f1 = ki + 1 < keyFs.length ? keyFs[ki + 1] : 1.0;
+        const z0 = keyZs[ki];
+        const z1 = ki + 1 < keyFs.length ? keyZs[ki + 1] : 0;
+        pts.push(toR(rawX + f0 * dx, ay + f0 * (by - ay), z0));
+        for (let s = 1; s < STEPS; s++) {
+          const f = f0 + (f1 - f0) * s / STEPS;
+          pts.push(toR(rawX + f * dx, ay + f * (by - ay), z0 + (z1 - z0) * s / STEPS));
+        }
+      }
+      rawX += dx;
+    }
+    if (componentMode) {
+      pts.push(toR(rawX, bights[numSegs % n][1], 0));
+    }
+
+    if (pts.length < 2) continue;
+
+    const curve   = new THREE.CatmullRomCurve3(pts, closed, 'centripetal', 0.5);
+    const tubSegs = Math.max(pts.length * 4, 60);
+    const geo     = new THREE.TubeGeometry(curve, tubSegs, tubeRadius, radialSegs, closed);
+    const ringCount    = tubSegs + 1;
+    const vertsPerRing = radialSegs + 1;
+    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
+    // Knots (g=1): full rainbow gradient along the tube; links: flat hue per component.
+    for (let i = 0; i < ringCount; i++) {
+      tmp.setHSL(g === 1 ? i / tubSegs : comp / g, 0.9, 0.62);
+      for (let j = 0; j < vertsPerRing; j++) {
+        const idx = (i * vertsPerRing + j) * 3;
+        cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
+      }
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+      vertexColors: true, specular: new THREE.Color(0x444444), shininess: 40,
+    }));
+    mesh.frustumCulled = false;
+    knotGroup.add(mesh);
+  }
+
+  if (showBights) {
+    const sphereR   = tubeRadius * 0.75;
+    const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    for (let comp = 0; comp < drawComponents.length; comp++) {
+      const bights  = drawComponents[comp];
+      const n       = bights.length;
+      const numSegs = componentMode ? D : n;
+      let rawX = bights[0][0];
+      for (let i = 0; i < numSegs; i++) {
+        const ay = bights[i][1];
+        const by = bights[(i + 1) % n][1];
+        const dx = Math.abs(by - ay);
+        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+        sphere.position.copy(toR(rawX, ay));
+        sphere.frustumCulled = false;
+        knotGroup.add(sphere);
+        rawX += dx;
+      }
+    }
+  }
+}
+
 document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
 document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
 document.getElementById('diagToggle').addEventListener('click', enterDiagramMode);
 document.getElementById('roundToggle').addEventListener('click', enterRoundMode);
-document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); });
-document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); });
+document.getElementById('rosetteToggle').addEventListener('click', enterRosetteMode);
+document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showRosette) buildRosette(); });
+document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showRosette) buildRosette(); });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
@@ -2203,6 +2372,7 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B);
 });
 
@@ -2211,11 +2381,12 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
   document.getElementById('bightsToggle').classList.toggle('active', showBights);
   const B = parseInt(document.getElementById('bInput').value);
   if (showTubeDiag) buildTubeDiagram();
+  else if (showRosette) buildRosette();
   else buildKnot(B);
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && (showDiagram || showTubeDiag)) enterKnotMode();
+  if (e.key === 'Escape' && (showDiagram || showTubeDiag || showRosette)) enterKnotMode();
 });
 
 // Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
@@ -2380,6 +2551,7 @@ const clock = new THREE.Clock();
     knotGroup.rotateOnWorldAxis(axis, dt * (0.12 + 0.16 * vt));
   }
   orbit.update();
+  if (showRosette) orthoOrbit.update();
   renderer.render(scene, activeCamera);
 })();
 
@@ -2391,6 +2563,7 @@ window.addEventListener('resize', () => {
   if (showDiagram) { drawDiagram(); positionZigzagDisplay(); }
   if (showTubeDiag) buildTubeDiagram();
   if (showRoundDiag) drawRoundDiagram();
+  if (showRosette) buildRosette();
 });
 </script>
 </body>
