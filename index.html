@@ -2210,7 +2210,7 @@ function enterRosetteMode() {
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('rosette');
-  document.getElementById('flatCylSection').style.display = 'none';
+  document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
@@ -2256,10 +2256,18 @@ function buildRosette() {
   orthoCamera.bottom = -camR;
   orthoCamera.updateProjectionMatrix();
 
+  const vt     = parseFloat(document.getElementById('viewSlider').value);
+  const h_half = worldOuterR - worldInnerR; // cylinder half-height
+
   const toR = (rawX, y, z = 0) => {
-    const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
-    const r     = worldInnerR + (y / MAX_Y) * (worldOuterR - worldInnerR);
-    return new THREE.Vector3(xCenter + r * Math.cos(theta), r * Math.sin(theta), z);
+    const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
+    const r_flat = worldInnerR + (y / MAX_Y) * (worldOuterR - worldInnerR);
+    const r      = r_flat * (1 - vt) + worldOuterR * vt + z * vt;   // crossing radial at vt=1
+    return new THREE.Vector3(
+      r * Math.cos(theta) + xCenter * (1 - vt),
+      r * Math.sin(theta),
+      (y / MAX_Y - 0.5) * 2 * h_half * vt + z * (1 - vt)           // crossing axial at vt=0
+    );
   };
 
   const components     = generateAllComponents(B);
@@ -2422,7 +2430,8 @@ window.findSameYSets = function(m) {
 };
 
 document.getElementById('viewSlider').addEventListener('input', () => {
-  if (!showTubeDiag) buildKnot(parseInt(document.getElementById('bInput').value));
+  if (showRosette) buildRosette();
+  else if (!showTubeDiag) buildKnot(parseInt(document.getElementById('bInput').value));
 });
 
 document.getElementById('xStretchSlider').addEventListener('input', () => {
