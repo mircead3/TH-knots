@@ -1631,6 +1631,7 @@ function enterDiagramMode() {
     document.getElementById('roundToggle').classList.add('active');
     document.getElementById('xStretchSection').style.display = 'none';
     document.getElementById('roundSection').style.display = '';
+    document.getElementById('outerRadiusSection').style.display = '';
     drawRoundDiagram();
   } else {
     showDiagram = true;
@@ -2316,7 +2317,7 @@ function buildRosette() {
       // Adaptive shoulder distance: scales with cos(half-angle) so sharp turns
       // (small T_ang relative to T_rad) get shoulder points closer together.
       const T_ang  = (worldInnerR + (ay / MAX_Y) * (worldOuterR - worldInnerR)) * (2 * Math.PI / mod);
-      const bightD = 0.1 * T_rad / Math.sqrt(T_ang * T_ang + T_rad * T_rad);
+      const bightD = 0.1 * Math.sqrt(T_rad / Math.sqrt(T_ang * T_ang + T_rad * T_rad));
       const crosses = (crossMap.get(i) || []).slice().sort((a, b) => a.t - b.t);
 
       const keyFs = [0, ...crosses.map(c => c.t / dx)];
@@ -2411,6 +2412,7 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     document.getElementById('roundToggle').classList.add('active');
     document.getElementById('xStretchSection').style.display = 'none';
     document.getElementById('roundSection').style.display = '';
+    document.getElementById('outerRadiusSection').style.display = '';
     drawRoundDiagram();
   } else {
     showDiagram = true; showRoundDiag = false;
