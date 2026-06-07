@@ -2302,7 +2302,8 @@ function buildRosette() {
     const closed   = !componentMode;
 
     // STEPS arc samples per sub-segment so CatmullRom follows the polar arc.
-    const STEPS = 8;
+    const STEPS   = 8;
+    const T_rad   = (worldOuterR - worldInnerR) / MAX_Y;
 
     const pts = [];
     let rawX = bights[0][0];
@@ -2311,20 +2312,41 @@ function buildRosette() {
       const ay     = bights[i][1];
       const by     = bights[(i + 1) % n][1];
       const dx     = Math.abs(by - ay);
+      const dir    = Math.sign(by - ay);
+      // Adaptive shoulder distance: scales with cos(half-angle) so sharp turns
+      // (small T_ang relative to T_rad) get shoulder points closer together.
+      const T_ang  = (worldInnerR + (ay / MAX_Y) * (worldOuterR - worldInnerR)) * (2 * Math.PI / mod);
+      const bightD = 0.1 * T_rad / Math.sqrt(T_ang * T_ang + T_rad * T_rad);
       const crosses = (crossMap.get(i) || []).slice().sort((a, b) => a.t - b.t);
 
       const keyFs = [0, ...crosses.map(c => c.t / dx)];
       const keyZs = [0, ...crosses.map(c => c.isUnder ? -delta : delta)];
+
+      const fd = bightD / dx; // fraction offset of shoulder inside each segment
 
       for (let ki = 0; ki < keyFs.length; ki++) {
         const f0 = keyFs[ki];
         const f1 = ki + 1 < keyFs.length ? keyFs[ki + 1] : 1.0;
         const z0 = keyZs[ki];
         const z1 = ki + 1 < keyFs.length ? keyZs[ki + 1] : 0;
-        pts.push(toR(rawX + f0 * dx, ay + f0 * (by - ay), z0));
-        for (let s = 1; s < STEPS; s++) {
-          const f = f0 + (f1 - f0) * s / STEPS;
-          pts.push(toR(rawX + f * dx, ay + f * (by - ay), z0 + (z1 - z0) * s / STEPS));
+
+        // Key point: two shoulder points at the bight, or the crossing point.
+        if (ki === 0) {
+          pts.push(toR(rawX - bightD, ay + dir * bightD, 0));
+          pts.push(toR(rawX + bightD, ay + dir * bightD, 0));
+        } else {
+          pts.push(toR(rawX + f0 * dx, ay + f0 * (by - ay), z0));
+        }
+
+        // Dense arc: start just after the shoulder/crossing; stop before the
+        // next bight's shoulder so intermediates never overshoot Point A.
+        const f_lo = ki === 0 ? fd : f0;
+        const f_hi = f1 >= 1.0 ? 1.0 - fd : f1;
+        if (f_hi > f_lo) {
+          for (let s = 1; s < STEPS; s++) {
+            const f = f_lo + (f_hi - f_lo) * s / STEPS;
+            pts.push(toR(rawX + f * dx, ay + f * (by - ay), z0 + (z1 - z0) * s / STEPS));
+          }
         }
       }
       rawX += dx;
