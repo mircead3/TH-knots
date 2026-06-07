@@ -230,7 +230,7 @@
   <div class="btn-row">
     <button id="braidToggle"   class="view-btn">Braid</button>
     <button id="diagToggle"    class="view-btn">Diagram</button>
-    <button id="rosetteToggle" class="view-btn">Knot</button>
+    <button id="knotToggle" class="view-btn">Knot</button>
   </div>
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
@@ -836,8 +836,8 @@ function rebuildKnot() {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
-  else if (showRosette) buildRosette();
-  else buildRosette();
+  else if (showKnot) buildKnot();
+  else buildKnot();
 }
 
 function onMChange() {
@@ -858,7 +858,7 @@ function onMChange() {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
-  else buildRosette();
+  else buildKnot();
 }
 
 
@@ -872,8 +872,8 @@ document.getElementById('bInput').addEventListener('change', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
-  else if (showRosette) buildRosette();
-  else buildRosette();
+  else if (showKnot) buildKnot();
+  else buildKnot();
 });
 
 function setComplexity(c) {
@@ -917,8 +917,8 @@ document.addEventListener('keydown', e => {
 document.getElementById('thickInput').addEventListener('input', () => {
   const B = parseInt(document.getElementById('bInput').value);
   if (showTubeDiag) buildTubeDiagram();
-  else if (showRosette) buildRosette();
-  else buildRosette();
+  else if (showKnot) buildKnot();
+  else buildKnot();
 });
 
 // ── Diagram view ───────────────────────────────────────────────────────────
@@ -981,18 +981,18 @@ let showBights   = false;
 let showDiagram  = false;
 let showTubeDiag = false;
 let showRoundDiag = false;
-let showRosette  = false;
+let showKnot  = false;
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
   document.getElementById('braidToggle').style.display   = current === 'braid'   ? 'none' : '';
   document.getElementById('diagToggle').style.display    = current === 'diag'    ? 'none' : '';
-  document.getElementById('rosetteToggle').style.display = current === 'rosette' ? 'none' : '';
+  document.getElementById('knotToggle').style.display = current === 'knot' ? 'none' : '';
 }
 
 
 function enterDiagramMode() {
-  showTubeDiag = false; showRosette = false;
+  showTubeDiag = false; showKnot = false;
     diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
   setViewButtons('diag');
@@ -1021,7 +1021,7 @@ function enterDiagramMode() {
 }
 
 function enterBraidMode() {
-  showDiagram = false; showTubeDiag = true; showRoundDiag = false; showRosette = false;
+  showDiagram = false; showTubeDiag = true; showRoundDiag = false; showKnot = false;
   activeCamera = orthoCamera; orthoOrbit.enabled = false;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
@@ -1572,12 +1572,12 @@ function drawRoundDiagram() {
   }
 }
 
-function enterRosetteMode() {
-  showDiagram = false; showTubeDiag = false; showRoundDiag = false; showRosette = true;
+function enterKnotMode() {
+  showDiagram = false; showTubeDiag = false; showRoundDiag = false; showKnot = true;
   activeCamera = orthoCamera; orthoOrbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
-  setViewButtons('rosette');
+  setViewButtons('knot');
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
@@ -1587,10 +1587,10 @@ function enterRosetteMode() {
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = false;
-  buildRosette();
+  buildKnot();
 }
 
-function buildRosette() {
+function buildKnot() {
   while (knotGroup.children.length) {
     const child = knotGroup.children[0];
     child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
@@ -1771,9 +1771,9 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     drawDiagram();
   }
 });
-document.getElementById('rosetteToggle').addEventListener('click', enterRosetteMode);
-document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showRosette) buildRosette(); });
-document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showRosette) buildRosette(); });
+document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
+document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
+document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
@@ -1782,8 +1782,8 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
-  else if (showRosette) buildRosette();
-  else buildRosette();
+  else if (showKnot) buildKnot();
+  else buildKnot();
 });
 
 document.getElementById('bightsToggle').addEventListener('click', () => {
@@ -1791,16 +1791,16 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
   document.getElementById('bightsToggle').classList.toggle('active', showBights);
   const B = parseInt(document.getElementById('bInput').value);
   if (showTubeDiag) buildTubeDiagram();
-  else if (showRosette) buildRosette();
-  else buildRosette();
+  else if (showKnot) buildKnot();
+  else buildKnot();
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showRosette)) enterRosetteMode();
+  if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showKnot)) enterKnotMode();
 });
 
 document.getElementById('viewSlider').addEventListener('input', () => {
-  if (showRosette) buildRosette();
+  if (showKnot) buildKnot();
   else if (showTubeDiag) buildTubeDiagram();
 });
 
@@ -1916,12 +1916,12 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
 // ── Initial state ──────────────────────────────────────────────────────────
 syncAB2List(parseInt(document.getElementById('mInput').value));
 document.getElementById('abParamDisplay').style.display = '';
-enterRosetteMode();
+enterKnotMode();
 
 // ── Render loop ────────────────────────────────────────────────────────────
 (function animate() {
   requestAnimationFrame(animate);
-  if (showRosette) orthoOrbit.update();
+  if (showKnot) orthoOrbit.update();
   renderer.render(scene, activeCamera);
 })();
 
@@ -1931,7 +1931,7 @@ window.addEventListener('resize', () => {
   if (showDiagram) { drawDiagram(); }
   if (showTubeDiag) buildTubeDiagram();
   if (showRoundDiag) drawRoundDiagram();
-  if (showRosette) buildRosette();
+  if (showKnot) buildKnot();
 });
 </script>
 </body>
