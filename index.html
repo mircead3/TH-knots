@@ -54,17 +54,6 @@
     }
     select:focus { border-color: rgba(100, 130, 255, 0.5); }
 
-    .code-display {
-      font-size: 11px;
-      color: rgba(160, 185, 255, 0.55);
-      background: rgba(0, 0, 20, 0.5);
-      border: 1px solid rgba(100, 130, 255, 0.13);
-      border-radius: 5px;
-      padding: 9px 11px;
-      margin-bottom: 16px;
-      line-height: 1.7;
-    }
-
     .b-input {
       width: 100%;
       background: rgba(15, 15, 45, 0.9);
@@ -92,17 +81,6 @@
     }
     .c-btn:hover  { border-color: rgba(100, 130, 255, 0.5); }
     .c-btn.active { background: rgba(100, 130, 255, 0.25); border-color: rgba(100, 130, 255, 0.7); color: #fff; }
-
-    .param-row { display: flex; gap: 8px; margin-bottom: 14px; }
-    .param-col { flex: 1; }
-    .param-col .b-input { margin-bottom: 0; font-size: 16px; }
-    .sublabel {
-      font-size: 9px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: rgba(180, 195, 255, 0.28);
-      margin-bottom: 4px;
-    }
 
     #diagram {
       position: absolute;
@@ -138,19 +116,6 @@
     .view-btn:hover    { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
     .view-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
     input:disabled     { opacity: 0.3; cursor: default; }
-
-    #info {
-      font-size: 11px;
-      color: rgba(180, 200, 255, 0.38);
-      line-height: 1.65;
-      border-top: 1px solid rgba(100, 130, 255, 0.1);
-      padding-top: 14px;
-    }
-    #info .name {
-      color: rgba(140, 170, 255, 0.85);
-      font-size: 13px;
-      margin-bottom: 5px;
-    }
 
     input[type=range] {
       -webkit-appearance: none;
@@ -280,9 +245,6 @@
 <div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <canvas id="diagram"></canvas>
-<div id="zigzagDisplay"
-     style="position:fixed;display:none;bottom:18px;left:310px;font-size:11px;color:rgba(160,185,255,0.55);background:rgba(0,0,20,0.5);border:1px solid rgba(100,130,255,0.13);border-radius:5px;padding:9px 11px;pointer-events:none;z-index:8;"></div>
-<div class="hint">Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan</div>
 
 <script type="importmap">
 {
@@ -696,16 +658,12 @@ function buildTubeDiagram() {
 
 // ── Info panel ─────────────────────────────────────────────────────────────
 const infoName      = document.getElementById('infoName');
-const zigzagDisplay  = document.getElementById('zigzagDisplay');
 
 function updateInfo(B, g = 1) {
   const mod = 2 * currentC * B;
   const parts = [`${2 * currentC * B} bights`];
   if (g > 1) parts.splice(1, 0, `${g} components`);
   infoName.textContent = parts.join('  ·  ');
-  zigzagDisplay.textContent = `mod = ${mod}    ` +
-    ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → ');
-  positionZigzagDisplay();
 }
 
 // ── View state ─────────────────────────────────────────────────────────────
@@ -897,11 +855,9 @@ function onMChange() {
     if (!syncC3List(m)) return;
   }
   setKnotFromUI(m);
-  const B_m = parseInt(document.getElementById('bInput').value);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
-  else if (showRosette) buildRosette();
   else buildRosette();
 }
 
@@ -966,49 +922,6 @@ document.getElementById('thickInput').addEventListener('input', () => {
 });
 
 // ── Diagram view ───────────────────────────────────────────────────────────
-// For each bight segment, returns a Map: segIndex → [{t (integer diagram units), isUnder}]
-function computeDiagramCrossings(bights, n, mod) {
-  const seen = new Map();
-  const cumLen = [0];
-  for (let i = 0; i < n; i++)
-    cumLen.push(cumLen[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
-
-  for (let p = 0; p < n; p++) {
-    const [ax, ay] = bights[p];
-    const dxp = Math.abs(bights[(p+1)%n][1] - ay);
-    if (bights[(p+1)%n][1] - ay <= 0) continue;
-    for (let q = 0; q < n; q++) {
-      const [cx, cy] = bights[q];
-      const dxq = Math.abs(bights[(q+1)%n][1] - cy);
-      if (bights[(q+1)%n][1] - cy >= 0) continue;
-      const diffY = cy - ay;
-      for (let t = 1; t < dxp; t++) {
-        const u = diffY - t;
-        if (u <= 0 || u >= dxq) continue;
-        if ((ax + t) % mod !== (cx + u) % mod) continue;
-        const key = `${(ax+t)%mod},${ay+t}`;
-        if (!seen.has(key))
-          seen.set(key, {p, t, q, u, sP: cumLen[p]+t});
-      }
-    }
-  }
-
-  const list = [...seen.values()].sort((a, b) => a.sP - b.sP);
-  list.forEach((c, i) => { c.pIsOver = (i % 2 === 0); });
-  const flip = needsParityFlip(list.map(c => ({p:c.p, q:c.q, tP:c.t, tQ:c.u, pIsOver:c.pIsOver})));
-  if (flip) list.forEach(c => { c.pIsOver = !c.pIsOver; });
-
-  const perSeg = new Map();
-  list.forEach(({p, t, q, u, pIsOver}) => {
-    if (!perSeg.has(p)) perSeg.set(p, []);
-    if (!perSeg.has(q)) perSeg.set(q, []);
-    perSeg.get(p).push({t,    isUnder: !pIsOver});
-    perSeg.get(q).push({t: u, isUnder:  pIsOver});
-  });
-  perSeg.crossingCount = list.length;
-  return perSeg;
-}
-
 // Multi-component version: result[c] is a Map segIndex → [{t, isUnder}]
 function computeDiagramCrossingsAll(components, mod) {
   const nC = components.length;
@@ -1105,7 +1018,6 @@ function enterDiagramMode() {
     document.getElementById('roundSection').style.display = 'none';
     drawDiagram();
   }
-  positionZigzagDisplay();
 }
 
 function enterBraidMode() {
@@ -1455,10 +1367,6 @@ function drawDiagram() {
   ctx.fillText(ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → '), ox + availDiagW / 2, infoY);
   ctx.textAlign = 'right';
   ctx.fillText(`${allCrossings.crossingCount} crossings`, ox + availDiagW, infoY);
-}
-
-function positionZigzagDisplay() {
-  document.getElementById('zigzagDisplay').style.display = 'none';
 }
 
 function drawRoundDiagram() {
@@ -1860,7 +1768,7 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     document.getElementById('roundToggle').classList.remove('active');
     document.getElementById('xStretchSection').style.display = '';
     document.getElementById('roundSection').style.display = 'none';
-    drawDiagram(); positionZigzagDisplay();
+    drawDiagram();
   }
 });
 document.getElementById('rosetteToggle').addEventListener('click', enterRosetteMode);
@@ -1890,38 +1798,6 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showRosette)) enterRosetteMode();
 });
-
-// Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
-// Call from browser console: findSameYSets()
-window.findSameYSets = function(m) {
-  const B = parseInt(document.getElementById('bInput').value);
-  if (currentC !== 3) { console.log('Switch to C=3 first'); return; }
-  syncC3List(m);
-  const L3 = 3 * m;
-  const groups = new Map();
-  c3ValidList.forEach(([a, b, c, d], idx) => {
-    const s = [L3-c-d, a, d, b, c, L3-a-b];
-    // Canonical form: lexicographically smallest even rotation (by 0, 2, or 4 positions).
-    // Rotations by odd amounts swap ascending/descending roles so are not equivalent flat.
-    const rots = [
-      [s[0],s[1],s[2],s[3],s[4],s[5]],
-      [s[2],s[3],s[4],s[5],s[0],s[1]],
-      [s[4],s[5],s[0],s[1],s[2],s[3]],
-    ];
-    const key = rots.map(r => r.join(',')).sort().at(0);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ idx: idx + 1, a, b, c, d });
-  });
-  let found = 0;
-  for (const [key, entries] of groups) {
-    if (entries.length > 1) {
-      found++;
-      console.log(`seq=[${key}]: ` +
-        entries.map(e => `#${e.idx}(a=${e.a},b=${e.b},c=${e.c},d=${e.d})`).join('  '));
-    }
-  }
-  console.log(`${found} group(s) with rotationally equivalent segment sequence  (${c3ValidList.length} total)`);
-};
 
 document.getElementById('viewSlider').addEventListener('input', () => {
   if (showRosette) buildRosette();
@@ -2052,7 +1928,7 @@ enterRosetteMode();
 // ── Resize ─────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  if (showDiagram) { drawDiagram(); positionZigzagDisplay(); }
+  if (showDiagram) { drawDiagram(); }
   if (showTubeDiag) buildTubeDiagram();
   if (showRoundDiag) drawRoundDiagram();
   if (showRosette) buildRosette();
