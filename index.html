@@ -242,6 +242,7 @@
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
 </div>
 
+<div id="c3ErrorDisplay" style="position:fixed;display:none;top:14px;left:50%;transform:translateX(-50%);max-width:70%;font-size:12px;color:#fff;background:rgba(180,30,30,0.92);border:1px solid rgba(255,120,120,0.7);border-radius:6px;padding:9px 14px;font-family:'SF Mono','Fira Code','Consolas',monospace;z-index:20;text-align:center;"></div>
 <div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <canvas id="diagram"></canvas>
@@ -360,10 +361,12 @@ function generateBights(B) {
   const bights = [];
   const seen = new Set();
   for (let k = 0; k < B; k++) {
-    for (const [x, y] of ZIGZAG) {
-      const bx = (x + k * PERIOD) % mod;
-      const key = `${bx},${y}`;
-      if (seen.has(key)) return bights;
+    for (let j = 0; j < D; j++) {
+      const [x, y] = ZIGZAG[j];
+      const bx  = (x + k * PERIOD) % mod;
+      const dir = Math.sign(ZIGZAG[(j + 1) % D][1] - y); // +1 leaving a v-bight, -1 a ^-bight
+      const key = `${bx},${y},${dir}`;
+      if (seen.has(key)) return bights;  // true closure: same point AND same direction
       seen.add(key);
       bights.push([bx, y]);
     }
@@ -730,6 +733,7 @@ function computeValidC3(m) {
   const savedZZ = ZIGZAG, savedP = PERIOD, savedD = D, savedL = LEADS, savedMY = MAX_Y;
   const L3 = 3 * m, B = m + 1, mod = 6 * B;
   const list = [];
+  const errors = [];
   for (let a = 2; a <= L3 - 4; a++) {
     if (a % 3 === 0) continue;
     // b must have b%3 === a%3 to avoid b%3=0 and (a+b)%3=0; step by 3.
@@ -751,13 +755,23 @@ function computeValidC3(m) {
           if (a + c + d === L3 && a <= d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
-          if (comps[0].length !== mod) continue;  // bight collision: path closes at non-start bight
+          // After the (x,y,dir) closure fix, an early closure here is unexpected
+          // and points to a gap in the conditions above — surface it, don't hide it.
+          if (comps[0].length !== mod)
+            errors.push(`m=${m} a=${a} b=${b} c=${c} d=${d} (${comps[0].length}/${mod} bights)`);
           if (hasAllCrossings(comps, mod)) list.push([a, b, c, d]);
         }
       }
     }
   }
   ZIGZAG = savedZZ; PERIOD = savedP; D = savedD; LEADS = savedL; MAX_Y = savedMY;
+  const errEl = document.getElementById('c3ErrorDisplay');
+  if (errors.length) {
+    errEl.textContent = `⚠ C=3 unexpected bight closure (possible condition bug): ` + errors.join(';  ');
+    errEl.style.display = '';
+  } else {
+    errEl.style.display = 'none';
+  }
   return list;
 }
 
@@ -1023,6 +1037,12 @@ function enterDiagramMode() {
 function enterBraidMode() {
   showDiagram = false; showTubeDiag = true; showRoundDiag = false; showKnot = false;
   activeCamera = orthoCamera; orthoOrbit.enabled = false;
+  // Reset the shared ortho camera — knot mode may have zoomed/rotated it.
+  orthoCamera.zoom = 1;
+  orthoCamera.position.set(0, 0, 20);
+  orthoCamera.up.set(0, 1, 0);
+  orthoCamera.lookAt(0, 0, 0);
+  orthoOrbit.target.set(0, 0, 0);
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('braid');
@@ -1657,27 +1677,41 @@ function buildKnot() {
     const closed   = true;
 
     // STEPS arc samples per sub-segment so CatmullRom follows the polar arc.
-    const STEPS   = 8;
-    const T_rad   = (worldOuterR - worldInnerR) / MAX_Y;
+    const STEPS    = 8;
+    const bightSep = 0.3;  // radial nudge to separate coincident v/^ bights
+
+    // Bight points shared by more than one bight (a v-bight and a ^-bight at the
+    // same (x,y)) get pushed apart so they're visually distinguishable.
+    const ptCount = new Map();
+    for (const [bx, by] of bights) {
+      const key = `${bx},${by}`;
+      ptCount.set(key, (ptCount.get(key) || 0) + 1);
+    }
+    const sharedPts = new Set([...ptCount].filter(([, c]) => c > 1).map(([k]) => k));
 
     const pts = [];
     let rawX = bights[0][0];
+
+    // Per-bight radial displacement: coincident v/^ bights get nudged apart.
+    const bightDisp = bights.map((b, i) => {
+      const d = Math.sign(bights[(i + 1) % n][1] - b[1]);
+      return sharedPts.has(`${b[0]},${b[1]}`) ? d * bightSep : 0;
+    });
 
     for (let i = 0; i < numSegs; i++) {
       const ay     = bights[i][1];
       const by     = bights[(i + 1) % n][1];
       const dx     = Math.abs(by - ay);
-      const dir    = Math.sign(by - ay);
-      // Adaptive shoulder distance: scales with cos(half-angle) so sharp turns
-      // (small T_ang relative to T_rad) get shoulder points closer together.
-      const T_ang  = (worldInnerR + (ay / MAX_Y) * (worldOuterR - worldInnerR)) * (2 * Math.PI / mod);
-      const bightD = 0.1 * Math.sqrt(T_rad / Math.sqrt(T_ang * T_ang + T_rad * T_rad));
       const crosses = (crossMap.get(i) || []).slice().sort((a, b) => a.t - b.t);
 
       const keyFs = [0, ...crosses.map(c => c.t / dx)];
       const keyZs = [0, ...crosses.map(c => c.isUnder ? -delta : delta)];
 
-      const fd = bightD / dx; // fraction offset of shoulder inside each segment
+      // Linear taper of the displacement from this bight to the next, so the
+      // path eases toward a displaced tip instead of spiking to it.
+      const dispA = bightDisp[i];
+      const dispB = bightDisp[(i + 1) % n];
+      const yAt   = f => ay + f * (by - ay) + dispA * (1 - f) + dispB * f;
 
       for (let ki = 0; ki < keyFs.length; ki++) {
         const f0 = keyFs[ki];
@@ -1685,23 +1719,12 @@ function buildKnot() {
         const z0 = keyZs[ki];
         const z1 = ki + 1 < keyFs.length ? keyZs[ki + 1] : 0;
 
-        // Key point: two shoulder points at the bight, or the crossing point.
-        if (ki === 0) {
-          pts.push(toR(rawX - bightD, ay + dir * bightD, 0));
-          pts.push(toR(rawX + bightD, ay + dir * bightD, 0));
-        } else {
-          pts.push(toR(rawX + f0 * dx, ay + f0 * (by - ay), z0));
-        }
+        pts.push(toR(rawX + f0 * dx, yAt(f0), z0));
 
-        // Dense arc: start just after the shoulder/crossing; stop before the
-        // next bight's shoulder so intermediates never overshoot Point A.
-        const f_lo = ki === 0 ? fd : f0;
-        const f_hi = f1 >= 1.0 ? 1.0 - fd : f1;
-        if (f_hi > f_lo) {
-          for (let s = 1; s < STEPS; s++) {
-            const f = f_lo + (f_hi - f_lo) * s / STEPS;
-            pts.push(toR(rawX + f * dx, ay + f * (by - ay), z0 + (z1 - z0) * s / STEPS));
-          }
+        // Dense arc samples up to (but not including) the next key point.
+        for (let s = 1; s < STEPS; s++) {
+          const f = f0 + (f1 - f0) * s / STEPS;
+          pts.push(toR(rawX + f * dx, yAt(f), z0 + (z1 - z0) * s / STEPS));
         }
       }
       rawX += dx;
@@ -1734,7 +1757,7 @@ function buildKnot() {
   if (showBights) {
     const sphereR   = tubeRadius * 0.75;
     const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
-    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
     for (let comp = 0; comp < drawComponents.length; comp++) {
       const bights  = drawComponents[comp];
       const n       = bights.length;
@@ -1746,6 +1769,7 @@ function buildKnot() {
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
         sphere.position.copy(toR(rawX, ay));
         sphere.frustumCulled = false;
+        sphere.renderOrder = 1;  // draw after tubes so depthTest:false shows them on top
         knotGroup.add(sphere);
         rawX += dx;
       }
