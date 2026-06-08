@@ -823,7 +823,7 @@ function syncAB2List(m) {
 
 function getAB() { return [currentA, currentB]; }
 
-function minLeads()  { return currentC === 2 ? 3 : 2; }
+function minLeads()  { return currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
 function minBights() { return currentC === 1 ? 2 : 1; }
 
 function rebuildKnot() {
