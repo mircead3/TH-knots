@@ -738,8 +738,10 @@ function computeValidC3(m) {
           if (d % 3 === 0) continue;
           if ((b % 3 === 0 || (c + d) % 3 === 0) && c + d > b) continue;
           if (a + b === c + d && b < d) continue;
-          if (a + b + c === L3 && a + c + d === L3 && c < d) continue;
-          if (a + c + d === L3 && a <= d) continue;
+          // When a+c+d = 3m: require (a > d & b >= c) or (a = d & b > c & a = b).
+          if (a + c + d === L3 && !((a > d && b >= c) || (a === d && b > c && a === b))) continue;
+          // When a+b+c = 3m: require a >= d.
+          if (a + b + c === L3 && a < d) continue;
           setKnotDefC3(m, a, b, c, d);
           const comps = generateAllComponents(B);
           // After the (x,y,dir) closure fix, an early closure here is unexpected
@@ -1809,6 +1811,41 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showKnot)) enterKnotMode();
 });
+
+// Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
+// Call from browser console: findSameYSets(m)
+window.findSameYSets = function(m) {
+  if (currentC !== 3) { console.log('Switch to C=3 first'); return; }
+  syncC3List(m);
+  const L3 = 3 * m;
+  const groups = new Map();
+  // Even rotations (0,2,4) preserve ascending/descending roles; odd ones swap
+  // them, so are not flat-equivalent.  Path reversal (reverse the sequence) is
+  // also a symmetry — the same closed zigzag traversed backwards — so include
+  // the even rotations of the reversed sequence too.
+  const evenRots = a => [
+    [a[0],a[1],a[2],a[3],a[4],a[5]],
+    [a[2],a[3],a[4],a[5],a[0],a[1]],
+    [a[4],a[5],a[0],a[1],a[2],a[3]],
+  ];
+  c3ValidList.forEach(([a, b, c, d], idx) => {
+    const s   = [L3-c-d, a, d, b, c, L3-a-b];
+    const rev = [s[5],s[4],s[3],s[2],s[1],s[0]];
+    const cands = [...evenRots(s), ...evenRots(rev)];
+    const key = cands.map(r => r.join(',')).sort().at(0);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ idx: idx + 1, a, b, c, d });
+  });
+  let found = 0;
+  for (const [key, entries] of groups) {
+    if (entries.length > 1) {
+      found++;
+      console.log(`seq=[${key}]: ` +
+        entries.map(e => `#${e.idx}(a=${e.a},b=${e.b},c=${e.c},d=${e.d})`).join('  '));
+    }
+  }
+  console.log(`${found} group(s) with rotationally equivalent segment sequence  (${c3ValidList.length} total)`);
+};
 
 document.getElementById('viewSlider').addEventListener('input', () => {
   if (showKnot) buildKnot();
