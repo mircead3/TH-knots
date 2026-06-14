@@ -196,7 +196,7 @@
   <div id="knotSliders">
     <div id="flatCylSection">
       <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
-        <span>Flat</span><span>Cylinder</span>
+        <span>Flat</span><span>Cylinder</span><span>Flat'</span>
       </div>
       <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
              style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
@@ -1631,17 +1631,34 @@ function buildKnot() {
   orthoCamera.bottom = -camR;
   orthoCamera.updateProjectionMatrix();
 
-  const vt     = parseFloat(document.getElementById('viewSlider').value);
+  // Slider: 0 = flat, 0.5 = cylinder, 1 = flat again.  vt is the cylinder amount
+  // (0→1→0).  The right half (rev) unrolls the cylinder from the opposite base:
+  // the radius mapping reverses (MAX_Y - y) so the inner and outer rings swap,
+  // giving the opposite flat knot.  theta is NOT mirrored, so the strands never
+  // collapse to a line and the cylinder never tumbles through 3D — it just opens
+  // back into the plane the other way.  At s=0.5 vt=1, so the flat term is
+  // weighted to zero and the rev switch is continuous.
+  const sVal   = parseFloat(document.getElementById('viewSlider').value);
+  const vt      = 1 - Math.abs(2 * sVal - 1);
+  const rev     = sVal > 0.5;
   const h_half = worldOuterR - worldInnerR; // cylinder half-height
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
-    const r_flat = worldInnerR + (y / MAX_Y) * (worldOuterR - worldInnerR);
-    const r      = r_flat * (1 - vt) + worldOuterR * vt + z * vt;   // crossing radial at vt=1
+    const yR     = rev ? (MAX_Y - y) : y;          // swap inner/outer on the right
+    const r_flat = worldInnerR + (yR / MAX_Y) * (worldOuterR - worldInnerR);
+    // Flat state: radius r_flat in plane, crossing offset axial (+z).
+    // Cylinder state: fixed outer radius, crossing offset radial; height from y.
+    const fx = r_flat * Math.cos(theta) + xCenter;
+    const fy = r_flat * Math.sin(theta);
+    const fz = z;
+    const cx = (worldOuterR + z) * Math.cos(theta);
+    const cy = (worldOuterR + z) * Math.sin(theta);
+    const cz = (y / MAX_Y - 0.5) * 2 * h_half;
     return new THREE.Vector3(
-      r * Math.cos(theta) + xCenter * (1 - vt),
-      r * Math.sin(theta),
-      (y / MAX_Y - 0.5) * 2 * h_half * vt + z * (1 - vt)           // crossing axial at vt=0
+      fx * (1 - vt) + cx * vt,
+      fy * (1 - vt) + cy * vt,
+      fz * (1 - vt) + cz * vt
     );
   };
 
