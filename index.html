@@ -240,6 +240,7 @@
     <button id="bightsToggle"    class="view-btn">Bights</button>
   </div>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
+  <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
 </div>
 
 <div id="c3ErrorDisplay" style="position:fixed;display:none;top:14px;left:50%;transform:translateX(-50%);max-width:70%;font-size:12px;color:#fff;background:rgba(180,30,30,0.92);border:1px solid rgba(255,120,120,0.7);border-radius:6px;padding:9px 14px;font-family:'SF Mono','Fira Code','Consolas',monospace;z-index:20;text-align:center;"></div>
@@ -255,6 +256,8 @@
   }
 }
 </script>
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 
 <script type="module">
 import * as THREE from 'three';
@@ -1001,7 +1004,6 @@ function enterDiagramMode() {
   setViewButtons('diag');
   document.getElementById('knotSliders').style.display = 'none';
   document.getElementById('diagRoundRow').style.display = '';
-  document.getElementById('downloadBtn').style.display = '';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = true;
   const ct = document.getElementById('componentToggle');
@@ -1013,12 +1015,16 @@ function enterDiagramMode() {
     document.getElementById('xStretchSection').style.display = 'none';
     document.getElementById('roundSection').style.display = '';
     document.getElementById('outerRadiusSection').style.display = '';
+    document.getElementById('downloadBtn').style.display = 'none';
+    document.getElementById('pdfDownloadBtn').style.display = '';
     drawRoundDiagram();
   } else {
     showDiagram = true;
     document.getElementById('roundToggle').classList.remove('active');
     document.getElementById('xStretchSection').style.display = '';
     document.getElementById('roundSection').style.display = 'none';
+    document.getElementById('downloadBtn').style.display = '';
+    document.getElementById('pdfDownloadBtn').style.display = 'none';
     drawDiagram();
   }
 }
@@ -1040,7 +1046,8 @@ function enterBraidMode() {
   document.getElementById('knotSliders').style.display = '';
   document.getElementById('xStretchSection').style.display = '';
   document.getElementById('roundSection').style.display = 'none';
-  document.getElementById('downloadBtn').style.display = '';
+  document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = true;
   document.getElementById('bightsToggle').disabled = false;
   const ct = document.getElementById('componentToggle');
@@ -1594,6 +1601,7 @@ function enterKnotMode() {
   document.getElementById('roundSection').style.display = '';
   document.getElementById('outerRadiusSection').style.display = 'none';
   document.getElementById('downloadBtn').style.display = 'none';
+  document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
   document.getElementById('bightsToggle').disabled = false;
   buildKnot();
@@ -1792,12 +1800,16 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     document.getElementById('xStretchSection').style.display = 'none';
     document.getElementById('roundSection').style.display = '';
     document.getElementById('outerRadiusSection').style.display = '';
+    document.getElementById('downloadBtn').style.display = 'none';
+    document.getElementById('pdfDownloadBtn').style.display = '';
     drawRoundDiagram();
   } else {
     showDiagram = true; showRoundDiag = false;
     document.getElementById('roundToggle').classList.remove('active');
     document.getElementById('xStretchSection').style.display = '';
     document.getElementById('roundSection').style.display = 'none';
+    document.getElementById('downloadBtn').style.display = '';
+    document.getElementById('pdfDownloadBtn').style.display = 'none';
     drawDiagram();
   }
 });
@@ -1976,6 +1988,245 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
   a.href = url; a.download = `knot_${m}L_${B}B.txt`;
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+});
+
+// ── Round diagram PDF export ─────────────────────────────────────────────────
+// Renders the round diagram (grid, coordinates, bights) to an offscreen canvas,
+// but draws only the path portions whose enclosing crossing is "over" — or
+// "under" when swap=true.  Consecutive crossings along the path are separated by
+// a divider point: the bight between them if the path passes through one,
+// otherwise the midpoint between the two crossings.
+const PDF_SS = 2;   // supersampling: render at 2x, place in PDF at logical size
+
+function renderRoundExportPage(swap) {
+  const B      = parseInt(document.getElementById('bInput').value);
+  const mod    = 2 * currentC * B;
+  const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
+  const outerR = parseFloat(document.getElementById('roundOuterSlider').value);
+
+  const margin = 46;                              // room for x/y labels
+  const size   = Math.ceil(2 * (outerR + margin));
+  const canvas = document.createElement('canvas');
+  canvas.width = size * PDF_SS; canvas.height = size * PDF_SS;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(PDF_SS, PDF_SS);                      // draw in logical coordinates
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+
+  const cx = size / 2, cy = size / 2;
+  // Page 2 (swap) mirrors the GEOMETRY about the vertical centerline (the line
+  // through rawX=0 at the top), so when printed on the back of the sheet the
+  // points register with page 1 through the paper.  mx() flips an x coordinate;
+  // labels keep their normal glyphs (only their position is mirrored) so they
+  // stay readable on the reverse side.
+  const mx = (x) => swap ? 2 * cx - x : x;
+  const toC = (rawX, y) => {
+    const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
+    const r = innerR + (y / MAX_Y) * (outerR - innerR);
+    return [mx(cx + r * Math.cos(theta)), cy + r * Math.sin(theta)];
+  };
+
+  // Grid: concentric circles + radial lines (dark-on-white print palette)
+  const zigzagYs = new Set([0, ...ZIGZAG.map(p => p[1])]);
+  ctx.strokeStyle = 'rgba(70,100,200,0.45)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y <= MAX_Y; y++) {
+    const r = innerR + (y / MAX_Y) * (outerR - innerR);
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke();
+  }
+  for (let x = 0; x < mod; x++) {
+    const [x1, y1] = toC(x, 0);
+    const [x2, y2] = toC(x, MAX_Y);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#2c4a8a';
+  for (let x = 0; x < mod; x++) {
+    const theta = (x / mod) * 2 * Math.PI - Math.PI / 2;
+    const ar = outerR + 16;
+    ctx.fillText(String(x), mx(cx + ar * Math.cos(theta)), cy + ar * Math.sin(theta) + 4);
+  }
+  ctx.textAlign = 'left';
+  for (let y = 0; y <= MAX_Y; y++) {
+    ctx.fillStyle = zigzagYs.has(y) ? '#9a6a00' : '#566392';
+    const [lx, ly] = toC(0, y);
+    ctx.fillText(String(y), lx + 5, ly + 4);
+  }
+
+  const components   = generateAllComponents(B);
+  const g            = components.length;
+  const allCrossings = computeDiagramCrossingsAll(components, mod);
+  const drawComponents = componentMode ? components.slice(0, 1) : components;
+
+  for (let comp = 0; comp < drawComponents.length; comp++) {
+    const bights   = drawComponents[comp];
+    const crossMap = allCrossings[comp];
+    const n        = bights.length;
+    const numSegs  = componentMode ? D : n;
+    const numZigsR = Math.max(1, Math.floor(numSegs / D));
+
+    // Per-segment geometry + cumulative path length (raw units).
+    const segCum = [0];
+    const segGeo = [];
+    let rawX = bights[0][0];
+    for (let i = 0; i < numSegs; i++) {
+      const ay = bights[i][1], by = bights[(i + 1) % n][1];
+      const dx = Math.abs(by - ay);
+      segGeo.push({ rawX, ay, by, dx });
+      segCum.push(segCum[i] + dx);
+      rawX += dx;
+    }
+    const totalLen = segCum[numSegs];
+    if (totalLen === 0) continue;
+
+    // Ordered crossings along the path: global position p + isOver flag.
+    const crs = [];
+    for (let i = 0; i < numSegs; i++)
+      for (const c of (crossMap.get(i) || []))
+        crs.push({ p: segCum[i] + c.t, isOver: !c.isUnder });
+    if (!crs.length) continue;
+    crs.sort((a, b) => a.p - b.p);
+    const nc = crs.length;
+
+    const bightPos = []; for (let i = 0; i < numSegs; i++) bightPos.push(segCum[i]);
+
+    const locate = (p) => {
+      const pm = ((p % totalLen) + totalLen) % totalLen;
+      let i = 0;
+      while (i < numSegs - 1 && pm >= segCum[i + 1]) i++;
+      return { i, pm };
+    };
+    const xyAt = (p) => {
+      const { i, pm } = locate(p);
+      const seg = segGeo[i];
+      const f = seg.dx ? (pm - segCum[i]) / seg.dx : 0;
+      return toC(seg.rawX + f * seg.dx, seg.ay + f * (seg.by - seg.ay));
+    };
+
+    // Divider between crossing j and j+1 (cyclic, unwrapped > crs[j].p):
+    // the bight in the gap nearest the midpoint, else the midpoint.
+    // Returns {pos, bight} so midpoint dividers can be marked with a circle.
+    const divider = (j) => {
+      const a = crs[j].p;
+      let b = crs[(j + 1) % nc].p; if (j === nc - 1) b += totalLen;
+      const mid = (a + b) / 2;
+      let best = null, bestD = Infinity;
+      for (const bp0 of bightPos)
+        for (const bp of [bp0, bp0 + totalLen])
+          if (bp > a + 1e-6 && bp < b - 1e-6) {
+            const d = Math.abs(bp - mid);
+            if (d < bestD) { bestD = d; best = bp; }
+          }
+      return best !== null ? { pos: best, bight: true } : { pos: mid, bight: false };
+    };
+
+    // Small open circle marking a midpoint divider (a "new point").
+    const drawEndCircle = (p) => {
+      const [px, py] = xyAt(p);
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff'; ctx.fill();
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1.3; ctx.stroke();
+    };
+    const endCircles = [];   // collected, drawn on top after all arcs
+
+    // Stroke the path between unwrapped positions, inserting bight corners.
+    const strokeRange = (pStart, pEnd, color) => {
+      const breaks = [pStart, pEnd];
+      const base = Math.floor(pStart / totalLen) * totalLen;
+      for (let k = -1; k <= 2; k++)
+        for (let i = 0; i <= numSegs; i++) {
+          const bp = base + k * totalLen + segCum[i];
+          if (bp > pStart + 1e-6 && bp < pEnd - 1e-6) breaks.push(bp);
+        }
+      breaks.sort((u, v) => u - v);
+      ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      let started = false;
+      for (let bi = 0; bi < breaks.length - 1; bi++) {
+        const a = breaks[bi], b = breaks[bi + 1];
+        const sub = Math.max(2, Math.ceil((b - a) * 8));
+        for (let s = (bi === 0 ? 0 : 1); s <= sub; s++) {
+          const [px, py] = xyAt(a + (b - a) * s / sub);
+          if (!started) { ctx.moveTo(px, py); started = true; }
+          else ctx.lineTo(px, py);
+        }
+      }
+      ctx.stroke();
+    };
+
+    for (let j = 0; j < nc; j++) {
+      if ((swap ? !crs[j].isOver : crs[j].isOver) === false) continue;
+      const cp = crs[j].p;
+      const dS = divider((j - 1 + nc) % nc);
+      const dE = divider(j);
+      let dStart = dS.pos, dEnd = dE.pos;
+      while (dStart > cp) dStart -= totalLen;
+      while (dEnd   < cp) dEnd   += totalLen;
+      const zi  = Math.floor(locate(cp).i / D);
+      const hue = `hsl(${(comp / g + zi / numZigsR / g) * 360},85%,45%)`;
+      strokeRange(dStart, dEnd, hue);
+      if (!dS.bight) endCircles.push(dStart);   // mark non-bight ends on top
+      if (!dE.bight) endCircles.push(dEnd);
+    }
+    for (const p of endCircles) drawEndCircle(p);
+  }
+
+  // Bight dots and labels (same as drawRoundDiagram)
+  for (let comp = 0; comp < (componentMode ? 1 : g); comp++) {
+    const bights = components[comp];
+    const n = bights.length;
+    const numBights = componentMode ? D + 1 : n;
+    const byY = new Map();
+    for (let j = 0; j < n; j++) {
+      const y = bights[j][1];
+      if (!byY.has(y)) byY.set(y, []);
+      byY.get(y).push(j);
+    }
+    const bightLabel = new Array(n);
+    for (const group of byY.values()) {
+      group.sort((a, b) => bights[a][0] - bights[b][0]);
+      group.forEach((j, idx) => { bightLabel[j] = idx; });
+    }
+    ctx.textAlign = 'center';
+    for (let j = 0; j < numBights; j++) {
+      const [x, y] = bights[j];
+      const [bsx, bsy] = toC(x, y);
+      const prevY = bights[(j - 1 + n) % n][1];
+      const nextY = bights[(j + 1) % n][1];
+      const isTop = prevY < y && nextY < y;
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(bsx, bsy, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '11px monospace';
+      ctx.fillStyle = '#7a5500';
+      ctx.fillText(String(bightLabel[j]), bsx, isTop ? bsy + 15 : bsy - 9);
+    }
+  }
+
+  // Center registration mark (coincides on both pages — it's on the mirror axis).
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - 7, cy); ctx.lineTo(cx + 7, cy);
+  ctx.moveTo(cx, cy - 7); ctx.lineTo(cx, cy + 7);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.stroke();
+
+  return canvas;
+}
+
+document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
+  if (!window.jspdf || !window.jspdf.jsPDF) { alert('PDF library failed to load.'); return; }
+  const { jsPDF } = window.jspdf;
+  const page1 = renderRoundExportPage(false);
+  const page2 = renderRoundExportPage(true);
+  const w = page1.width / PDF_SS, h = page1.height / PDF_SS;
+  const pdf = new jsPDF({ unit: 'pt', format: [w, h] });
+  pdf.addImage(page1.toDataURL('image/png'), 'PNG', 0, 0, w, h);
+  pdf.addPage([w, h]);
+  pdf.addImage(page2.toDataURL('image/png'), 'PNG', 0, 0, w, h);
+  const m = parseInt(document.getElementById('mInput').value);
+  const B = parseInt(document.getElementById('bInput').value);
+  pdf.save(`knot_${m}L_${B}B_round.pdf`);
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
