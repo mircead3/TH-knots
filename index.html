@@ -1997,6 +1997,9 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
 // a divider point: the bight between them if the path passes through one,
 // otherwise the midpoint between the two crossings.
 const PDF_SS = 2;   // supersampling: render at 2x, place in PDF at logical size
+// US Letter page (pt) with 0.5" left/right margins; diagram fits the content width.
+const PAGE_W = 612, PAGE_H = 792, SIDE_MARGIN = 36;
+const CONTENT_W = PAGE_W - 2 * SIDE_MARGIN;          // 540 pt = 7.5"
 
 function renderRoundExportPage(swap) {
   const B      = parseInt(document.getElementById('bInput').value);
@@ -2004,7 +2007,7 @@ function renderRoundExportPage(swap) {
   const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
   const outerR = parseFloat(document.getElementById('roundOuterSlider').value);
 
-  const margin = 46;                              // room for x/y labels
+  const margin = 64;                              // room for x/y labels + caption
   const size   = Math.ceil(2 * (outerR + margin));
   const canvas = document.createElement('canvas');
   canvas.width = size * PDF_SS; canvas.height = size * PDF_SS;
@@ -2058,6 +2061,8 @@ function renderRoundExportPage(swap) {
   const allCrossings = computeDiagramCrossingsAll(components, mod);
   const drawComponents = componentMode ? components.slice(0, 1) : components;
 
+  let pathLenPx = 0;   // total drawn-path length in logical px (= PDF points)
+
   for (let comp = 0; comp < drawComponents.length; comp++) {
     const bights   = drawComponents[comp];
     const crossMap = allCrossings[comp];
@@ -2078,6 +2083,18 @@ function renderRoundExportPage(swap) {
     }
     const totalLen = segCum[numSegs];
     if (totalLen === 0) continue;
+
+    // Accumulate the geometric (spiral) length of the full drawn path. The
+    // mirror on page 2 is an isometry, so this is identical on both pages.
+    for (const s of segGeo) {
+      const sub = Math.max(8, Math.ceil(s.dx * 16));
+      let [px, py] = toC(s.rawX, s.ay);
+      for (let k = 1; k <= sub; k++) {
+        const f = k / sub;
+        const [qx, qy] = toC(s.rawX + f * s.dx, s.ay + f * (s.by - s.ay));
+        pathLenPx += Math.hypot(qx - px, qy - py); px = qx; py = qy;
+      }
+    }
 
     // Ordered crossings along the path: global position p + isOver flag.
     const crs = [];
@@ -2123,14 +2140,13 @@ function renderRoundExportPage(swap) {
     // Small open circle marking a midpoint divider (a "new point").
     const drawEndCircle = (p) => {
       const [px, py] = xyAt(p);
-      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(px, py, 6.5, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff'; ctx.fill();
-      ctx.strokeStyle = '#333'; ctx.lineWidth = 1.3; ctx.stroke();
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1.6; ctx.stroke();
     };
-    const endCircles = [];   // collected, drawn on top after all arcs
 
     // Stroke the path between unwrapped positions, inserting bight corners.
-    const strokeRange = (pStart, pEnd, color) => {
+    const strokeRange = (pStart, pEnd, color, width) => {
       const breaks = [pStart, pEnd];
       const base = Math.floor(pStart / totalLen) * totalLen;
       for (let k = -1; k <= 2; k++)
@@ -2139,7 +2155,7 @@ function renderRoundExportPage(swap) {
           if (bp > pStart + 1e-6 && bp < pEnd - 1e-6) breaks.push(bp);
         }
       breaks.sort((u, v) => u - v);
-      ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+      ctx.strokeStyle = color; ctx.lineWidth = width;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.beginPath();
       let started = false;
@@ -2155,21 +2171,31 @@ function renderRoundExportPage(swap) {
       ctx.stroke();
     };
 
-    for (let j = 0; j < nc; j++) {
-      if ((swap ? !crs[j].isOver : crs[j].isOver) === false) continue;
+    const THICK = 6, THIN = 1.4;
+    // Draw the arc around crossing j with the given line width.
+    const drawArcFor = (j, width) => {
       const cp = crs[j].p;
-      const dS = divider((j - 1 + nc) % nc);
-      const dE = divider(j);
-      let dStart = dS.pos, dEnd = dE.pos;
+      let dStart = divider((j - 1 + nc) % nc).pos;
+      let dEnd   = divider(j).pos;
       while (dStart > cp) dStart -= totalLen;
       while (dEnd   < cp) dEnd   += totalLen;
       const zi  = Math.floor(locate(cp).i / D);
       const hue = `hsl(${(comp / g + zi / numZigsR / g) * 360},85%,45%)`;
-      strokeRange(dStart, dEnd, hue);
-      if (!dS.bight) endCircles.push(dStart);   // mark non-bight ends on top
-      if (!dE.bight) endCircles.push(dEnd);
+      strokeRange(dStart, dEnd, hue, width);
+    };
+
+    // Opposite-side arcs first (thin), then this-side arcs (thick) on top so
+    // the over/under relationship reads correctly at the crossings.
+    for (let j = 0; j < nc; j++)
+      if ((swap ? !crs[j].isOver : crs[j].isOver) === false) drawArcFor(j, THIN);
+    for (let j = 0; j < nc; j++)
+      if ((swap ? !crs[j].isOver : crs[j].isOver) === true)  drawArcFor(j, THICK);
+
+    // Open circles at every non-bight divider (the added midpoints).
+    for (let j = 0; j < nc; j++) {
+      const d = divider(j);
+      if (!d.bight) drawEndCircle(d.pos);
     }
-    for (const p of endCircles) drawEndCircle(p);
   }
 
   // Bight dots and labels (same as drawRoundDiagram)
@@ -2196,20 +2222,36 @@ function renderRoundExportPage(swap) {
       const nextY = bights[(j + 1) % n][1];
       const isTop = prevY < y && nextY < y;
       ctx.fillStyle = '#111';
-      ctx.beginPath(); ctx.arc(bsx, bsy, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(bsx, bsy, 7.5, 0, Math.PI * 2); ctx.fill();
       ctx.font = '11px monospace';
       ctx.fillStyle = '#7a5500';
-      ctx.fillText(String(bightLabel[j]), bsx, isTop ? bsy + 15 : bsy - 9);
+      ctx.fillText(String(bightLabel[j]), bsx, isTop ? bsy + 19 : bsy - 13);
     }
   }
 
   // Center registration mark (coincides on both pages — it's on the mirror axis).
-  ctx.strokeStyle = '#111'; ctx.lineWidth = 1;
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(cx - 7, cy); ctx.lineTo(cx + 7, cy);
-  ctx.moveTo(cx, cy - 7); ctx.lineTo(cx, cy + 7);
+  ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 12, cy);
+  ctx.moveTo(cx, cy - 12); ctx.lineTo(cx, cy + 12);
   ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 6.5, 0, Math.PI * 2); ctx.stroke();
+
+  // String-length caption (identical on both pages; centered on the mirror axis
+  // so it's not affected by the page-2 mirror and reads normally on both sides).
+  // The diagram is scaled to CONTENT_W on the page, so printed pt = px * ptPerPx;
+  // ratio K is scale-independent, the inch figures assume printing at 100%.
+  const ptPerPx = CONTENT_W / size;                    // logical px -> printed pt
+  const K       = pathLenPx / (2 * outerR);            // string per outer diameter
+  const odIn    = (2 * outerR) * ptPerPx / 72;         // outer ⌀ in inches at 100%
+  const strIn   = pathLenPx * ptPerPx / 72;            // string in inches at 100%
+  ctx.fillStyle = '#111'; ctx.textAlign = 'center';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText(`String ≈ ${K.toFixed(1)} × (outer circle diameter)`,
+               cx, size - 30);
+  ctx.font = '11px monospace';
+  ctx.fillText(`At 100% print: outer ⌀ = ${odIn.toFixed(1)} in  →  string ≈ ${strIn.toFixed(1)} in`,
+               cx, size - 13);
 
   return canvas;
 }
@@ -2219,11 +2261,16 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
   const { jsPDF } = window.jspdf;
   const page1 = renderRoundExportPage(false);
   const page2 = renderRoundExportPage(true);
-  const w = page1.width / PDF_SS, h = page1.height / PDF_SS;
-  const pdf = new jsPDF({ unit: 'pt', format: [w, h] });
-  pdf.addImage(page1.toDataURL('image/png'), 'PNG', 0, 0, w, h);
-  pdf.addPage([w, h]);
-  pdf.addImage(page2.toDataURL('image/png'), 'PNG', 0, 0, w, h);
+  // Scale the square diagram to the content width and center it on a Letter page,
+  // with 0.5" left/right margins.  The diagram center lands on the page's
+  // vertical centerline, so the two pages register for duplex printing.
+  const dim = CONTENT_W;
+  const x   = SIDE_MARGIN;
+  const y   = (PAGE_H - dim) / 2;
+  const pdf = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H] });
+  pdf.addImage(page1.toDataURL('image/png'), 'PNG', x, y, dim, dim);
+  pdf.addPage([PAGE_W, PAGE_H]);
+  pdf.addImage(page2.toDataURL('image/png'), 'PNG', x, y, dim, dim);
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   pdf.save(`knot_${m}L_${B}B_round.pdf`);
