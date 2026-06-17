@@ -239,6 +239,9 @@
     <button id="componentToggle" class="view-btn">Solo</button>
     <button id="bightsToggle"    class="view-btn">Bights</button>
   </div>
+  <div class="btn-row">
+    <button id="flipToggle" class="view-btn">Flip</button>
+  </div>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
   <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
 </div>
@@ -666,9 +669,10 @@ function buildTubeDiagram() {
 const infoName      = document.getElementById('infoName');
 
 function updateInfo(B, g = 1) {
-  const mod = 2 * currentC * B;
   const parts = [`${2 * currentC * B} bights`];
-  if (g > 1) parts.splice(1, 0, `${g} components`);
+  const nd = countDistinctKnots();
+  if (nd > 0) parts.push(`${nd} knots`);
+  if (g > 1) parts.push(`${g} components`);
   infoName.textContent = parts.join('  ·  ');
 }
 
@@ -791,6 +795,7 @@ function updateC3Display() {
   const pd = document.getElementById('c3ParamDisplay');
   pd.style.display = currentC === 3 ? '' : 'none';
   pd.textContent = `a=${c3A}  b=${c3B}  c=${c3C}  d=${c3D}`;
+  updateFlipButton();
 }
 
 function validPairs(m) {
@@ -808,6 +813,7 @@ function updateAB2Display() {
   const pd = document.getElementById('abParamDisplay');
   pd.style.display = currentC === 2 ? '' : 'none';
   pd.textContent = `a=${currentA}  b=${currentB}`;
+  updateFlipButton();
 }
 
 function syncAB2List(m) {
@@ -889,6 +895,7 @@ function setComplexity(c) {
   document.getElementById('c3Section').style.display     = c === 3 ? '' : 'none';
   document.getElementById('abParamDisplay').style.display  = c === 2 ? '' : 'none';
   document.getElementById('c3ParamDisplay').style.display = c === 3 ? '' : 'none';
+  document.getElementById('flipToggle').disabled = (c === 1);   // no parameters to flip
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
@@ -926,6 +933,92 @@ document.getElementById('thickInput').addEventListener('input', () => {
   else if (showKnot) buildKnot();
   else buildKnot();
 });
+
+// ── Flip ───────────────────────────────────────────────────────────────────
+// Reflect the flat knot vertically (y → MAX_Y − y): upside-down in the flat
+// diagram/braid, inner/outer swapped in the round/knot views (the opposite end
+// of the flat↔cylinder slider).  The flipped knot is a different valid
+// combination; we recompute it and point the counter at the matching list entry
+// so a second press returns to the original.  Disabled for C=1 (no parameters).
+//
+// Canonical signature of a C=3 segment sequence under the same equivalence used
+// by findSameYSets: even rotations (preserve asc/desc) of the sequence and of
+// its reversal (the closed zigzag traversed backwards).
+function c3CanonKey(seq) {
+  const evenRots = a => [
+    [a[0],a[1],a[2],a[3],a[4],a[5]],
+    [a[2],a[3],a[4],a[5],a[0],a[1]],
+    [a[4],a[5],a[0],a[1],a[2],a[3]],
+  ];
+  const rev = [seq[5],seq[4],seq[3],seq[2],seq[1],seq[0]];
+  return [...evenRots(seq), ...evenRots(rev)].map(r => r.join(',')).sort()[0];
+}
+
+// C=3 segment sequences for an entry and its vertical flip (odd rotation).
+function c3Seq(a, b, c, d, m)      { const L3 = 3*m; return [L3-c-d, a, d, b, c, L3-a-b]; }
+function c3FlipSeq(a, b, c, d, m)  { const L3 = 3*m; return [a, d, b, c, L3-a-b, L3-c-d]; }
+
+// True when flipping leaves the knot unchanged (flip would be a no-op).
+function flipIsNoOp() {
+  if (currentC === 1) return true;
+  const m = parseInt(document.getElementById('mInput').value);
+  if (currentC === 2) return ab2ValidList.length === 0 || currentA === currentB;
+  if (c3ValidList.length === 0) return true;
+  return c3CanonKey(c3Seq(c3A, c3B, c3C, c3D, m)) ===
+         c3CanonKey(c3FlipSeq(c3A, c3B, c3C, c3D, m));
+}
+
+function updateFlipButton() {
+  document.getElementById('flipToggle').disabled = flipIsNoOp();
+}
+
+// Number of distinct knots/links for the current C and L: flip pairs count once,
+// self-flip (flip-disabled) knots count once → (N + selfFlipCount) / 2.
+function countDistinctKnots() {
+  if (currentC === 1) return 1;
+  const m = parseInt(document.getElementById('mInput').value);
+  if (currentC === 2) {
+    const N = ab2ValidList.length;
+    if (N === 0) return 0;
+    const S = ab2ValidList.filter(([a, b]) => a === b).length;
+    return (N + S) / 2;
+  }
+  const N = c3ValidList.length;
+  if (N === 0) return 0;
+  let S = 0;
+  for (const [a, b, c, d] of c3ValidList)
+    if (c3CanonKey(c3Seq(a, b, c, d, m)) === c3CanonKey(c3FlipSeq(a, b, c, d, m))) S++;
+  return (N + S) / 2;
+}
+
+function flipKnot() {
+  if (currentC === 1) return;
+  const m = parseInt(document.getElementById('mInput').value);
+  if (isNaN(m)) return;
+  if (currentC === 2) {
+    if (ab2ValidList.length === 0) return;
+    // Vertical flip of C=2 swaps a and b; the (b,a) entry is in the list.
+    const na = currentB, nb = currentA;
+    const idx = ab2ValidList.findIndex(([x, y]) => x === na && y === nb);
+    if (idx < 0) return;
+    ab2ValidIdx = idx; currentA = na; currentB = nb;
+    updateAB2Display();
+  } else {
+    if (c3ValidList.length === 0) return;
+    const L3 = 3 * m;
+    // Flip = reinterpret the segment sequence ascending-first after reflection,
+    // i.e. an odd rotation of s = [L3-c-d, a, d, b, c, L3-a-b]: rotate by one.
+    const flippedSeq = [c3A, c3D, c3B, c3C, L3 - c3A - c3B, L3 - c3C - c3D];
+    const keyFlip = c3CanonKey(flippedSeq);
+    const idx = c3ValidList.findIndex(([A, B, C, D]) =>
+      c3CanonKey([L3 - C - D, A, D, B, C, L3 - A - B]) === keyFlip);
+    if (idx < 0) return;
+    c3ValidIdx = idx; [c3A, c3B, c3C, c3D] = c3ValidList[idx];
+    updateC3Display();
+  }
+  rebuildKnot();
+}
+document.getElementById('flipToggle').addEventListener('click', flipKnot);
 
 // ── Diagram view ───────────────────────────────────────────────────────────
 // Multi-component version: result[c] is a Map segIndex → [{t, isUnder}]
