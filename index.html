@@ -179,6 +179,7 @@
 
   <div class="label">Leads</div>
   <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
+  <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;">— knots</div>
 
   <div class="label">Bights</div>
   <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
@@ -237,11 +238,10 @@
   </div>
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
-    <button id="bightsToggle"    class="view-btn">Bights</button>
+    <button id="flipToggle"      class="view-btn">Flip</button>
   </div>
-  <div class="btn-row">
-    <button id="flipToggle" class="view-btn">Flip</button>
-  </div>
+  <!-- Bights view kept for future debugging; hidden from the UI -->
+  <button id="bightsToggle" class="view-btn" style="display:none;">Bights</button>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
   <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
 </div>
@@ -669,11 +669,16 @@ function buildTubeDiagram() {
 const infoName      = document.getElementById('infoName');
 
 function updateInfo(B, g = 1) {
-  const parts = [`${2 * currentC * B} bights`];
-  const nd = countDistinctKnots();
-  if (nd > 0) parts.push(`${nd} knots`);
+  const parts = [`${2 * currentC * B} bights total`];
   if (g > 1) parts.push(`${g} components`);
   infoName.textContent = parts.join('  ·  ');
+}
+
+// Number of different knots/links for the current C and L, shown under Leads.
+function updateKnotCount() {
+  const n = countDistinctKnots();
+  document.getElementById('knotCountDisplay').textContent =
+    `${n} knot${n === 1 ? '' : 's'}`;
 }
 
 // ── View state ─────────────────────────────────────────────────────────────
@@ -796,6 +801,7 @@ function updateC3Display() {
   pd.style.display = currentC === 3 ? '' : 'none';
   pd.textContent = `a=${c3A}  b=${c3B}  c=${c3C}  d=${c3D}`;
   updateFlipButton();
+  updateKnotCount();
 }
 
 function validPairs(m) {
@@ -814,6 +820,7 @@ function updateAB2Display() {
   pd.style.display = currentC === 2 ? '' : 'none';
   pd.textContent = `a=${currentA}  b=${currentB}`;
   updateFlipButton();
+  updateKnotCount();
 }
 
 function syncAB2List(m) {
@@ -904,6 +911,7 @@ function setComplexity(c) {
   if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
   if (c === 2) { ab2ListCacheM = -1; syncAB2List(parseInt(mInput.value)); }
   if (c === 3) { c3ListCacheM  = -1; syncC3List(parseInt(mInput.value)); }
+  updateKnotCount();   // C=1 has no list sync above
   rebuildKnot();
 }
 document.getElementById('cBtn2').classList.add('active');
