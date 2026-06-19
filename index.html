@@ -304,10 +304,18 @@ fillLight.position.set(0, -8, 5);
 scene.add(fillLight);
 
 // ── Zigzag knot definition ─────────────────────────────────────────────────
-// For leads m, parameters a≥0 b≥0 a+b≤m-1:
+// For leads m, parameters a≥0 b≥0 (see validPairs for the exact bounds):
 //   rows at y = 0, 2a, m+a-b, m+a+b
 //   zigzag bights: (0,0) → (m+a-b, m+a-b) → (2m-2b, 2a) → (3m-a-b, m+a+b)
 //   period = 4m,  d = 4  (always),  leads = m
+//
+// The four segments per period all run at 45° (slope ±1), so each one's length
+// in diagonal units equals |Δx| = |Δy|:
+//   P0→P1 (up)   : m + a − b
+//   P1→P2 (down) : m − a − b      ← always the shortest (a,b ≥ 0)
+//   P2→P3 (up)   : m − a + b
+//   P3→P0'(down) : m + a + b      ← always the longest
+// Σ = 4m = PERIOD; ascending total = descending total = 2m.
 let ZIGZAG, PERIOD, D, LEADS, MAX_Y;
 
 function setKnotDef(m, a, b) {
@@ -805,6 +813,20 @@ function updateC3Display() {
   updateKnotCount();
 }
 
+// Valid (a,b) for C=2.  The two restrictions together are exactly
+// "all four zigzag segments are odd and ≥ 3":
+//
+//  • Parity — all four segment lengths share the parity of (m+a+b), because
+//    m+a−b ≡ m−a−b ≡ m−a+b ≡ m+a+b  (mod 2)  (−b ≡ +b, −a ≡ +a).
+//    So requiring (m−a−b) odd makes ALL four lengths odd at once.
+//
+//  • a+b ≤ m−3 — the shortest segment is L1 = m−a−b (since a,b ≥ 0, it is ≤ the
+//    other three).  Hence "all segments ≥ 3" ⟺ L1 ≥ 3 ⟺ a+b ≤ m−3.  This is
+//    exactly the cap below; L0 = m+a−b ≥ 2a+3 and L2 = m−a+b ≥ 2b+3 then follow.
+//
+// Why ≥ 3 (and odd, so never 1 or 2): a segment of length 1 has no crossing
+// point between its two bights, collapsing the knot to an uninteresting C=1
+// knot.  Excluding (0,0) drops the trivial all-diagonal case.
 function validPairs(m) {
   const pairs = [];
   for (let a = 0; a <= m - 3; a++)
