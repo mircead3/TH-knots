@@ -827,6 +827,22 @@ function updateC3Display() {
 // Why ≥ 3 (and odd, so never 1 or 2): a segment of length 1 has no crossing
 // point between its two bights, collapsing the knot to an uninteresting C=1
 // knot.  Excluding (0,0) drops the trivial all-diagonal case.
+//
+// No duplicates — enforced by a,b ≥ 0 alone (no extra dedup conditions needed,
+// unlike C=3).  The picture-preserving symmetries of the 4-segment sequence
+// s(a,b) = [m+a−b, m−a−b, m−a+b, m+a+b] are rotate-by-2 and path reversal.
+// Requiring the image to again be a valid s(A,B) (A,B ≥ 0) forces:
+//   • rotate-by-2     → A+B = −(a+b)  ⟹  a=b=0
+//   • reversal        → A=a, B=−b     ⟹  b=0   (maps (a,0) to itself)
+//   • rotate+reversal → A=−a, B=b     ⟹  a=0   (maps (0,b) to itself)
+// i.e. a symmetry can only ever map a pair to ITSELF, so no two different (a,b)
+// produce the same knot.  (b=0 / a=0 just mean that knot is self-reverse.)
+//
+// Flip: flipping is (a,b) → (b,a), which swaps the two ascending segments
+// L0 ↔ L2 and leaves L1, L3 fixed.  A knot equals its own flip iff L0 = L2,
+// i.e. m+a−b = m−a+b ⟺ a = b (no other cases: L1 = m−a−b is the strict min and
+// L3 = m+a+b the strict max for (a,b) ≠ (0,0), so no symmetry can swap them).
+// Hence the distinct-knot count is (N + #{a==b}) / 2.
 function validPairs(m) {
   const pairs = [];
   for (let a = 0; a <= m - 3; a++)
