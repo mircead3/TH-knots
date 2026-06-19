@@ -668,8 +668,9 @@ function buildTubeDiagram() {
 // ── Info panel ─────────────────────────────────────────────────────────────
 const infoName      = document.getElementById('infoName');
 
-function updateInfo(B, g = 1) {
+function updateInfo(B, g = 1, crossings = null) {
   const parts = [`${2 * currentC * B} bights total`];
+  if (crossings != null) parts.push(`${crossings} crossings`);
   if (g > 1) parts.push(`${g} components`);
   infoName.textContent = parts.join('  ·  ');
 }
@@ -1244,8 +1245,8 @@ function drawDiagram() {
 
   const components   = generateAllComponents(B);
   const g            = components.length;
-  updateInfo(B, g);
   const allCrossings = computeDiagramCrossingsAll(components, mod);
+  updateInfo(B, g, allCrossings.crossingCount);
 
   // Precompute geometry for all components.
   // allSegs[comp][r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
@@ -1545,8 +1546,8 @@ function drawRoundDiagram() {
 
   const components   = generateAllComponents(B);
   const g            = components.length;
-  updateInfo(B, g);
   const allCrossings = computeDiagramCrossingsAll(components, mod);
+  updateInfo(B, g, allCrossings.crossingCount);
   const drawComponents = componentMode ? components.slice(0, 1) : components;
 
   // Precompute segments with cumulative raw x
@@ -1773,12 +1774,12 @@ function buildKnot() {
 
   const components     = generateAllComponents(B);
   const g              = components.length;
-  updateInfo(B, g);
+  const allCrossings   = computeDiagramCrossingsAll(components, mod);
+  updateInfo(B, g, allCrossings.crossingCount);
   const ct = document.getElementById('componentToggle');
   if (g === 1) { componentMode = false; ct.disabled = true; }
   else         { ct.disabled = false; }
   ct.textContent = componentMode ? 'Full' : 'Solo';
-  const allCrossings   = computeDiagramCrossingsAll(components, mod);
   const drawComponents = componentMode ? components.slice(0, 1) : components;
 
   const tmp        = new THREE.Color();
@@ -2368,12 +2369,25 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
   const dim = CONTENT_W;
   const x   = SIDE_MARGIN;
   const y   = (PAGE_H - dim) / 2;
-  const pdf = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H] });
-  pdf.addImage(page1.toDataURL('image/png'), 'PNG', x, y, dim, dim);
-  pdf.addPage([PAGE_W, PAGE_H]);
-  pdf.addImage(page2.toDataURL('image/png'), 'PNG', x, y, dim, dim);
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
+
+  // Header line for the top of each page.
+  const mod = 2 * currentC * B;
+  const crossings = computeDiagramCrossingsAll(generateAllComponents(B), mod).crossingCount;
+  const seq = currentC === 2 ? `${ab2ValidIdx + 1}/${ab2ValidList.length}`
+            : currentC === 3 ? `${c3ValidIdx + 1}/${c3ValidList.length}`
+            : '1/1';
+  const header = `Complexity ${currentC}  |  Leads ${m}  |  Bights ${B}  |  `
+               + `No. ${seq}  |  ${mod} bights  |  ${crossings} crossings`;
+
+  const pdf = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H] });
+  const addHeader = () => { pdf.setFontSize(10); pdf.text(header, PAGE_W / 2, 28, { align: 'center' }); };
+  pdf.addImage(page1.toDataURL('image/png'), 'PNG', x, y, dim, dim);
+  addHeader();
+  pdf.addPage([PAGE_W, PAGE_H]);
+  pdf.addImage(page2.toDataURL('image/png'), 'PNG', x, y, dim, dim);
+  addHeader();
   pdf.save(`knot_${m}L_${B}B_round.pdf`);
 });
 
