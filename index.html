@@ -738,10 +738,8 @@ function hasAllCrossings(components, mod) {
 }
 
 function computeValidC3(m) {
-  const savedZZ = ZIGZAG, savedP = PERIOD, savedD = D, savedL = LEADS, savedMY = MAX_Y;
-  const L3 = 3 * m, B = m + 1, mod = 6 * B;
+  const L3 = 3 * m;
   const list = [];
-  const errors = [];
   for (let a = 2; a <= L3 - 4; a++) {
     if (a % 3 === 0) continue;
     // b must have b%3 === a%3 to avoid b%3=0 and (a+b)%3=0; step by 3.
@@ -763,29 +761,18 @@ function computeValidC3(m) {
           if (a + c + d === L3 && !((a > d && b >= c) || (a === d && b > c && a === b))) continue;
           // When a+b+c = 3m: require a >= d.
           if (a + b + c === L3 && a < d) continue;
-          setKnotDefC3(m, a, b, c, d);
-          const comps = generateAllComponents(B);
-          // After the (x,y,dir) closure fix, an early closure here is unexpected
-          // and points to a gap in the conditions above — surface it, don't hide it.
-          if (comps[0].length !== mod)
-            errors.push(`m=${m} a=${a} b=${b} c=${c} d=${d} (${comps[0].length}/${mod} bights)`);
-          // O(1) replacement for hasAllCrossings(comps, mod) (kept below as the
-          // reference impl).  Empirically a segment is uncrossed iff its length is
-          // 2 and the inner ascending ranges are disjoint (c+d <= b).  Verified
-          // identical to the brute-force scan for m=3..18 (112k tuples, 0 diffs).
+          // Crossing test, O(1) (hasAllCrossings kept elsewhere as the reference
+          // impl): a segment is uncrossed iff its length is 2 and the inner
+          // ascending ranges are disjoint (c+d <= b).  Verified identical to the
+          // brute-force scan for m=3..18 (112k tuples, 0 diffs).  The former
+          // per-tuple bight-closure check is dropped too — it never fired
+          // (0 early-closures, m=3..18) and made stepping the leads count
+          // sluggish (which skipped values on key-repeat).
           const seg = [L3 - c - d, a, d, b, c, L3 - a - b];
           if (c + d > b || !seg.includes(2)) list.push([a, b, c, d]);
         }
       }
     }
-  }
-  ZIGZAG = savedZZ; PERIOD = savedP; D = savedD; LEADS = savedL; MAX_Y = savedMY;
-  const errEl = document.getElementById('c3ErrorDisplay');
-  if (errors.length) {
-    errEl.textContent = `⚠ C=3 unexpected bight closure (possible condition bug): ` + errors.join(';  ');
-    errEl.style.display = '';
-  } else {
-    errEl.style.display = 'none';
   }
   return list;
 }
@@ -1959,6 +1946,17 @@ document.getElementById('roundToggle').addEventListener('click', () => {
   }
 });
 document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
+// Largest on-screen outer radius that still fits the drawing area (plus the
+// label ring).  The slider is capped to this, and the PDF maps this max to a
+// page-filling diagram.
+function roundOuterMax() {
+  return Math.max(120, Math.floor(Math.min(innerHeight / 2, (innerWidth - 235) / 2) - 24));
+}
+function syncRoundOuterMax() {
+  const sl = document.getElementById('roundOuterSlider');
+  sl.max = roundOuterMax();
+  if (parseFloat(sl.value) > parseFloat(sl.max)) sl.value = sl.max;
+}
 document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 
@@ -2147,21 +2145,33 @@ const PAGE_W = 612, PAGE_H = 792, SIDE_MARGIN = 36;
 const CONTENT_W = PAGE_W - 2 * SIDE_MARGIN;          // 540 pt = 7.5"
 
 function renderRoundExportPage(swap) {
-  const B      = parseInt(document.getElementById('bInput').value);
-  const mod    = 2 * currentC * B;
-  const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
-  const outerR = parseFloat(document.getElementById('roundOuterSlider').value);
+  const B        = parseInt(document.getElementById('bInput').value);
+  const mod      = 2 * currentC * B;
+  const innerRaw = parseFloat(document.getElementById('roundInnerSlider').value);
+  const outerRaw = parseFloat(document.getElementById('roundOuterSlider').value);
 
-  const margin = 64;                              // room for x/y labels + caption
-  const size   = Math.ceil(2 * (outerR + margin));
+  // The canvas IS the page-content square (logical units = printed pt, drawn 1:1
+  // so the image is placed without further scaling).  Only the DIAGRAM geometry
+  // is scaled to fill the page — line widths, marker radii and text are then
+  // fixed in pt and don't shrink/grow with the radius sliders.  margin leaves
+  // room (pt) for the coordinate labels and the caption.
+  const margin = 64;
+  const W      = CONTENT_W;
+  // The max-radius diagram fills the page; smaller radii scale down by the same
+  // factor (a half-radius diagram prints at half size).  Line widths, markers
+  // and text stay fixed in pt regardless of this scale.
+  const outerMax = parseFloat(document.getElementById('roundOuterSlider').max);
+  const scale  = (W / 2 - margin) / outerMax;
+  const outerR = outerRaw * scale;
+  const innerR = innerRaw * scale;
   const canvas = document.createElement('canvas');
-  canvas.width = size * PDF_SS; canvas.height = size * PDF_SS;
+  canvas.width = W * PDF_SS; canvas.height = W * PDF_SS;
   const ctx = canvas.getContext('2d');
-  ctx.scale(PDF_SS, PDF_SS);                      // draw in logical coordinates
+  ctx.scale(PDF_SS, PDF_SS);                      // draw in logical (=pt) coordinates
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, size, size);
+  ctx.fillRect(0, 0, W, W);
 
-  const cx = size / 2, cy = size / 2;
+  const cx = W / 2, cy = W / 2;
   // Page 2 (swap) mirrors the GEOMETRY about the vertical centerline (the line
   // through rawX=0 at the top), so when printed on the back of the sheet the
   // points register with page 1 through the paper.  mx() flips an x coordinate;
@@ -2285,9 +2295,9 @@ function renderRoundExportPage(swap) {
     // Small open circle marking a midpoint divider (a "new point").
     const drawEndCircle = (p) => {
       const [px, py] = xyAt(p);
-      ctx.beginPath(); ctx.arc(px, py, 6.5, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff'; ctx.fill();
-      ctx.strokeStyle = '#333'; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1.2; ctx.stroke();
     };
 
     // Stroke the path between unwrapped positions, inserting bight corners.
@@ -2316,7 +2326,7 @@ function renderRoundExportPage(swap) {
       ctx.stroke();
     };
 
-    const THICK = 6, THIN = 1.4;
+    const THICK = 4, THIN = 1;
     // Draw the arc around crossing j with the given line width.
     const drawArcFor = (j, width) => {
       const cp = crs[j].p;
@@ -2367,7 +2377,7 @@ function renderRoundExportPage(swap) {
       const nextY = bights[(j + 1) % n][1];
       const isTop = prevY < y && nextY < y;
       ctx.fillStyle = '#111';
-      ctx.beginPath(); ctx.arc(bsx, bsy, 7.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(bsx, bsy, 5, 0, Math.PI * 2); ctx.fill();
       ctx.font = '11px monospace';
       ctx.fillStyle = '#7a5500';
       ctx.fillText(String(bightLabel[j]), bsx, isTop ? bsy + 19 : bsy - 13);
@@ -2375,28 +2385,27 @@ function renderRoundExportPage(swap) {
   }
 
   // Center registration mark (coincides on both pages — it's on the mirror axis).
-  ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 12, cy);
-  ctx.moveTo(cx, cy - 12); ctx.lineTo(cx, cy + 12);
+  ctx.moveTo(cx - 9, cy); ctx.lineTo(cx + 9, cy);
+  ctx.moveTo(cx, cy - 9); ctx.lineTo(cx, cy + 9);
   ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, 6.5, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, Math.PI * 2); ctx.stroke();
 
   // String-length caption (identical on both pages; centered on the mirror axis
   // so it's not affected by the page-2 mirror and reads normally on both sides).
-  // The diagram is scaled to CONTENT_W on the page, so printed pt = px * ptPerPx;
+  // Logical units are printed pt now, so pathLenPx/outerR are already in pt;
   // ratio K is scale-independent, the inch figures assume printing at 100%.
-  const ptPerPx = CONTENT_W / size;                    // logical px -> printed pt
-  const K       = pathLenPx / (2 * outerR);            // string per outer diameter
-  const odIn    = (2 * outerR) * ptPerPx / 72;         // outer ⌀ in inches at 100%
-  const strIn   = pathLenPx * ptPerPx / 72;            // string in inches at 100%
+  const K     = pathLenPx / (2 * outerR);              // string per outer diameter
+  const odIn  = (2 * outerR) / 72;                     // outer ⌀ in inches at 100%
+  const strIn = pathLenPx / 72;                        // string in inches at 100%
   ctx.fillStyle = '#111'; ctx.textAlign = 'center';
   ctx.font = 'bold 12px monospace';
   ctx.fillText(`String ≈ ${K.toFixed(1)} × (outer circle diameter)`,
-               cx, size - 30);
+               cx, W - 30);
   ctx.font = '11px monospace';
   ctx.fillText(`At 100% print: outer ⌀ = ${odIn.toFixed(1)} in  →  string ≈ ${strIn.toFixed(1)} in`,
-               cx, size - 13);
+               cx, W - 13);
 
   return canvas;
 }
@@ -2436,6 +2445,7 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
 
 // ── Initial state ──────────────────────────────────────────────────────────
 syncAB2List(parseInt(document.getElementById('mInput').value));
+syncRoundOuterMax();
 document.getElementById('abParamDisplay').style.display = '';
 enterKnotMode();
 
@@ -2449,6 +2459,7 @@ enterKnotMode();
 // ── Resize ─────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
+  syncRoundOuterMax();
   if (showDiagram) { drawDiagram(); }
   if (showTubeDiag) buildTubeDiagram();
   if (showRoundDiag) drawRoundDiagram();
