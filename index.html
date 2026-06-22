@@ -1751,7 +1751,7 @@ function buildKnot() {
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
-  const outerR_raw = 220; // fixed; zoom controls viewing scale
+  const outerR_raw = 260; // fixed reference size (sets the default on-screen scale); zoom adjusts
 
   // Camera half-height matches the braid view so tube radius looks the same
   // size at the same slider value.  pxToWorld converts slider pixel values to
@@ -1781,7 +1781,18 @@ function buildKnot() {
   const sVal   = parseFloat(document.getElementById('viewSlider').value);
   const vt      = 1 - Math.abs(2 * sVal - 1);
   const rev     = sVal > 0.5;
-  const h_half = worldOuterR / 2; // fixed cylinder half-height (full height = worldOuterR), independent of the inner-radius slider
+  // Tilt the view with the slider: flat ends seen from above (no tilt), the
+  // cylinder (middle) rotated 90° about x so it's seen from the side.  Composes
+  // with manual orbit (OrbitControls drives the camera, this rotates the knot).
+  knotGroup.rotation.x = -vt * Math.PI / 2;
+  // Cylinder height scales with the row count MAX_Y, calibrated so that at the
+  // MAX inner radius the strands sit at ~45° on the surface (square cells:
+  // height/MAX_Y == circumference/mod, circumference = 2*pi*worldInnerR_max).
+  // Uses the max radius, not the current one, so changing the inner-radius
+  // slider changes only the radius, not the height.  Capped a bit below camR so
+  // the full height (2*h_half) stays just inside the screen height (frustum +/-camR).
+  const innerRmax = parseFloat(document.getElementById('roundInnerSlider').max);
+  const h_half = Math.min(Math.PI * (innerRmax * pxToWorld) * MAX_Y / mod, camR * 0.92);
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
@@ -1984,6 +1995,18 @@ document.getElementById('bightsToggle').addEventListener('click', () => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showKnot)) enterKnotMode();
+  // 'r' reverts the knot view to the standard (slider-driven) angle after an
+  // orbit/zoom/pan.  reset() restores the construction-time camera (pos 0,0,20,
+  // target origin, zoom 1); the slider tilt lives on the knot group, so the
+  // standard flat-from-above / cylinder-from-side framing returns.
+  if ((e.key === 'r' || e.key === 'R') && showKnot &&
+      !(document.activeElement && document.activeElement.tagName === 'INPUT')) {
+    orthoOrbit.reset();
+    const sl = document.getElementById('roundInnerSlider');
+    const step = parseFloat(sl.step) || 1;
+    sl.value = Math.round((parseFloat(sl.min) + parseFloat(sl.max)) / 2 / step) * step;
+    buildKnot();
+  }
 });
 
 // Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
