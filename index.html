@@ -1785,28 +1785,27 @@ function buildKnot() {
   // cylinder (middle) rotated 90° about x so it's seen from the side.  Composes
   // with manual orbit (OrbitControls drives the camera, this rotates the knot).
   knotGroup.rotation.x = -vt * Math.PI / 2;
-  // Cylinder height scales with the row count MAX_Y, calibrated so that at the
-  // MAX inner radius the strands sit at ~45° on the surface (square cells:
-  // height/MAX_Y == circumference/mod, circumference = 2*pi*worldInnerR_max).
-  // Uses the max radius, not the current one, so changing the inner-radius
-  // slider changes only the radius, not the height.  Capped a bit below camR so
-  // the full height (2*h_half) stays just inside the screen height (frustum +/-camR).
-  const innerRmax = parseFloat(document.getElementById('roundInnerSlider').max);
-  const h_half = Math.min(Math.PI * (innerRmax * pxToWorld) * MAX_Y / mod, camR * 0.92);
+  // Cylinder height scales with the row count MAX_Y, calibrated so the strands
+  // sit at ~45° on the surface (square cells: height/MAX_Y == circumference/mod,
+  // circumference = 2*pi*worldOuterR — the constant cylinder radius).  Capped a
+  // bit below camR so the full height (2*h_half) stays just inside the screen
+  // height (frustum +/-camR).
+  const h_half = Math.min(Math.PI * worldOuterR * MAX_Y / mod, camR * 0.85);
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
     const yR     = rev ? (MAX_Y - y) : y;          // swap inner/outer on the right
     const r_flat = worldInnerR + (yR / MAX_Y) * (worldOuterR - worldInnerR);
     // Flat state: radius r_flat in plane, crossing offset axial (+z).
-    // Cylinder state: radius = the (fixed) INNER ring, so the roll keeps the
-    // inner ring put and pulls the outer ring in to meet it; the annulus's
-    // radial width becomes the cylinder height.  Crossing offset radial.
+    // Cylinder state: radius = the (fixed) OUTER ring; the roll grows the inner
+    // ring out to meet it, so the cylinder radius is the constant worldOuterR and
+    // the inner-radius slider has no effect in cylinder view (only off-cylinder,
+    // where it sets the inner ring).  Crossing offset radial.
     const fx = r_flat * Math.cos(theta) + xCenter;
     const fy = r_flat * Math.sin(theta);
     const fz = z;
-    const cx = (worldInnerR + z) * Math.cos(theta);
-    const cy = (worldInnerR + z) * Math.sin(theta);
+    const cx = (worldOuterR + z) * Math.cos(theta);
+    const cy = (worldOuterR + z) * Math.sin(theta);
     const cz = (y / MAX_Y - 0.5) * 2 * h_half;
     return new THREE.Vector3(
       fx * (1 - vt) + cx * vt,
