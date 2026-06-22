@@ -1781,19 +1781,21 @@ function buildKnot() {
   const sVal   = parseFloat(document.getElementById('viewSlider').value);
   const vt      = 1 - Math.abs(2 * sVal - 1);
   const rev     = sVal > 0.5;
-  const h_half = worldOuterR - worldInnerR; // cylinder half-height
+  const h_half = worldOuterR / 2; // fixed cylinder half-height (full height = worldOuterR), independent of the inner-radius slider
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
     const yR     = rev ? (MAX_Y - y) : y;          // swap inner/outer on the right
     const r_flat = worldInnerR + (yR / MAX_Y) * (worldOuterR - worldInnerR);
     // Flat state: radius r_flat in plane, crossing offset axial (+z).
-    // Cylinder state: fixed outer radius, crossing offset radial; height from y.
+    // Cylinder state: radius = the (fixed) INNER ring, so the roll keeps the
+    // inner ring put and pulls the outer ring in to meet it; the annulus's
+    // radial width becomes the cylinder height.  Crossing offset radial.
     const fx = r_flat * Math.cos(theta) + xCenter;
     const fy = r_flat * Math.sin(theta);
     const fz = z;
-    const cx = (worldOuterR + z) * Math.cos(theta);
-    const cy = (worldOuterR + z) * Math.sin(theta);
+    const cx = (worldInnerR + z) * Math.cos(theta);
+    const cy = (worldInnerR + z) * Math.sin(theta);
     const cz = (y / MAX_Y - 0.5) * 2 * h_half;
     return new THREE.Vector3(
       fx * (1 - vt) + cx * vt,
