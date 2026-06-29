@@ -205,7 +205,7 @@
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Thin</span><span>Thick</span>
     </div>
-    <input type="range" id="thickInput" min="0.02" max="0.45" step="0.01" value="0.11"
+    <input type="range" id="thickInput" min="0.02" max="0.45" step="0.01" value="0.24"
            style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
   </div>
 
@@ -232,6 +232,9 @@
     <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Cylinder radius</div>
     <input type="range" id="straightRadiusSlider" min="60" max="700" step="10" value="260"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Cylinder height</div>
+    <input type="range" id="straightHeightSlider" min="60" max="700" step="10" value="260"
+           style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
   </div>
 
   <div class="btn-row">
@@ -241,6 +244,7 @@
   </div>
   <div class="btn-row" id="straightRow" style="display:none;">
     <button id="straightToggle" class="view-btn">Straight</button>
+    <button id="relaxToggle" class="view-btn" style="display:none;">Equal</button>
   </div>
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
@@ -1137,6 +1141,7 @@ let showTubeDiag = false;
 let showRoundDiag = false;
 let showKnot  = false;
 let showStraight = false;
+let straightRelax = false;   // Straight view: equalize string lengths (anchors fixed)
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
@@ -1144,6 +1149,7 @@ function setViewButtons(current) {
   document.getElementById('diagToggle').style.display    = current === 'diag'    ? 'none' : '';
   document.getElementById('knotToggle').style.display = current === 'knot' ? 'none' : '';
   document.getElementById('straightToggle').style.display = current === 'straight' ? 'none' : '';
+  document.getElementById('relaxToggle').style.display = current === 'straight' ? '' : 'none';  // Equal: straight only
 }
 
 
@@ -1977,6 +1983,58 @@ function enterStraightMode() {
   buildStraight();
 }
 
+// Equalize all string lengths (anchors assumed fixed).  Each string is owned by
+// one rod (its end -> a fixed hole), so making every rod's two end-strings equal
+// to a common length mu makes ALL strings = mu, fixing both per-rod (case 1) and
+// per-anchor (case 2) imbalance.  For a target mu, "both ends at distance mu from
+// their holes" is two linear constraints on the rod direction d, |d|=1:
+//   a+.d = p+(mu),  a-.d = p-(mu)   (a± = P - H±)
+// whose min-norm in-plane part d_par is feasible iff |d_par| <= 1; the feasible
+// mu form an interval [lo,hi] per rod.  We use the smallest mu every rod can
+// reach (= max of the per-rod lo's) -> equal AND as taut as equal allows.
+// Returns a direction per rod (parallel to `rods`); non-solvable rods keep dir.
+function strEqualizeDirs(rods, anchorByKey) {
+  const info = rods.map(rod => {
+    const Hm = anchorByKey.get(rod.keyMinus), Hp = anchorByKey.get(rod.keyPlus);
+    if (!Hm || !Hp) return { ok: false };
+    const ap = rod.P.clone().sub(Hp), am = rod.P.clone().sub(Hm);   // a+ , a-
+    const g11 = ap.dot(ap), g22 = am.dot(am), g12 = ap.dot(am);
+    const det = g11 * g22 - g12 * g12;
+    if (det < 1e-9) return { ok: false };                            // holes collinear with anchor
+    const Lp = rod.Lplus, Lm = rod.Lminus;
+    const up =  1 / (2 * Lp), vp = -(Lp * Lp + g11) / (2 * Lp);      // p+ = up*s + vp  (s = mu^2)
+    const um = -1 / (2 * Lm), vm =  (Lm * Lm + g22) / (2 * Lm);      // p- = um*s + vm
+    // |d_par|^2 = (g22 p+^2 - 2 g12 p+ p- + g11 p-^2)/det ; set = 1 -> A s^2 + B s + C = 0
+    const A = g22 * up * up - 2 * g12 * up * um + g11 * um * um;
+    const B = 2 * g22 * up * vp - 2 * g12 * (up * vm + um * vp) + 2 * g11 * um * vm;
+    const C = g22 * vp * vp - 2 * g12 * vp * vm + g11 * vm * vm - det;
+    const disc = B * B - 4 * A * C;
+    if (A <= 0 || disc < 0) return { ok: false };                    // never equalizable
+    const sq = Math.sqrt(disc);
+    const lo = Math.sqrt(Math.max((-B - sq) / (2 * A), 0));
+    const hi = Math.sqrt(Math.max((-B + sq) / (2 * A), 0));
+    return { ok: true, rod, ap, am, g11, g22, g12, det, up, vp, um, vm, lo, hi };
+  });
+
+  let mu = 0;                                   // smallest mu every solvable rod can reach
+  for (const d of info) if (d.ok) mu = Math.max(mu, d.lo);
+
+  return info.map((d, i) => {
+    if (!d.ok) return rods[i].dir.clone();          // keep current direction
+    const m = Math.min(Math.max(mu, d.lo), d.hi);   // clamp to this rod's feasible range
+    const s = m * m;
+    const pp = d.up * s + d.vp, pm = d.um * s + d.vm;
+    const alpha = ( d.g22 * pp - d.g12 * pm) / d.det;
+    const beta  = (-d.g12 * pp + d.g11 * pm) / d.det;
+    const dpar = d.ap.clone().multiplyScalar(alpha).addScaledVector(d.am, beta);
+    const n = d.ap.clone().cross(d.am).normalize();
+    const t = Math.sqrt(Math.max(1 - dpar.lengthSq(), 0));
+    const d1 = dpar.clone().addScaledVector(n,  t);
+    const d2 = dpar.clone().addScaledVector(n, -t);
+    return (d1.dot(d.rod.dir) >= d2.dot(d.rod.dir) ? d1 : d2).normalize();  // nearest current
+  });
+}
+
 // Each over-crossing's strand-piece (split at the under-crossings, with its bight
 // straightened) is one straight rod tangent to a reference cylinder at the
 // crossing (the "anchor").  Tensegrity: these are the rods; strings come later.
@@ -1998,10 +2056,13 @@ function buildStraight() {
   // Axial scale is fixed (so total height stays put); the radius slider only
   // changes the angular scale -> the rod angles change.  At radius 260 the cells
   // are square (45°); smaller radius -> steeper rods, larger -> flatter.
-  const arcAx = 2 * Math.PI * (260 * pxToWorld) / mod;  // 3D length per diagram y-unit (fixed)
-  const H     = arcAx * MAX_Y;                            // fixed axial span (total height)
-  const R     = parseFloat(document.getElementById('straightRadiusSlider').value) * pxToWorld;
-  const arcAng = 2 * Math.PI * R / mod;                  // 3D length per diagram x-unit (radius-driven)
+  const heightRaw = parseFloat(document.getElementById('straightHeightSlider').value);
+  const radiusRaw = parseFloat(document.getElementById('straightRadiusSlider').value);
+  // Rod lengths are FIXED (physical tubes): built at a constant reference scale, so
+  // the radius/height sliders move only the anchor positions, not the rods.
+  const arcRef = 2 * Math.PI * (260 * pxToWorld) / mod;             // fixed rod-length scale
+  const R = radiusRaw * pxToWorld;                                  // anchor radius
+  const H = 2 * Math.PI * (heightRaw * pxToWorld) / mod * MAX_Y;    // anchor height spread
   orthoCamera.left = -camR * aspect; orthoCamera.right =  camR * aspect;
   orthoCamera.top  =  camR;          orthoCamera.bottom = -camR;
   orthoCamera.updateProjectionMatrix();
@@ -2011,20 +2072,15 @@ function buildStraight() {
   const allCrossings = computeDiagramCrossingsAll(components, mod);
   updateInfo(B, g, allCrossings.crossingCount);
 
-  const rodMatColor = new THREE.Color();
   const yAxis = new THREE.Vector3(0, 1, 0);
 
-  // For the connecting strings: every crossing point (x mod, y) hosts one over
-  // (an anchor) and one under (a shared segment end of the under-strand's two
-  // rods).  Collect anchors and under-ends keyed by that point, then connect.
-  const anchorPts = [];
-  const endsByKey = new Map();
+  // Phase 1 gathers each rod; phase 2 orients them and draws rods + strings.
+  // Every crossing point (x mod, y) hosts one over (a rod's anchor/hole) and one
+  // under (where two rods' ends meet), so a rod end's hole is the anchor that
+  // shares its under key.
   const keyOf = pos => `${(((Math.round(pos.x)) % mod) + mod) % mod},${Math.round(pos.y)}`;
-  const addEnd = (pos3, posDiag) => {
-    const k = keyOf(posDiag);
-    if (!endsByKey.has(k)) endsByKey.set(k, []);
-    endsByKey.get(k).push(pos3);
-  };
+  const rods = [];
+  const anchorByKey = new Map();   // crossing key -> anchor (hole) 3D position
 
   for (let comp = 0; comp < g; comp++) {
     const bP = components[comp];
@@ -2053,7 +2109,7 @@ function buildStraight() {
     const unders = crs.map((c, i) => (c.isUnder ? i : -1)).filter(i => i >= 0);
     if (unders.length === 0) continue;
 
-    rodMatColor.setHSL(g === 1 ? 0.58 : comp / g, 0.9, 0.62);
+    const color = new THREE.Color().setHSL(g === 1 ? 0.58 : comp / g, 0.9, 0.62);
 
     for (let ui = 0; ui < unders.length; ui++) {
       const iA = unders[ui], iB = unders[(ui + 1) % unders.length];
@@ -2073,74 +2129,120 @@ function buildStraight() {
       }
 
       const A = posAt(pA), Bd = posAt(pB);
-      let anchorPos = posAt(anchorP);
-      let e0, e1;                                  // straightened endpoints (diagram coords)
-      if (bights.length === 0) {
-        e0 = A; e1 = Bd;                            // already straight
-      } else {
-        // Discard the leg on the far side of the bight (the stub with no
-        // over-crossing); the kept leg runs from its under to the bight.
-        const pV = bights[0], V = posAt(pV);
-        if (anchorP < pV) { e0 = A; e1 = V; }   // anchor on A-side -> keep A..bight
-        else              { e0 = V; e1 = Bd; }  // anchor on B-side -> keep bight..Bd
-        anchorPos = posAt(anchorP);             // already on the kept leg; no rotation
+      const anchorPos = posAt(anchorP);
+      // The rod is the straight arm holding the anchor: from the anchor out to
+      // the nearest bight on each side, or to the bounding under if none.  (At
+      // small leads a single under-to-under piece can contain several bights.)
+      // Each discarded stub beyond a bight still belongs to its bounding under
+      // (pA/pB), which is where that end's string attaches.
+      let bBefore = null, bAfter = null;
+      for (const bp of bights) {
+        if (bp < anchorP) { if (bBefore === null || bp > bBefore) bBefore = bp; }
+        else              { if (bAfter  === null || bp < bAfter ) bAfter  = bp; }
       }
+      const e0 = bBefore !== null ? posAt(bBefore) : A;
+      const e1 = bAfter  !== null ? posAt(bAfter)  : Bd;
 
-      // Anchor on the cylinder; rod tangent there (diagram x -> angular, y -> axial).
+      // Anchor (hole) sits on the cylinder at (radius R, height H); these move with
+      // the sliders.  The rod's arm vectors use the FIXED arcRef scale, so its
+      // lengths and reference direction don't change with R/H — only its anchor
+      // does.  Each end belongs to the under bounding its piece (pA/pB) — even a
+      // bight end, whose discarded stub led to that under — so its hole is the
+      // anchor at that key.
       const theta = (anchorPos.x / mod) * 2 * Math.PI - Math.PI / 2;
       const P = new THREE.Vector3(R * Math.cos(theta), R * Math.sin(theta), (anchorPos.y / MAX_Y - 0.5) * H);
       const Tang = new THREE.Vector3(-Math.sin(theta), Math.cos(theta), 0);
-      const to3D = e => P.clone()
-        .addScaledVector(Tang, arcAng * (e.x - anchorPos.x))
-        .add(new THREE.Vector3(0, 0, arcAx * (e.y - anchorPos.y)));
-      const p1 = to3D(e0), p2 = to3D(e1);
-      const dir = new THREE.Vector3().subVectors(p2, p1);
-      const len = dir.length();
-      if (len < 1e-6) continue;
-      const rod = new THREE.Mesh(
-        new THREE.CylinderGeometry(tubeRadius, tubeRadius, len, 10, 1),
-        new THREE.MeshPhongMaterial({ color: rodMatColor.clone(), specular: 0x333333, shininess: 40 }));
-      rod.position.copy(p1).addScaledVector(dir, 0.5);
-      rod.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
-      rod.frustumCulled = false;
-      knotGroup.add(rod);
+      const armVec = e => new THREE.Vector3()
+        .addScaledVector(Tang, arcRef * (e.x - anchorPos.x))
+        .add(new THREE.Vector3(0, 0, arcRef * (e.y - anchorPos.y)));
+      const v0 = armVec(e0), v1 = armVec(e1);
+      const Lminus = v0.length(), Lplus = v1.length();
+      if (Lminus + Lplus < 1e-6) continue;
+      const dir = new THREE.Vector3().subVectors(v1, v0).normalize();
 
-      // Each rod end belongs to the under-crossing bounding its piece (pA/pB) —
-      // even a bight end (its discarded stub led to that under) — so every end
-      // gets a string and every anchor ends up with exactly two.
-      anchorPts.push({ pos: P.clone(), key: keyOf(anchorPos) });  // P lies on the rod
-      addEnd(p1, A);
-      addEnd(p2, Bd);
+      anchorByKey.set(keyOf(anchorPos), P);
+      rods.push({ P, dir, Lminus, Lplus, theta, yFrac: anchorPos.y / MAX_Y - 0.5,
+                  keyAnchor: keyOf(anchorPos), keyMinus: keyOf(A), keyPlus: keyOf(Bd), color });
     }
   }
 
-  // Strings: connect each anchor (over-crossing) to the under-strand's segment
-  // ends that meet at the same crossing point (matched by diagram x mod, y).
-  // Drawn as thin cylinders (WebGL ignores line width) so they read as strings.
+  // Map each anchor key to its rod, so a rod end knows which rod's anchor is its
+  // hole.  t0/t1 = hole rod index for the e0/e1 ends (-1 if missing).
+  const idxByKey = new Map();
+  rods.forEach((r, i) => idxByKey.set(r.keyAnchor, i));
+  const t0 = rods.map(r => idxByKey.has(r.keyMinus) ? idxByKey.get(r.keyMinus) : -1);
+  const t1 = rods.map(r => idxByKey.has(r.keyPlus ) ? idxByKey.get(r.keyPlus ) : -1);
+
+  const eqDirs = strEqualizeDirs(rods, anchorByKey);   // fixed-anchor equalized directions
+
+  // Final per-rod position + orientation: equalized (Equal on) or raw.
+  let Pf, df;
+  if (straightRelax) { Pf = rods.map(r => r.P);  df = eqDirs; }
+  else               { Pf = rods.map(r => r.P);  df = rods.map(r => r.dir); }
+
+  // Report: one easy-to-compare number — equal total normalised by raw total
+  // (raw = the unconstrained shortest at this geometry).  Rods are fixed length,
+  // so the totals are directly comparable as you sweep radius/height.
+  {
+    const total = (Parr, darr) => {
+      let s = 0;
+      for (let i = 0; i < rods.length; i++) {
+        const e0 = Parr[i].clone().addScaledVector(darr[i], -rods[i].Lminus);
+        const e1 = Parr[i].clone().addScaledVector(darr[i],  rods[i].Lplus);
+        if (t0[i] >= 0) s += e0.distanceTo(Parr[t0[i]]);
+        if (t1[i] >= 0) s += e1.distanceTo(Parr[t1[i]]);
+      }
+      return s;
+    };
+    // Baseline: raw total at the DEFAULT cylinder (radius=height=260), which is
+    // independent of the sliders — so equal/rawDefault is a stable comparison.
+    const Rref = 260 * pxToWorld, Hdef = arcRef * MAX_Y;
+    const Pdef = rods.map(r => new THREE.Vector3(
+      Rref * Math.cos(r.theta), Rref * Math.sin(r.theta), r.yFrac * Hdef));
+    const rawDefT = total(Pdef, rods.map(r => r.dir));
+    const eqT     = total(rods.map(r => r.P), eqDirs);
+    console.log(`equal=${eqT.toFixed(1)}  rawDefault=${rawDefT.toFixed(1)}  ` +
+                `equal/rawDefault=${(eqT / rawDefT).toFixed(3)}  (r=${radiusRaw} h=${heightRaw})`);
+  }
+
+  // ── Phase 2: draw rods + strings (each end -> its hole). ─────────────────────
   const stringMat = new THREE.MeshPhongMaterial({ color: 0xffa53a, specular: 0x222222, shininess: 30 });
   const stringR = 0.035;   // fixed; the thin/thick slider changes rods only
-  for (const a of anchorPts) {
-    const ends = endsByKey.get(a.key);
-    if (!ends) continue;
-    for (const ep of ends) {
-      const dir = new THREE.Vector3().subVectors(ep, a.pos);
-      const len = dir.length();
-      if (len < 1e-6) continue;
-      const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, len, 6, 1), stringMat);
-      str.position.copy(a.pos).addScaledVector(dir, 0.5);
-      str.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
+  for (let i = 0; i < rods.length; i++) {
+    const rod = rods[i];
+    const P = Pf[i], d = df[i];
+    const e0 = P.clone().addScaledVector(d, -rod.Lminus);
+    const e1 = P.clone().addScaledVector(d,  rod.Lplus);
+
+    const dir = new THREE.Vector3().subVectors(e1, e0);
+    const rodMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(tubeRadius, tubeRadius, dir.length(), 10, 1),
+      new THREE.MeshPhongMaterial({ color: rod.color.clone(), specular: 0x333333, shininess: 40 }));
+    rodMesh.position.copy(e0).addScaledVector(dir, 0.5);
+    rodMesh.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
+    rodMesh.frustumCulled = false;
+    knotGroup.add(rodMesh);
+
+    for (const [end, ti] of [[e0, t0[i]], [e1, t1[i]]]) {   // each end -> its hole
+      if (ti < 0) continue;
+      const Hole = Pf[ti];
+      const sd = new THREE.Vector3().subVectors(Hole, end);
+      const sl = sd.length();
+      if (sl < 1e-6) continue;
+      const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, sl, 6, 1), stringMat);
+      str.position.copy(end).addScaledVector(sd, 0.5);
+      str.quaternion.setFromUnitVectors(yAxis, sd.clone().normalize());
       str.frustumCulled = false;
       knotGroup.add(str);
     }
   }
 
-  // Fit by height only, so the on-screen total height is constant as the radius
-  // slider changes (the axial extent is radius-independent; the width grows with
-  // radius and may extend past the sides at large radius).
-  knotGroup.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(knotGroup);
-  const size = new THREE.Vector3(); box.getSize(size);
-  if (size.y > 1e-6) knotGroup.scale.setScalar((2 * camR * 0.9) / size.y);  // world y = vertical
+  // Fixed scale — based on the reference cylinder height only, so it does NOT
+  // depend on the radius/height sliders.  That keeps the (fixed-length) rods at a
+  // constant on-screen size, and the sliders visibly move the anchors instead of
+  // rezooming the whole view.  Orbit/zoom if a large cylinder runs off-screen.
+  const refH = arcRef * MAX_Y;
+  knotGroup.scale.setScalar(refH > 1e-6 ? (2 * camR * 0.8) / refH : 1);
 }
 
 document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
@@ -2167,6 +2269,11 @@ document.getElementById('roundToggle').addEventListener('click', () => {
 });
 document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
 document.getElementById('straightToggle').addEventListener('click', enterStraightMode);
+document.getElementById('relaxToggle').addEventListener('click', () => {
+  straightRelax = !straightRelax;
+  document.getElementById('relaxToggle').classList.toggle('active', straightRelax);
+  if (showStraight) buildStraight();
+});
 // Largest on-screen outer radius that still fits the drawing area (plus the
 // label ring).  The slider is capped to this, and the PDF maps this max to a
 // page-filling diagram.
@@ -2181,6 +2288,7 @@ function syncRoundOuterMax() {
 document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 document.getElementById('straightRadiusSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
+document.getElementById('straightHeightSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
