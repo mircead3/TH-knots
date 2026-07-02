@@ -242,7 +242,7 @@
     <button id="diagToggle"    class="view-btn">Diagram</button>
     <button id="knotToggle" class="view-btn">Knot</button>
   </div>
-  <div class="btn-row" id="straightRow" style="display:none;">
+  <div class="btn-row" id="straightRow">
     <button id="straightToggle" class="view-btn">Straight</button>
     <button id="relaxToggle" class="view-btn" style="display:none;">Equal</button>
   </div>
@@ -960,8 +960,7 @@ function setComplexity(c) {
   if (c === 2) { ab2ListCacheM = -1; syncAB2List(parseInt(mInput.value)); }
   if (c === 3) { c3ListCacheM  = -1; syncC3List(parseInt(mInput.value)); }
   updateKnotCount();   // C=1 has no list sync above
-  document.getElementById('straightRow').style.display = (c === 1) ? '' : 'none';  // Straight: C=1 only
-  if (showStraight && c !== 1) { enterKnotMode(); return; }                         // leave straight view
+  document.getElementById('straightRow').style.display = '';   // Straight: all complexities
   rebuildKnot();
 }
 document.getElementById('cBtn2').classList.add('active');
@@ -2016,12 +2015,22 @@ function strEqualizeDirs(rods, anchorByKey) {
     return { ok: true, rod, ap, am, g11, g22, g12, det, up, vp, um, vm, lo, hi };
   });
 
-  let mu = 0;                                   // smallest mu every solvable rod can reach
-  for (const d of info) if (d.ok) mu = Math.max(mu, d.lo);
+  // Per-ring target: rods whose anchors share a ring (same diagram height) are
+  // congruent, so equalize them among themselves — each ring gets its own mu =
+  // the smallest length its rods can reach.  (A single global mu is infeasible
+  // for C>=2: the rings' feasible ranges don't overlap.)
+  const ringMu = new Map();
+  info.forEach((d, i) => {
+    if (!d.ok) return;
+    const k = rods[i].ringY;
+    ringMu.set(k, Math.max(ringMu.get(k) ?? 0, d.lo));
+  });
+  const muList = [...ringMu.entries()].sort((a, b) => a[0] - b[0]);
+  console.log(`equalize per-ring: rings=${ringMu.size}  ring-mu=[${muList.map(e => e[1].toFixed(2)).join(', ')}]`);
 
   return info.map((d, i) => {
     if (!d.ok) return rods[i].dir.clone();          // keep current direction
-    const m = Math.min(Math.max(mu, d.lo), d.hi);   // clamp to this rod's feasible range
+    const m = Math.min(Math.max(ringMu.get(rods[i].ringY) ?? d.lo, d.lo), d.hi);  // per-ring target
     const s = m * m;
     const pp = d.up * s + d.vp, pm = d.um * s + d.vm;
     const alpha = ( d.g22 * pp - d.g12 * pm) / d.det;
@@ -2031,7 +2040,16 @@ function strEqualizeDirs(rods, anchorByKey) {
     const t = Math.sqrt(Math.max(1 - dpar.lengthSq(), 0));
     const d1 = dpar.clone().addScaledVector(n,  t);
     const d2 = dpar.clone().addScaledVector(n, -t);
-    return (d1.dot(d.rod.dir) >= d2.dot(d.rod.dir) ? d1 : d2).normalize();  // nearest current
+    // Of the two equal-length solutions, keep the one whose ends stay farther from
+    // the cylinder axis (rod bulges outward).  That's the non-self-intersecting
+    // branch and a stable choice as the sliders change — avoids the flip where a
+    // rod dives inward through the others.
+    const outwardness = dd => {
+      const a = d.rod.P.clone().addScaledVector(dd, -d.rod.Lminus);
+      const b = d.rod.P.clone().addScaledVector(dd,  d.rod.Lplus);
+      return a.x * a.x + a.y * a.y + b.x * b.x + b.y * b.y;
+    };
+    return (outwardness(d1) >= outwardness(d2) ? d1 : d2).normalize();
   });
 }
 
@@ -2162,6 +2180,7 @@ function buildStraight() {
 
       anchorByKey.set(keyOf(anchorPos), P);
       rods.push({ P, dir, Lminus, Lplus, theta, yFrac: anchorPos.y / MAX_Y - 0.5,
+                  ringY: Math.round(anchorPos.y),
                   keyAnchor: keyOf(anchorPos), keyMinus: keyOf(A), keyPlus: keyOf(Bd), color });
     }
   }
@@ -2184,25 +2203,33 @@ function buildStraight() {
   // (raw = the unconstrained shortest at this geometry).  Rods are fixed length,
   // so the totals are directly comparable as you sweep radius/height.
   {
-    const total = (Parr, darr) => {
-      let s = 0;
+    const lensFor = (Parr, darr) => {
+      const a = [];
       for (let i = 0; i < rods.length; i++) {
         const e0 = Parr[i].clone().addScaledVector(darr[i], -rods[i].Lminus);
         const e1 = Parr[i].clone().addScaledVector(darr[i],  rods[i].Lplus);
-        if (t0[i] >= 0) s += e0.distanceTo(Parr[t0[i]]);
-        if (t1[i] >= 0) s += e1.distanceTo(Parr[t1[i]]);
+        if (t0[i] >= 0) a.push(e0.distanceTo(Parr[t0[i]]));
+        if (t1[i] >= 0) a.push(e1.distanceTo(Parr[t1[i]]));
       }
-      return s;
+      return a;
     };
+    const sum = a => a.reduce((x, y) => x + y, 0);
     // Baseline: raw total at the DEFAULT cylinder (radius=height=260), which is
     // independent of the sliders — so equal/rawDefault is a stable comparison.
     const Rref = 260 * pxToWorld, Hdef = arcRef * MAX_Y;
     const Pdef = rods.map(r => new THREE.Vector3(
       Rref * Math.cos(r.theta), Rref * Math.sin(r.theta), r.yFrac * Hdef));
-    const rawDefT = total(Pdef, rods.map(r => r.dir));
-    const eqT     = total(rods.map(r => r.P), eqDirs);
+    const rawDefT = sum(lensFor(Pdef, rods.map(r => r.dir)));
+    const eqL     = lensFor(rods.map(r => r.P), eqDirs);
+    const eqT     = sum(eqL);
     console.log(`equal=${eqT.toFixed(1)}  rawDefault=${rawDefT.toFixed(1)}  ` +
-                `equal/rawDefault=${(eqT / rawDefT).toFixed(3)}  (r=${radiusRaw} h=${heightRaw})`);
+                `equal/rawDefault=${(eqT / rawDefT).toFixed(3)}  ` +
+                `equal-strings min=${Math.min(...eqL).toFixed(2)} max=${Math.max(...eqL).toFixed(2)}  ` +
+                `(r=${radiusRaw} h=${heightRaw})`);
+    const tally = new Map();
+    eqL.forEach(v => { const k = v.toFixed(2); tally.set(k, (tally.get(k) || 0) + 1); });
+    const distinct = [...tally.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+    console.log(`distinct string lengths (${distinct.length}): ${distinct.map(([v, n]) => `${v}×${n}`).join('  ')}`);
   }
 
   // ── Phase 2: draw rods + strings (each end -> its hole). ─────────────────────
