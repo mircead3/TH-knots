@@ -115,6 +115,7 @@
     }
     .view-btn:hover    { border-color: rgba(100, 130, 255, 0.5); background: rgba(30, 30, 70, 0.8); }
     .view-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+    .view-btn.active   { background: rgba(100, 130, 255, 0.35); border-color: rgba(100, 130, 255, 0.8); color: #fff; }
     input:disabled     { opacity: 0.3; cursor: default; }
 
     input[type=range] {
@@ -185,6 +186,7 @@
   <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
+  <div id="infoRods" style="display:none;font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;"></div>
 
   <div id="shapeSection">
     <div id="ab2IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
@@ -229,12 +231,21 @@
   </div>
 
   <div id="straightSection" style="display:none;">
-    <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Cylinder radius</div>
-    <input type="range" id="straightRadiusSlider" min="60" max="700" step="10" value="260"
-           style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
-    <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Cylinder height</div>
-    <input type="range" id="straightHeightSlider" min="60" max="700" step="10" value="260"
-           style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    <div id="cylSliders">
+      <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Cylinder radius</div>
+      <input type="range" id="straightRadiusSlider" min="60" max="700" step="10" value="260"
+             style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+      <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Cylinder height</div>
+      <input type="range" id="straightHeightSlider" min="60" max="700" step="10" value="260"
+             style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    </div>
+    <div id="lambdaSlider" style="display:none;">
+      <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+        <span>Tight</span><span>Loose</span>
+      </div>
+      <input type="range" id="straightLambdaSlider" min="0" max="1" step="0.02" value="0.3"
+             style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    </div>
   </div>
 
   <div class="btn-row">
@@ -243,8 +254,10 @@
     <button id="knotToggle" class="view-btn">Knot</button>
   </div>
   <div class="btn-row" id="straightRow">
-    <button id="straightToggle" class="view-btn">Straight</button>
-    <button id="relaxToggle" class="view-btn" style="display:none;">Equal</button>
+    <button id="straightToggle" class="view-btn">Tensegrity</button>
+    <button id="optToggle" class="view-btn" style="display:none;">Optimize</button>
+    <button id="evenToggle" class="view-btn" style="display:none;">Even</button>
+    <button id="uniformToggle" class="view-btn" style="display:none;">Uniform</button>
   </div>
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
@@ -695,6 +708,7 @@ function updateInfo(B, g = 1, crossings = null) {
   if (crossings != null) parts.push(`${crossings} crossings`);
   if (g > 1) parts.push(`${g} components`);
   infoName.textContent = parts.join('  ·  ');
+  document.getElementById('infoRods').style.display = 'none';   // straight view re-shows it
 }
 
 // Number of different knots/links for the current C and L, shown under Leads.
@@ -1140,7 +1154,9 @@ let showTubeDiag = false;
 let showRoundDiag = false;
 let showKnot  = false;
 let showStraight = false;
-let straightRelax = false;   // Straight view: equalize string lengths (anchors fixed)
+let straightOpt   = false;   // Straight view: symmetric anchor optimization (move rings)
+let straightUniform = false; // Straight view: cut all rods to the shortest rod's length
+let straightEven  = false;   // Straight view (Optimize): equalize each rod's two end-strings by rotation
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
@@ -1148,7 +1164,9 @@ function setViewButtons(current) {
   document.getElementById('diagToggle').style.display    = current === 'diag'    ? 'none' : '';
   document.getElementById('knotToggle').style.display = current === 'knot' ? 'none' : '';
   document.getElementById('straightToggle').style.display = current === 'straight' ? 'none' : '';
-  document.getElementById('relaxToggle').style.display = current === 'straight' ? '' : 'none';  // Equal: straight only
+  document.getElementById('optToggle').style.display   = current === 'straight' ? '' : 'none';  // Optimize: straight only
+  document.getElementById('uniformToggle').style.display = current === 'straight' ? '' : 'none'; // Uniform: straight only
+  document.getElementById('evenToggle').style.display  = current === 'straight' ? '' : 'none';   // Even: straight only
 }
 
 
@@ -1974,7 +1992,9 @@ function enterStraightMode() {
   document.getElementById('knotSliders').style.display = '';          // keep the thin/thick slider
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = 'none';
-  document.getElementById('straightSection').style.display = '';      // cylinder-radius slider
+  document.getElementById('straightSection').style.display = '';      // cylinder / lambda sliders
+  document.getElementById('cylSliders').style.display   = straightOpt ? 'none' : '';
+  document.getElementById('lambdaSlider').style.display = straightOpt ? '' : 'none';
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
@@ -1992,7 +2012,7 @@ function enterStraightMode() {
 // mu form an interval [lo,hi] per rod.  We use the smallest mu every rod can
 // reach (= max of the per-rod lo's) -> equal AND as taut as equal allows.
 // Returns a direction per rod (parallel to `rods`); non-solvable rods keep dir.
-function strEqualizeDirs(rods, anchorByKey) {
+function strEqualizeDirs(rods, anchorByKey, quiet) {
   const info = rods.map(rod => {
     const Hm = anchorByKey.get(rod.keyMinus), Hp = anchorByKey.get(rod.keyPlus);
     if (!Hm || !Hp) return { ok: false };
@@ -2026,7 +2046,7 @@ function strEqualizeDirs(rods, anchorByKey) {
     ringMu.set(k, Math.max(ringMu.get(k) ?? 0, d.lo));
   });
   const muList = [...ringMu.entries()].sort((a, b) => a[0] - b[0]);
-  console.log(`equalize per-ring: rings=${ringMu.size}  ring-mu=[${muList.map(e => e[1].toFixed(2)).join(', ')}]`);
+  if (!quiet) console.log(`equalize per-ring: rings=${ringMu.size}  ring-mu=[${muList.map(e => e[1].toFixed(2)).join(', ')}]`);
 
   return info.map((d, i) => {
     if (!d.ok) return rods[i].dir.clone();          // keep current direction
@@ -2051,6 +2071,51 @@ function strEqualizeDirs(rods, anchorByKey) {
     };
     return (outwardness(d1) >= outwardness(d2) ? d1 : d2).normalize();
   });
+}
+
+// Tensegrity form-finding by dynamic relaxation.  Rods are rigid struts (fixed
+// length, hole at the midpoint); every cable (a rod end -> a hole) is a spring
+// with the common rest length mu.  Relax to force/torque equilibrium: cables in
+// tension pull, the rigid struts resist, and the structure settles into the
+// natural prestressed shape.  It can't collapse: a cable shorter than mu pushes
+// back, so the struts stay propped apart.  Symmetric init + symmetric forces keep
+// the result symmetric.  mu sets how tight the cables are.  Returns {P, d}.
+function strFormFind(rods, t0, t1, initDirs, mu) {
+  const N = rods.length;
+  const P = rods.map(r => r.P.clone());
+  const d = rods.map((r, i) => initDirs[i].clone());
+  const L = rods.map(r => r.Lminus);            // symmetric: Lminus == Lplus
+  const endP = (i, s) => P[i].clone().addScaledVector(d[i], s * L[i]);
+
+  const ITERS = 500, eta = 0.1, cap = 0.12 * mu;
+  for (let it = 0; it < ITERS; it++) {
+    const F = Array.from({ length: N }, () => new THREE.Vector3());
+    const T = Array.from({ length: N }, () => new THREE.Vector3());
+    for (let i = 0; i < N; i++) {
+      for (const [s, ti] of [[-1, t0[i]], [1, t1[i]]]) {
+        if (ti < 0) continue;
+        const E = endP(i, s), H = P[ti];
+        const vec = new THREE.Vector3().subVectors(H, E);
+        const len = vec.length();
+        if (len < 1e-9) continue;
+        const force = vec.multiplyScalar((len - mu) / len);   // k=1; tension when len>mu
+        F[i].add(force);
+        T[i].add(new THREE.Vector3().subVectors(E, P[i]).cross(force));
+        F[ti].sub(force);                                     // reaction on the hole's rod
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      const step = F[i].multiplyScalar(eta);
+      if (step.length() > cap) step.setLength(cap);
+      P[i].add(step);
+      const tl = T[i].length();
+      if (tl > 1e-9) {
+        let ang = eta * tl; if (ang > 0.2) ang = 0.2;
+        d[i].applyAxisAngle(T[i].multiplyScalar(1 / tl), ang).normalize();
+      }
+    }
+  }
+  return { P, d };
 }
 
 // Each over-crossing's strand-piece (split at the under-crossings, with its bight
@@ -2089,6 +2154,10 @@ function buildStraight() {
   const g            = components.length;
   const allCrossings = computeDiagramCrossingsAll(components, mod);
   updateInfo(B, g, allCrossings.crossingCount);
+  const ct = document.getElementById('componentToggle');
+  if (g === 1) { componentMode = false; ct.disabled = true; }
+  else ct.disabled = false;
+  ct.textContent = componentMode ? 'Full' : 'Solo';
 
   const yAxis = new THREE.Vector3(0, 1, 0);
 
@@ -2100,7 +2169,7 @@ function buildStraight() {
   const rods = [];
   const anchorByKey = new Map();   // crossing key -> anchor (hole) 3D position
 
-  for (let comp = 0; comp < g; comp++) {
+  for (let comp = 0; comp < g; comp++) {   // build the full tensegrity (Solo only hides at draw time)
     const bP = components[comp];
     const n  = bP.length;
     const crossMap = allCrossings[comp];
@@ -2174,15 +2243,33 @@ function buildStraight() {
         .addScaledVector(Tang, arcRef * (e.x - anchorPos.x))
         .add(new THREE.Vector3(0, 0, arcRef * (e.y - anchorPos.y)));
       const v0 = armVec(e0), v1 = armVec(e1);
-      const Lminus = v0.length(), Lplus = v1.length();
-      if (Lminus + Lplus < 1e-6) continue;
+      if (v0.length() + v1.length() < 1e-6) continue;
       const dir = new THREE.Vector3().subVectors(v1, v0).normalize();
+      // Put the hole at the rod's midpoint: cut the longer arm down to the shorter,
+      // so equal cable tension is balanced (no torque -> the rod won't rotate to one
+      // side).  For C=1 the arms are already equal, so this changes nothing there.
+      const L = Math.min(v0.length(), v1.length());
+      if (L < 1e-6) continue;
+      const dLen = 2 * Math.round(Math.min(Math.abs(anchorPos.y - e0.y), Math.abs(e1.y - anchorPos.y)));
 
       anchorByKey.set(keyOf(anchorPos), P);
-      rods.push({ P, dir, Lminus, Lplus, theta, yFrac: anchorPos.y / MAX_Y - 0.5,
-                  ringY: Math.round(anchorPos.y),
+      rods.push({ P, dir, Lminus: L, Lplus: L, theta, yFrac: anchorPos.y / MAX_Y - 0.5,
+                  ringY: Math.round(anchorPos.y), comp,
+                  diagLen: dLen,   // rod length in diagonal units (integer, symmetric about the hole)
                   keyAnchor: keyOf(anchorPos), keyMinus: keyOf(A), keyPlus: keyOf(Bd), color });
     }
+  }
+
+  // Disable Uniform when the rods are already a single length (nothing to cut).
+  document.getElementById('uniformToggle').disabled =
+    rods.length > 0 && rods.every(r => r.diagLen === rods[0].diagLen);
+
+  // Uniform: cut every rod down to the shortest rod's length (still centered on
+  // the hole), so all struts are equal length.
+  if (straightUniform && rods.length) {
+    const minL = Math.min(...rods.map(r => r.Lminus));
+    const minD = Math.min(...rods.map(r => r.diagLen));
+    rods.forEach(r => { r.Lminus = minL; r.Lplus = minL; r.diagLen = minD; });
   }
 
   // Map each anchor key to its rod, so a rod end knows which rod's anchor is its
@@ -2192,55 +2279,85 @@ function buildStraight() {
   const t0 = rods.map(r => idxByKey.has(r.keyMinus) ? idxByKey.get(r.keyMinus) : -1);
   const t1 = rods.map(r => idxByKey.has(r.keyPlus ) ? idxByKey.get(r.keyPlus ) : -1);
 
-  const eqDirs = strEqualizeDirs(rods, anchorByKey);   // fixed-anchor equalized directions
+  const eqDirs = strEqualizeDirs(rods, anchorByKey);   // equalize (Equal mode + form-finding init)
 
-  // Final per-rod position + orientation: equalized (Equal on) or raw.
-  let Pf, df;
-  if (straightRelax) { Pf = rods.map(r => r.P);  df = eqDirs; }
-  else               { Pf = rods.map(r => r.P);  df = rods.map(r => r.dir); }
+  // Cable lengths for a given set of positions + directions.
+  const lensFor = (Parr, darr) => {
+    const a = [];
+    for (let i = 0; i < rods.length; i++) {
+      const e0 = Parr[i].clone().addScaledVector(darr[i], -rods[i].Lminus);
+      const e1 = Parr[i].clone().addScaledVector(darr[i],  rods[i].Lplus);
+      if (t0[i] >= 0) a.push(e0.distanceTo(Parr[t0[i]]));
+      if (t1[i] >= 0) a.push(e1.distanceTo(Parr[t1[i]]));
+    }
+    return a;
+  };
 
-  // Report: one easy-to-compare number — equal total normalised by raw total
-  // (raw = the unconstrained shortest at this geometry).  Rods are fixed length,
-  // so the totals are directly comparable as you sweep radius/height.
+  // Final per-rod positions + orientations: Optimize -> tensegrity form-finding
+  // (relax to force equilibrium); Equal -> per-ring equalize; else raw.  Solo
+  // computes the full tensegrity and only hides the other components at draw time.
+  let df;
+  if (straightOpt) {
+    const eqL0 = lensFor(rods.map(r => r.P), eqDirs);
+    const initMean = eqL0.reduce((x, y) => x + y, 0) / (eqL0.length || 1);
+    const s = parseFloat(document.getElementById('straightLambdaSlider').value);  // 0 tight .. 1 loose
+    const mu = (0.45 + 0.55 * s) * initMean;   // stay tension-dominated (avoid the loose blow-up)
+    const ff = strFormFind(rods, t0, t1, eqDirs, mu);
+    rods.forEach((r, i) => r.P.copy(ff.P[i]));      // move anchors to the equilibrium
+    // Orientations: force-balance (from the relaxation), or — with Even on — rotate
+    // each rod to equalize its two end-strings (a free mechanism at uniform tension,
+    // doesn't move the anchors).
+    df = straightEven ? strEqualizeDirs(rods, anchorByKey, true) : ff.d;
+  } else {
+    df = rods.map(r => r.dir);
+  }
+  const Pf = rods.map(r => r.P);
+
+  // Report the displayed config's cable lengths (vs the default-cylinder raw total).
   {
-    const lensFor = (Parr, darr) => {
-      const a = [];
-      for (let i = 0; i < rods.length; i++) {
-        const e0 = Parr[i].clone().addScaledVector(darr[i], -rods[i].Lminus);
-        const e1 = Parr[i].clone().addScaledVector(darr[i],  rods[i].Lplus);
-        if (t0[i] >= 0) a.push(e0.distanceTo(Parr[t0[i]]));
-        if (t1[i] >= 0) a.push(e1.distanceTo(Parr[t1[i]]));
-      }
-      return a;
-    };
     const sum = a => a.reduce((x, y) => x + y, 0);
-    // Baseline: raw total at the DEFAULT cylinder (radius=height=260), which is
-    // independent of the sliders — so equal/rawDefault is a stable comparison.
     const Rref = 260 * pxToWorld, Hdef = arcRef * MAX_Y;
     const Pdef = rods.map(r => new THREE.Vector3(
       Rref * Math.cos(r.theta), Rref * Math.sin(r.theta), r.yFrac * Hdef));
     const rawDefT = sum(lensFor(Pdef, rods.map(r => r.dir)));
-    const eqL     = lensFor(rods.map(r => r.P), eqDirs);
-    const eqT     = sum(eqL);
-    console.log(`equal=${eqT.toFixed(1)}  rawDefault=${rawDefT.toFixed(1)}  ` +
-                `equal/rawDefault=${(eqT / rawDefT).toFixed(3)}  ` +
-                `equal-strings min=${Math.min(...eqL).toFixed(2)} max=${Math.max(...eqL).toFixed(2)}  ` +
-                `(r=${radiusRaw} h=${heightRaw})`);
+    const cl = lensFor(Pf, df), tot = sum(cl);
+    console.log(`strings=${tot.toFixed(1)}  rawDefault=${rawDefT.toFixed(1)}  ` +
+                `ratio=${(tot / rawDefT).toFixed(3)}  ` +
+                `min=${Math.min(...cl).toFixed(2)} max=${Math.max(...cl).toFixed(2)}`);
     const tally = new Map();
-    eqL.forEach(v => { const k = v.toFixed(2); tally.set(k, (tally.get(k) || 0) + 1); });
-    const distinct = [...tally.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
-    console.log(`distinct string lengths (${distinct.length}): ${distinct.map(([v, n]) => `${v}×${n}`).join('  ')}`);
+    cl.forEach(v => { const k = v.toFixed(2); tally.set(k, (tally.get(k) || 0) + 1); });
+    const sTally = [...tally.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+    console.log(`distinct string lengths (${sTally.length}): ${sTally.map(([v, n]) => `${v}×${n}`).join('  ')}`);
   }
 
-  // ── Phase 2: draw rods + strings (each end -> its hole). ─────────────────────
+  // On-screen: rods grouped by length (integer diagonal units), under the bights.
+  {
+    const t = new Map();
+    rods.forEach(r => t.set(r.diagLen, (t.get(r.diagLen) || 0) + 1));
+    const groups = [...t.entries()].sort((a, b) => a[0] - b[0]);
+    const el = document.getElementById('infoRods');
+    el.textContent = 'rods: ' + groups.map(([len, n]) => `${n}×${len}`).join('  ·  ');
+    el.style.display = '';
+  }
+
+  // ── Phase 2: draw rods, then strings. ───────────────────────────────────────
   const stringMat = new THREE.MeshPhongMaterial({ color: 0xffa53a, specular: 0x222222, shininess: 30 });
   const stringR = 0.035;   // fixed; the thin/thick slider changes rods only
+  const drawString = (a, b) => {
+    const sd = new THREE.Vector3().subVectors(b, a);
+    const sl = sd.length();
+    if (sl < 1e-6) return;
+    const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, sl, 6, 1), stringMat);
+    str.position.copy(a).addScaledVector(sd, 0.5);
+    str.quaternion.setFromUnitVectors(yAxis, sd.clone().normalize());
+    str.frustumCulled = false;
+    knotGroup.add(str);
+  };
   for (let i = 0; i < rods.length; i++) {
-    const rod = rods[i];
-    const P = Pf[i], d = df[i];
+    if (componentMode && rods[i].comp !== 0) continue;   // Solo: draw one component only
+    const rod = rods[i], P = Pf[i], d = df[i];
     const e0 = P.clone().addScaledVector(d, -rod.Lminus);
     const e1 = P.clone().addScaledVector(d,  rod.Lplus);
-
     const dir = new THREE.Vector3().subVectors(e1, e0);
     const rodMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(tubeRadius, tubeRadius, dir.length(), 10, 1),
@@ -2249,19 +2366,9 @@ function buildStraight() {
     rodMesh.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     rodMesh.frustumCulled = false;
     knotGroup.add(rodMesh);
-
-    for (const [end, ti] of [[e0, t0[i]], [e1, t1[i]]]) {   // each end -> its hole
-      if (ti < 0) continue;
-      const Hole = Pf[ti];
-      const sd = new THREE.Vector3().subVectors(Hole, end);
-      const sl = sd.length();
-      if (sl < 1e-6) continue;
-      const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, sl, 6, 1), stringMat);
-      str.position.copy(end).addScaledVector(sd, 0.5);
-      str.quaternion.setFromUnitVectors(yAxis, sd.clone().normalize());
-      str.frustumCulled = false;
-      knotGroup.add(str);
-    }
+    // strings: each end -> its hole (the hole may belong to another, hidden component)
+    if (t0[i] >= 0) drawString(e0, Pf[t0[i]]);
+    if (t1[i] >= 0) drawString(e1, Pf[t1[i]]);
   }
 
   // Fixed scale — based on the reference cylinder height only, so it does NOT
@@ -2296,9 +2403,21 @@ document.getElementById('roundToggle').addEventListener('click', () => {
 });
 document.getElementById('knotToggle').addEventListener('click', enterKnotMode);
 document.getElementById('straightToggle').addEventListener('click', enterStraightMode);
-document.getElementById('relaxToggle').addEventListener('click', () => {
-  straightRelax = !straightRelax;
-  document.getElementById('relaxToggle').classList.toggle('active', straightRelax);
+document.getElementById('uniformToggle').addEventListener('click', () => {
+  straightUniform = !straightUniform;
+  document.getElementById('uniformToggle').classList.toggle('active', straightUniform);
+  if (showStraight) buildStraight();
+});
+document.getElementById('evenToggle').addEventListener('click', () => {
+  straightEven = !straightEven;
+  document.getElementById('evenToggle').classList.toggle('active', straightEven);
+  if (showStraight) buildStraight();
+});
+document.getElementById('optToggle').addEventListener('click', () => {
+  straightOpt = !straightOpt;
+  document.getElementById('optToggle').classList.toggle('active', straightOpt);
+  document.getElementById('cylSliders').style.display   = straightOpt ? 'none' : '';
+  document.getElementById('lambdaSlider').style.display = straightOpt ? '' : 'none';
   if (showStraight) buildStraight();
 });
 // Largest on-screen outer radius that still fits the drawing area (plus the
@@ -2316,6 +2435,7 @@ document.getElementById('roundInnerSlider').addEventListener('input', () => { if
 document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 document.getElementById('straightRadiusSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
 document.getElementById('straightHeightSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
+document.getElementById('straightLambdaSlider').addEventListener('input', () => { if (showStraight && straightOpt) buildStraight(); });
 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
@@ -2324,6 +2444,7 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
   else if (showRoundDiag) drawRoundDiagram();
+  else if (showStraight) buildStraight();
   else if (showKnot) buildKnot();
   else buildKnot();
 });
@@ -2818,6 +2939,7 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
 
 // ── Initial state ──────────────────────────────────────────────────────────
 syncAB2List(parseInt(document.getElementById('mInput').value));
+setKnotFromUI(parseInt(document.getElementById('mInput').value));   // rebuild ZIGZAG for the synced a,b
 syncRoundOuterMax();
 document.getElementById('abParamDisplay').style.display = '';
 enterKnotMode();
