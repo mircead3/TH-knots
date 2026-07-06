@@ -982,17 +982,33 @@ document.getElementById('cBtn2').classList.add('active');
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
+  // Shift+arrow: step only through flip-symmetric (self-flip) entries.  Walk the
+  // list in `dir` until we land on a symmetric entry; if none exist, do nothing.
+  const nextIdx = (list, idx, isSym) => {
+    const n = list.length;
+    if (!e.shiftKey) return (idx + dir + n) % n;
+    for (let step = 1; step <= n; step++) {
+      const j = (idx + dir * step + n * step) % n;
+      if (isSym(list[j])) return j;
+    }
+    return -1;  // no symmetric entry found
+  };
   if (currentC === 2 && ab2ValidList.length > 0) {
     e.preventDefault();
-    const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
-    ab2ValidIdx = (ab2ValidIdx + dir + ab2ValidList.length) % ab2ValidList.length;
+    const j = nextIdx(ab2ValidList, ab2ValidIdx, ([a, b]) => a === b);
+    if (j < 0) return;
+    ab2ValidIdx = j;
     [currentA, currentB] = ab2ValidList[ab2ValidIdx];
     updateAB2Display();
     rebuildKnot();
   } else if (currentC === 3 && c3ValidList.length > 0) {
     e.preventDefault();
-    const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
-    c3ValidIdx = (c3ValidIdx + dir + c3ValidList.length) % c3ValidList.length;
+    const m = parseInt(document.getElementById('mInput').value);
+    const j = nextIdx(c3ValidList, c3ValidIdx, ([a, b, c, d]) =>
+      c3CanonKey(c3Seq(a, b, c, d, m)) === c3CanonKey(c3FlipSeq(a, b, c, d, m)));
+    if (j < 0) return;
+    c3ValidIdx = j;
     [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
     updateC3Display();
     rebuildKnot();
