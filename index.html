@@ -971,10 +971,15 @@ function dedupC3(m, raw) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
+  // Representative: prefer a flip-symmetric diagram (so Shift+arrow can reach the
+  // knot), then most bight rows, then lexicographically smallest.
+  const isSym = t => ckey(t) === c3CanonKey(c3FlipSeq(t[0], t[1], t[2], t[3], m));
   const list = [], mirror = [];
   for (const members of groups.values()) {
-    let rep = members[0], repRows = c3RowCount(m, rep[0], rep[1], rep[2], rep[3]);
-    for (const t of members) {
+    const sym = members.filter(isSym);
+    const pool = sym.length ? sym : members;
+    let rep = pool[0], repRows = c3RowCount(m, rep[0], rep[1], rep[2], rep[3]);
+    for (const t of pool) {
       const rows = c3RowCount(m, t[0], t[1], t[2], t[3]);
       if (rows > repRows || (rows === repRows && cmp(t, rep))) { rep = t; repRows = rows; }
     }
@@ -1659,7 +1664,7 @@ function drawDiagram() {
       ? xs[s] + (yDiag - ys[s])   // ascending slope +1
       : xs[s] - (yDiag - ys[s]);  // descending slope -1
 
-    ctx.font = '11px monospace';
+    ctx.font = '15px monospace';
     ctx.textAlign = 'center';
     for (const { y: rulerY, spans } of rulers) {
       const yDiag = (oy - rulerY) / scale;
@@ -1702,7 +1707,7 @@ function drawDiagram() {
       { x: (xs[1] + xs[3]) / 2, y0: ys[1], y1: ys[3], name: `2b=${2*currentB}`, color: 'rgba(255,220,60,0.9)', skip: currentB === 0 },
     ];
     const tickW = 5;
-    ctx.font = '11px monospace';
+    ctx.font = '15px monospace';
     ctx.textAlign = 'left';
     for (const { x, y0, y1, name, color, skip } of rulers2) {
       if (skip) continue;
