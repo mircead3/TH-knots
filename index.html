@@ -265,6 +265,7 @@
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
     <button id="flipToggle"      class="view-btn">Flip</button>
+    <button id="formToggle"      class="view-btn" style="display:none;">Form ▸</button>
   </div>
   <!-- Bights view kept for future debugging; hidden from the UI -->
   <button id="bightsToggle" class="view-btn" style="display:none;">Bights</button>
@@ -391,7 +392,10 @@ function setKnotFromUI(m) {
     setKnotDef(m, a, b);
   } else {
     let t = [c3A, c3B, c3C, c3D];
-    if (knotFlipped && c3MirrorList[c3ValidIdx]) t = c3MirrorList[c3ValidIdx];
+    if (knotFlipped) {
+      const mm = c3AltMirror[c3ValidIdx];
+      if (mm && mm[c3FormIdx]) t = mm[c3FormIdx];
+    }
     setKnotDefC3(m, t[0], t[1], t[2], t[3]);
   }
 }
@@ -734,6 +738,9 @@ let ab2ListCacheM = -1;
 let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
 let c3ValidList = [], c3ValidIdx = -1;
 let c3MirrorList = [];          // c3MirrorList[i] = valid (a,b,c,d) for list[i]'s mirror
+let c3AltList = [];             // c3AltList[i] = distinct equivalent diagrams of knot i (forms); [0] = representative
+let c3AltMirror = [];           // c3AltMirror[i][j] = valid mirror tuple of c3AltList[i][j]
+let c3FormIdx = 0;              // which form of the current knot is displayed
 let c3ListCacheM = -1;
 let knotFlipped = false;        // flip button: render the mirror image in place
 let mDisplayed = null;          // L stepper: the leads count we have actually built
@@ -973,8 +980,10 @@ function dedupC3(m, raw) {
   }
   // Representative: prefer a flip-symmetric diagram (so Shift+arrow can reach the
   // knot), then most bight rows, then lexicographically smallest.
-  const isSym = t => ckey(t) === c3CanonKey(c3FlipSeq(t[0], t[1], t[2], t[3], m));
-  const list = [], mirror = [];
+  const fkey = t => c3CanonKey(c3FlipSeq(t[0], t[1], t[2], t[3], m));
+  const isSym = t => ckey(t) === fkey(t);
+  const orbitOf = t => { const a = ckey(t), b = fkey(t); return a < b ? a + '|' + b : b + '|' + a; };
+  const list = [], mirror = [], alt = [], altMirror = [];
   for (const members of groups.values()) {
     const sym = members.filter(isSym);
     const pool = sym.length ? sym : members;
@@ -983,26 +992,48 @@ function dedupC3(m, raw) {
       const rows = c3RowCount(m, t[0], t[1], t[2], t[3]);
       if (rows > repRows || (rows === repRows && cmp(t, rep))) { rep = t; repRows = rows; }
     }
-    const flipKey = c3CanonKey(c3FlipSeq(rep[0], rep[1], rep[2], rep[3], m));
-    const mir = members.find(t => ckey(t) === flipKey);
+    // Distinct equivalent diagrams (forms): one per flip-orbit — same-chirality
+    // only, since the Flip button reaches the mirror.  rep first, then the rest
+    // ordered symmetric-first, most rows, lexicographic.
+    const byKey = new Map();               // one lex-min tuple per diagram (ckey)
+    for (const t of members) { const k = ckey(t); const c = byKey.get(k); if (!c || cmp(t, c)) byKey.set(k, t); }
+    const used = new Set([orbitOf(rep)]);
+    const others = [];
+    for (const t of byKey.values()) { const o = orbitOf(t); if (used.has(o)) continue; used.add(o); others.push(t); }
+    others.sort((x, y) => {
+      const s = (isSym(x) ? 0 : 1) - (isSym(y) ? 0 : 1); if (s) return s;
+      const r = c3RowCount(m, y[0], y[1], y[2], y[3]) - c3RowCount(m, x[0], x[1], x[2], x[3]); if (r) return r;
+      return cmp(x, y) ? -1 : (cmp(y, x) ? 1 : 0);
+    });
+    const forms = [rep, ...others];
+    const formMir = forms.map(f => { const fk = fkey(f); return members.find(t => ckey(t) === fk) || f; });
     list.push(rep);
-    mirror.push(mir || rep);
+    mirror.push(formMir[0]);
+    alt.push(forms);
+    altMirror.push(formMir);
   }
-  return { list, mirror };
+  return { list, mirror, alt, altMirror };
 }
 
 function syncC3List(m) {
   if (m !== c3ListCacheM) {
     const dd = dedupC3(m, computeValidC3(m));
-    c3ValidList = dd.list; c3MirrorList = dd.mirror;
+    c3ValidList = dd.list; c3MirrorList = dd.mirror; c3AltList = dd.alt; c3AltMirror = dd.altMirror;
     c3ListCacheM = m;
-    c3ValidIdx = 0;
+    c3ValidIdx = 0; c3FormIdx = 0;
     if (c3ValidList.length > 0) [c3A, c3B, c3C, c3D] = c3ValidList[0];
   } else {
-    c3ValidIdx = c3ValidList.findIndex(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
-    if (c3ValidIdx < 0 && c3ValidList.length > 0) {
-      c3ValidIdx = 0;
-      [c3A, c3B, c3C, c3D] = c3ValidList[0];
+    // Keep the current knot (and form) if the shown tuple is one of its forms;
+    // otherwise resolve the index from the tuple and reset to the base form.
+    const forms = c3AltList[c3ValidIdx];
+    const onForm = forms && forms.some(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
+    if (!onForm) {
+      c3ValidIdx = c3ValidList.findIndex(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
+      c3FormIdx = 0;
+      if (c3ValidIdx < 0 && c3ValidList.length > 0) {
+        c3ValidIdx = 0;
+        [c3A, c3B, c3C, c3D] = c3ValidList[0];
+      }
     }
   }
   updateC3Display();
@@ -1017,8 +1048,32 @@ function updateC3Display() {
   pd.style.display = currentC === 3 ? '' : 'none';
   pd.textContent = `a=${c3A}  b=${c3B}  c=${c3C}  d=${c3D}`;
   updateFlipButton();
+  updateFormButton();
   updateKnotCount();
 }
+
+// Form button: cycles the current knot through its distinct equivalent diagrams
+// (same chirality; the mirror stays on the Flip button).  Disabled/hidden when
+// the knot has only one form or we're not in C=3.
+function updateFormButton() {
+  const btn = document.getElementById('formToggle');
+  const forms = currentC === 3 ? c3AltList[c3ValidIdx] : null;
+  btn.style.display = currentC === 3 ? '' : 'none';
+  btn.disabled = !forms || forms.length < 2;
+  btn.textContent = forms && forms.length ? `Form ${c3FormIdx + 1}/${forms.length} ▸` : 'Form ▸';
+}
+
+function cycleForm() {
+  if (currentC !== 3) return;
+  const forms = c3AltList[c3ValidIdx];
+  if (!forms || forms.length < 2) return;
+  knotFlipped = false;
+  c3FormIdx = (c3FormIdx + 1) % forms.length;
+  [c3A, c3B, c3C, c3D] = forms[c3FormIdx];
+  updateC3Display();
+  rebuildKnot();
+}
+document.getElementById('formToggle').addEventListener('click', cycleForm);
 
 // Valid (a,b) for C=2.  The two restrictions together are exactly
 // "all four zigzag segments are odd and ≥ 3":
@@ -1172,6 +1227,8 @@ function setComplexity(c) {
   document.getElementById('abParamDisplay').style.display  = c === 2 ? '' : 'none';
   document.getElementById('c3ParamDisplay').style.display = c === 3 ? '' : 'none';
   document.getElementById('flipToggle').disabled = (c === 1);   // no parameters to flip
+  c3FormIdx = 0;
+  updateFormButton();
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
@@ -1217,7 +1274,7 @@ document.addEventListener('keydown', e => {
     const j = nextIdx(c3ValidList, c3ValidIdx, ([a, b, c, d]) =>
       c3CanonKey(c3Seq(a, b, c, d, m)) === c3CanonKey(c3FlipSeq(a, b, c, d, m)));
     if (j < 0) return;
-    c3ValidIdx = j;
+    c3ValidIdx = j; c3FormIdx = 0;
     [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
     updateC3Display();
     rebuildKnot();
