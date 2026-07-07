@@ -384,9 +384,16 @@ function setKnotDefC3(m, a, b, c, d) {
 let currentC = 2;
 
 function setKnotFromUI(m) {
-  if (currentC === 1) setKnotDefC1(m);
-  else if (currentC === 2) { const [a, b] = getAB(); setKnotDef(m, a, b); }
-  else { setKnotDefC3(m, c3A, c3B, c3C, c3D); }
+  if (currentC === 1) { setKnotDefC1(m); return; }
+  if (currentC === 2) {
+    let [a, b] = getAB();
+    if (knotFlipped) [a, b] = [b, a];      // flip = swap the two ascending segments
+    setKnotDef(m, a, b);
+  } else {
+    let t = [c3A, c3B, c3C, c3D];
+    if (knotFlipped && c3MirrorList[c3ValidIdx]) t = c3MirrorList[c3ValidIdx];
+    setKnotDefC3(m, t[0], t[1], t[2], t[3]);
+  }
 }
 
 setKnotDef(5, 1, 1); // initial values match the original example
@@ -726,7 +733,11 @@ let ab2ValidList = [], ab2ValidIdx = -1;
 let ab2ListCacheM = -1;
 let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
 let c3ValidList = [], c3ValidIdx = -1;
+let c3MirrorList = [];          // c3MirrorList[i] = valid (a,b,c,d) for list[i]'s mirror
 let c3ListCacheM = -1;
+let knotFlipped = false;        // flip button: render the mirror image in place
+let mDisplayed = null;          // L stepper: the leads count we have actually built
+let mStepTimer = null;
 let componentMode = false;
 
 function hasAllCrossings(components, mod) {
@@ -805,9 +816,180 @@ function computeValidC3(m) {
   return list;
 }
 
+// ── Knot-identity dedup (C=3) ──────────────────────────────────────────────
+// computeValidC3 removes only *segment-sequence* duplicates; genuinely equal
+// knots still appear under different (a,b,c,d) — they differ by a flype, so the
+// diagrams differ but the knot is the same.  We dedup by the canonical
+// over/under Gauss code, which for these prime reduced *alternating* diagrams
+// is a knot invariant: equal code ⇒ same knot, so no distinct knot is ever
+// dropped (the only residual risk is a flype-related duplicate slipping
+// through).  Mirrors are folded in (policy: collapse mirrors, keep flip button).
+// Computed at the smallest bight count coprime to m — fewest crossings, and the
+// knot identity is bight-independent.
+function smallestCoprimeB(m) { let B = 2; while (gcd(m, B) !== 1) B++; return B; }
+
+// Distinct bight rows of (a,b,c,d).  We keep the representative with the MOST
+// rows: the most generic diagram, giving the tensegrity optimizer the most
+// degrees of freedom and the least degeneracy.
+function c3RowCount(m, a, b, c, d) {
+  const L = m;
+  return new Set([0, 3*L-c-d, 3*L-a-c-d, 3*L-a-c, 3*L-a-b-c, 3*L-a-b]).size;
+}
+
+// Booth's algorithm: index of the lexicographically least rotation of S.
+function boothLeastRotation(S) {
+  const N = S.length;
+  const f = new Int32Array(2 * N).fill(-1);
+  let k = 0;
+  for (let j = 1; j < 2 * N; j++) {
+    const sj = S[j % N];
+    let i = f[j - k - 1];
+    while (i !== -1 && sj !== S[(k + i + 1) % N]) {
+      if (sj < S[(k + i + 1) % N]) k = j - i - 1;
+      i = f[i];
+    }
+    if (sj !== S[(k + i + 1) % N]) {
+      if (sj < S[k % N]) k = j;
+      f[j - k] = -1;
+    } else {
+      f[j - k] = i + 1;
+    }
+  }
+  return k;
+}
+
+// Canonical key of an over/under Gauss sequence (array of [label, overBit]),
+// folding rotation, reversal and mirror.  Uses a gap encoding — each position
+// carries the cyclic distance to its crossing's partner occurrence (rotation-
+// invariant, fixed alphabet) plus the over/under bit — so the minimal rotation
+// is O(n) via Booth's algorithm.  Verified to yield the identical partition to
+// the naive relabel-every-rotation canon for m = 3..18.
+function c3CanonGauss(seq) {
+  const N = seq.length;
+  const tokensOf = base => {
+    const partner = new Int32Array(N);
+    const posMap = new Map();
+    for (let i = 0; i < N; i++) {
+      const lab = base[i][0];
+      if (posMap.has(lab)) { const j = posMap.get(lab); partner[i] = j; partner[j] = i; }
+      else posMap.set(lab, i);
+    }
+    const t = new Int32Array(N);
+    for (let i = 0; i < N; i++) t[i] = ((((partner[i] - i) % N) + N) % N) * 2 + base[i][1];
+    return t;
+  };
+  const keyOf = t => {
+    const k = boothLeastRotation(t), out = new Array(N);
+    for (let i = 0; i < N; i++) out[i] = t[(k + i) % N];
+    return out.join(',');
+  };
+  const rev = seq.slice().reverse();
+  let best = null;
+  for (const base of [seq, rev]) {
+    const t0 = tokensOf(base);
+    const tm = tokensOf(base.map(([lab, o]) => [lab, o ^ 1]));
+    for (const t of [t0, tm]) { const kk = keyOf(t); if (best === null || kk < best) best = kk; }
+  }
+  return best;
+}
+
+// Canonical over/under Gauss code (string) for the C=3 knot (a,b,c,d).
+function c3GaussKey(m, a, b, c, d) {
+  const L = m, B = smallestCoprimeB(m), mod = 6 * B, half = mod >> 1, PER = 6 * m, D = 6;
+  const ZIG = [[0,0],[3*L-c-d,3*L-c-d],[3*L+a-c-d,3*L-a-c-d],
+               [3*L+a-c,3*L-a-c],[3*L+a+b-c,3*L-a-b-c],[3*L+a+b,3*L-a-b]];
+  const bP = []; const seenB = new Set();
+  outer:
+  for (let k = 0; k < B; k++)
+    for (let j = 0; j < D; j++) {
+      const x = ZIG[j][0], y = ZIG[j][1];
+      const bx = (((x + k*PER) % mod) + mod) % mod;
+      const dy = ZIG[(j+1)%D][1] - y, nd = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+      const key = bx + ',' + y + ',' + nd;
+      if (seenB.has(key)) break outer;
+      seenB.add(key); bP.push([bx, y]);
+    }
+  const npt = bP.length;
+  const cr = new Map();
+  for (let p = 0; p < npt; p++) {
+    const ax = bP[p][0], ay = bP[p][1], dxp = bP[(p+1)%npt][1] - ay;
+    if (dxp <= 0) continue;
+    for (let q = 0; q < npt; q++) {
+      const cy = bP[q][1], cx = bP[q][0], dxq = cy - bP[(q+1)%npt][1];
+      if (dxq <= 0) continue;
+      const diffY = cy - ay;
+      // A crossing needs (ax+t) ≡ (cx+u) (mod mod) with u = diffY−t, i.e.
+      // 2t ≡ cx+diffY−ax (mod mod).  Solve directly instead of scanning t.
+      const K = (((cx + diffY - ax) % mod) + mod) % mod;
+      if (K % 2 !== 0) continue;
+      const t0 = (K >> 1) % half;
+      const tlo = Math.max(1, diffY - dxq + 1), thi = Math.min(dxp - 1, diffY - 1);
+      if (tlo > thi) continue;
+      for (let t = tlo + (((t0 - tlo) % half) + half) % half; t <= thi; t += half) {
+        const u = diffY - t;
+        const kk = ((((ax+t)%mod)+mod)%mod) + ',' + (ay+t);
+        if (!cr.has(kk)) cr.set(kk, {p, t, q, u});
+      }
+    }
+  }
+  const lst = [...cr.values()];
+  const cum = [0];
+  for (let i = 0; i < npt; i++) cum.push(cum[i] + Math.abs(bP[(i+1)%npt][1] - bP[i][1]));
+  const enc = [];
+  lst.forEach((c2, i) => { enc.push([cum[c2.p]+c2.t, i, true]); enc.push([cum[c2.q]+c2.u, i, false]); });
+  enc.sort((A, Bb) => A[0] - Bb[0]);
+  const rank = new Array(lst.length);
+  enc.forEach((e, r) => { if (e[2]) rank[e[1]] = r; });
+  let over = lst.map((_, i) => rank[i] % 2 === 0);
+  let bestSeg = Infinity, bestT = Infinity, fio = true;
+  lst.forEach((c2, i) => {
+    const laterSeg = Math.max(c2.p, c2.q);
+    const tOnLater = c2.p > c2.q ? c2.t : c2.u;
+    const isOverLater = c2.p > c2.q ? over[i] : !over[i];
+    if (laterSeg < bestSeg || (laterSeg === bestSeg && tOnLater < bestT)) {
+      bestSeg = laterSeg; bestT = tOnLater; fio = isOverLater;
+    }
+  });
+  if (!fio) over = over.map(o => !o);
+  const enc2 = [];
+  lst.forEach((c2, i) => { enc2.push([cum[c2.p]+c2.t, i, over[i]]); enc2.push([cum[c2.q]+c2.u, i, !over[i]]); });
+  enc2.sort((A, Bb) => A[0] - Bb[0]);
+  const seq = enc2.map(e => [e[1], e[2] ? 1 : 0]);
+  return c3CanonGauss(seq);
+}
+
+// Dedup a raw C=3 list to one representative per knot (mirrors folded in).
+// Returns { list, mirror }: mirror[i] is a valid (a,b,c,d) drawing of list[i]'s
+// mirror image (for the flip button), or list[i] itself when self-mirror.
+function dedupC3(m, raw) {
+  const ckey = t => c3CanonKey(c3Seq(t[0], t[1], t[2], t[3], m));
+  const cmp = (t, r) => t[0]<r[0] || (t[0]===r[0] && (t[1]<r[1] ||
+              (t[1]===r[1] && (t[2]<r[2] || (t[2]===r[2] && t[3]<r[3])))));
+  const groups = new Map();
+  for (const t of raw) {
+    const k = c3GaussKey(m, t[0], t[1], t[2], t[3]);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(t);
+  }
+  const list = [], mirror = [];
+  for (const members of groups.values()) {
+    let rep = members[0], repRows = c3RowCount(m, rep[0], rep[1], rep[2], rep[3]);
+    for (const t of members) {
+      const rows = c3RowCount(m, t[0], t[1], t[2], t[3]);
+      if (rows > repRows || (rows === repRows && cmp(t, rep))) { rep = t; repRows = rows; }
+    }
+    const flipKey = c3CanonKey(c3FlipSeq(rep[0], rep[1], rep[2], rep[3], m));
+    const mir = members.find(t => ckey(t) === flipKey);
+    list.push(rep);
+    mirror.push(mir || rep);
+  }
+  return { list, mirror };
+}
+
 function syncC3List(m) {
   if (m !== c3ListCacheM) {
-    c3ValidList = computeValidC3(m);
+    const dd = dedupC3(m, computeValidC3(m));
+    c3ValidList = dd.list; c3MirrorList = dd.mirror;
     c3ListCacheM = m;
     c3ValidIdx = 0;
     if (c3ValidList.length > 0) [c3A, c3B, c3C, c3D] = c3ValidList[0];
@@ -865,8 +1047,11 @@ function updateC3Display() {
 // Hence the distinct-knot count is (N + #{a==b}) / 2.
 function validPairs(m) {
   const pairs = [];
+  // a ≤ b keeps one of each mirror pair (a,b)/(b,a) — the complete dedup for
+  // C=2 (its only same-knot symmetry is the transpose = flip).  The flip button
+  // still reaches the (b,a) mirror in place.
   for (let a = 0; a <= m - 3; a++)
-    for (let b = 0; a + b <= m - 3; b++)
+    for (let b = a; a + b <= m - 3; b++)
       if ((m - a - b) % 2 === 1 && !(a === 0 && b === 0)) pairs.push([a, b]);
   return pairs;
 }
@@ -919,20 +1104,11 @@ function rebuildKnot() {
   else buildKnot();
 }
 
-function onMChange() {
-  let m = parseInt(document.getElementById('mInput').value);
-  if (isNaN(m)) return;
-  if (m < minLeads()) {
-    m = minLeads();
-    document.getElementById('mInput').value = m;
-  }
-  if (currentC === 2) {
-    if (!syncAB2List(m)) return;
-  }
-  if (currentC === 3) {
-    const B2 = parseInt(document.getElementById('bInput').value);
-    if (!syncC3List(m)) return;
-  }
+// Build everything for a specific leads count m (no input reads/writes).
+function buildForM(m) {
+  knotFlipped = false;
+  if (currentC === 2 && !syncAB2List(m)) return;
+  if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
   if (showDiagram) drawDiagram();
   else if (showTubeDiag) buildTubeDiagram();
@@ -941,8 +1117,33 @@ function onMChange() {
   else buildKnot();
 }
 
+// The per-L rebuild can take ~1s at large L.  The native number-input spinner
+// causes two problems: it fires input+change per click, and if we build (and
+// freeze the thread) mid-click the spinner auto-repeats and adds a spurious
+// extra step.  So we DEBOUNCE — wait ~250ms for the interaction to settle, then
+// walk L one step at a time toward the input's value, building every
+// intermediate and yielding between steps.  A click lands on exactly the next
+// value; nothing is skipped or doubled.
+function scheduleMStep() {
+  clearTimeout(mStepTimer);
+  mStepTimer = setTimeout(mWalk, 250);
+}
 
-document.getElementById('mInput').addEventListener('change', onMChange);
+function mWalk() {
+  const mInput = document.getElementById('mInput');
+  let target = parseInt(mInput.value);
+  if (isNaN(target)) { mInput.value = mDisplayed; return; }
+  target = Math.max(minLeads(), Math.min(parseInt(mInput.max) || 30, target));
+  if (String(target) !== mInput.value) mInput.value = target;   // clamp display
+  if (mDisplayed === null) mDisplayed = target;
+  if (mDisplayed === target) return;
+  mDisplayed += Math.sign(target - mDisplayed);                 // exactly one step
+  buildForM(mDisplayed);
+  if (mDisplayed !== target) mStepTimer = setTimeout(mWalk, 0); // settled → keep walking
+}
+
+document.getElementById('mInput').addEventListener('input', scheduleMStep);
+mDisplayed = parseInt(document.getElementById('mInput').value);
 document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
@@ -959,6 +1160,7 @@ document.getElementById('bInput').addEventListener('change', () => {
 
 function setComplexity(c) {
   currentC = c;
+  knotFlipped = false;
   [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.toggle('active', n === c));
   document.getElementById('shapeSection').style.display  = c === 2 ? '' : 'none';
   document.getElementById('c3Section').style.display     = c === 3 ? '' : 'none';
@@ -976,12 +1178,14 @@ function setComplexity(c) {
   updateKnotCount();   // C=1 has no list sync above
   document.getElementById('straightRow').style.display = '';   // Straight: all complexities
   rebuildKnot();
+  mDisplayed = parseInt(document.getElementById('mInput').value);   // keep L stepper in sync
 }
 document.getElementById('cBtn2').classList.add('active');
 [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).addEventListener('click', () => setComplexity(n)));
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  knotFlipped = false;   // stepping to a new knot clears any flip
   const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
   // Shift+arrow: step only through flip-symmetric (self-flip) entries.  Walk the
   // list in `dir` until we land on a symmetric entry; if none exist, do nothing.
@@ -1063,47 +1267,19 @@ function updateFlipButton() {
 // Number of distinct knots/links for the current C and L: flip pairs count once,
 // self-flip (flip-disabled) knots count once → (N + selfFlipCount) / 2.
 function countDistinctKnots() {
+  // Lists are now deduped up to mirror, so each entry is one distinct knot.
   if (currentC === 1) return 1;
-  const m = parseInt(document.getElementById('mInput').value);
-  if (currentC === 2) {
-    const N = ab2ValidList.length;
-    if (N === 0) return 0;
-    const S = ab2ValidList.filter(([a, b]) => a === b).length;
-    return (N + S) / 2;
-  }
-  const N = c3ValidList.length;
-  if (N === 0) return 0;
-  let S = 0;
-  for (const [a, b, c, d] of c3ValidList)
-    if (c3CanonKey(c3Seq(a, b, c, d, m)) === c3CanonKey(c3FlipSeq(a, b, c, d, m))) S++;
-  return (N + S) / 2;
+  if (currentC === 2) return ab2ValidList.length;
+  return c3ValidList.length;
 }
 
 function flipKnot() {
-  if (currentC === 1) return;
-  const m = parseInt(document.getElementById('mInput').value);
-  if (isNaN(m)) return;
-  if (currentC === 2) {
-    if (ab2ValidList.length === 0) return;
-    // Vertical flip of C=2 swaps a and b; the (b,a) entry is in the list.
-    const na = currentB, nb = currentA;
-    const idx = ab2ValidList.findIndex(([x, y]) => x === na && y === nb);
-    if (idx < 0) return;
-    ab2ValidIdx = idx; currentA = na; currentB = nb;
-    updateAB2Display();
-  } else {
-    if (c3ValidList.length === 0) return;
-    const L3 = 3 * m;
-    // Flip = reinterpret the segment sequence ascending-first after reflection,
-    // i.e. an odd rotation of s = [L3-c-d, a, d, b, c, L3-a-b]: rotate by one.
-    const flippedSeq = [c3A, c3D, c3B, c3C, L3 - c3A - c3B, L3 - c3C - c3D];
-    const keyFlip = c3CanonKey(flippedSeq);
-    const idx = c3ValidList.findIndex(([A, B, C, D]) =>
-      c3CanonKey([L3 - C - D, A, D, B, C, L3 - A - B]) === keyFlip);
-    if (idx < 0) return;
-    c3ValidIdx = idx; [c3A, c3B, c3C, c3D] = c3ValidList[idx];
-    updateC3Display();
-  }
+  // Mirrors are deduped out of the list, so flip renders the mirror image in
+  // place (counter unchanged) via the knotFlipped flag; flipping twice returns
+  // to the representative.  setKnotFromUI applies it (swap a,b for C=2; the
+  // stored mirror tuple for C=3).
+  if (currentC === 1 || flipIsNoOp()) return;
+  knotFlipped = !knotFlipped;
   rebuildKnot();
 }
 document.getElementById('flipToggle').addEventListener('click', flipKnot);
