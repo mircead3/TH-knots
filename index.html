@@ -258,6 +258,7 @@
     <button id="optToggle" class="view-btn" style="display:none;">Optimize</button>
     <button id="evenToggle" class="view-btn" style="display:none;">Even</button>
     <button id="uniformToggle" class="view-btn" style="display:none;">Uniform</button>
+    <button id="buildToggle" class="view-btn" style="display:none;">Build</button>
   </div>
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
@@ -276,6 +277,7 @@
 <div id="c3ErrorDisplay" style="position:fixed;display:none;top:14px;left:50%;transform:translateX(-50%);max-width:70%;font-size:12px;color:#fff;background:rgba(180,30,30,0.92);border:1px solid rgba(255,120,120,0.7);border-radius:6px;padding:9px 14px;font-family:'SF Mono','Fira Code','Consolas',monospace;z-index:20;text-align:center;"></div>
 <div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
+<div id="buildInfo" style="position:fixed;display:none;left:50%;top:14px;transform:translateX(-50%);font-size:14px;color:#fff;background:rgba(0,20,40,0.82);border:1px solid rgba(0,255,136,0.5);border-radius:6px;padding:8px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:0.5px;z-index:12;text-align:center;pointer-events:none;"></div>
 <canvas id="diagram"></canvas>
 
 <script type="importmap">
@@ -1247,6 +1249,14 @@ document.getElementById('cBtn2').classList.add('active');
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  // Build mode (tensegrity): arrows step the build sequence instead of the knot list.
+  if (showStraight && buildMode) {
+    e.preventDefault();
+    buildStep += (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1;
+    if (buildStep < 0) buildStep = 0;
+    buildStraight();
+    return;
+  }
   knotFlipped = false;   // stepping to a new knot clears any flip
   const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
   // Shift+arrow: step only through flip-symmetric (self-flip) entries.  Walk the
@@ -1411,6 +1421,14 @@ let showStraight = false;
 let straightOpt   = false;   // Straight view: symmetric anchor optimization (move rings)
 let straightUniform = false; // Straight view: cut all rods to the shortest rod's length
 let straightEven  = false;   // Straight view (Optimize): equalize each rod's two end-strings by rotation
+let buildMode = false;       // Tensegrity: interactive build — step the string loop rod/string/rod...
+let buildStep = 0;           // current element index in the build sequence
+// Build-mode colors (easy to tweak): current element, already-built, and the
+// number tags for visited vs not-yet-visited tubes.
+const B_CUR   = new THREE.Color(0x00ff88);   // current element (rod or string)
+const B_BUILT = new THREE.Color(0x3a7bd5);   // already built
+const B_TAG_V = new THREE.Color(0xffffff);   // tag: visited tube
+const B_TAG_U = new THREE.Color(0x707070);   // tag: not yet visited
 const diagramCanvas = document.getElementById('diagram');
 
 function setViewButtons(current) {
@@ -1421,6 +1439,8 @@ function setViewButtons(current) {
   document.getElementById('optToggle').style.display   = current === 'straight' ? '' : 'none';  // Optimize: straight only
   document.getElementById('uniformToggle').style.display = current === 'straight' ? '' : 'none'; // Uniform: straight only
   document.getElementById('evenToggle').style.display  = current === 'straight' ? '' : 'none';   // Even: straight only
+  document.getElementById('buildToggle').style.display = current === 'straight' ? '' : 'none';   // Build: straight only
+  if (current !== 'straight') document.getElementById('buildInfo').style.display = 'none';
 }
 
 
@@ -1457,6 +1477,14 @@ function enterDiagramMode() {
   }
 }
 
+// Thin/Thick slider ceiling: knot & braid views cap at 75% of the full range
+// (0.45 -> 0.34); other views (tensegrity) keep the full range.
+function setThickMax(v) {
+  const el = document.getElementById('thickInput');
+  el.max = String(v);
+  if (parseFloat(el.value) > v) el.value = String(v);
+}
+
 function enterBraidMode() {
   showDiagram = false; showTubeDiag = true; showRoundDiag = false; showKnot = false; showStraight = false;
   activeCamera = orthoCamera; orthoOrbit.enabled = false;
@@ -1472,6 +1500,7 @@ function enterBraidMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = 'none';
   document.getElementById('knotSliders').style.display = '';
+  setThickMax(0.28);   // knot & braid cap (~62% of the full 0.45 range)
   document.getElementById('xStretchSection').style.display = '';
   document.getElementById('roundSection').style.display = 'none';
   document.getElementById('straightSection').style.display = 'none';
@@ -2026,6 +2055,7 @@ function enterKnotMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
+  setThickMax(0.28);   // knot & braid cap (~62% of the full 0.45 range)
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
   document.getElementById('outerRadiusSection').style.display = 'none';
@@ -2244,6 +2274,7 @@ function enterStraightMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = 'none';   // no flat<->cyl roll here
   document.getElementById('knotSliders').style.display = '';          // keep the thin/thick slider
+  setThickMax(0.45);                                                  // tensegrity keeps full range
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = 'none';
   document.getElementById('straightSection').style.display = '';      // cylinder / lambda sliders
@@ -2372,13 +2403,70 @@ function strFormFind(rods, t0, t1, initDirs, mu) {
   return { P, d };
 }
 
+// Build mode: trace the single string loop through the tensegrity.  The string
+// threads each tube twice — once along the tube (end to end) and once through
+// its middle hole — so the build is a sequence of tube-passes, each tagged
+// via:'tube' (along) or via:'hole' (through the middle); strings are implicit.
+// Returns { tubes, rodNum, firstIdx }: the ordered tube-passes, each rod's
+// first-appearance number (1-based; 0 = not in loop), and each rod's first
+// tube-pass index.  `allow(i)` limits to the drawn component.
+function traceBuildLoop(rods, t0, t1, allow) {
+  const R = rods.length;
+  const incoming = Array.from({ length: R }, () => []);   // ends whose string ends at hole i
+  for (let i = 0; i < R; i++) {
+    if (!allow(i)) continue;
+    if (t0[i] >= 0 && allow(t0[i])) incoming[t0[i]].push([i, 0]);
+    if (t1[i] >= 0 && allow(t1[i])) incoming[t1[i]].push([i, 1]);
+  }
+  let start = -1, topY = -Infinity;                        // start at a top rod
+  for (let i = 0; i < R; i++) {
+    if (allow(i) && rods[i].ringY > topY) { topY = rods[i].ringY; start = i; }
+  }
+  const seq = [];
+  const rodNum = new Array(R).fill(0), firstIdx = new Array(R).fill(-1);
+  if (start < 0) return { tubes: seq, rodNum, firstIdx };
+  let cr = start, ce = 0;
+  for (let g = 0; g < 4 * R + 4; g++) {
+    const oe = 1 - ce;
+    seq.push({ rod: cr, via: 'tube' });                    // along the tube (end to end)
+    const H = oe === 0 ? t0[cr] : t1[cr];
+    if (H < 0 || !allow(H)) break;
+    const other = incoming[H].find(([r, e]) => !(r === cr && e === oe));
+    if (!other) break;
+    seq.push({ rod: H, via: 'hole' });                     // through the middle (hole)
+    cr = other[0]; ce = other[1];
+    if (cr === start && ce === 0) break;                   // loop closed
+  }
+  let n = 0;
+  seq.forEach((el, k) => {
+    if (rodNum[el.rod] === 0) { rodNum[el.rod] = ++n; firstIdx[el.rod] = k; }
+  });
+  return { tubes: seq, rodNum, firstIdx };   // tubes: ordered tube-passes (strings implicit)
+}
+
+// A billboarded number tag (always faces the camera), drawn always-on-top.
+function makeNumberSprite(text, color, alpha, worldSize) {
+  const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const c = cv.getContext('2d');
+  c.font = 'bold 88px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineWidth = 8; c.strokeStyle = 'rgba(0,0,0,0.85)'; c.strokeText(text, S / 2, S / 2);
+  c.fillStyle = `#${color.getHexString()}`; c.fillText(text, S / 2, S / 2);
+  const tex = new THREE.CanvasTexture(cv);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: alpha, depthTest: false, depthWrite: false }));
+  sp.renderOrder = 1000;
+  sp.scale.setScalar(worldSize);
+  return sp;
+}
+
 // Each over-crossing's strand-piece (split at the under-crossings, with its bight
 // straightened) is one straight rod tangent to a reference cylinder at the
 // crossing (the "anchor").  Tensegrity: these are the rods; strings come later.
 function buildStraight() {
   while (knotGroup.children.length) {
     const child = knotGroup.children[0];
-    child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
+    child.geometry.dispose();
+    if (child.material.map) child.material.map.dispose();   // sprite tags
+    child.material.dispose(); knotGroup.remove(child);
   }
   knotGroup.rotation.set(-Math.PI / 2, 0, 0);   // cylinder axis (local z) -> vertical, side view
   knotGroup.scale.setScalar(1);                  // reset; we fit-scale at the end
@@ -2594,6 +2682,31 @@ function buildStraight() {
     el.style.display = '';
   }
 
+  // ── Build mode: trace the string loop as a sequence of tube-passes; the cursor
+  //    is a tube (strings are not counted).  Classify each tube built/current. ──
+  const drawn = i => !componentMode || rods[i].comp === 0;
+  let bRodNum = null, rodBuilt = null, rodCur = null, bLen = 0;
+  if (buildMode) {
+    const tr = traceBuildLoop(rods, t0, t1, drawn);
+    const tubes = tr.tubes;
+    bRodNum = tr.rodNum; bLen = tubes.length;
+    if (bLen === 0) buildStep = 0; else buildStep = Math.max(0, Math.min(buildStep, bLen - 1));
+    rodBuilt = new Array(rods.length).fill(false);
+    rodCur   = new Array(rods.length).fill(false);
+    tubes.forEach((el, k) => { if (k < buildStep) rodBuilt[el.rod] = true; else if (k === buildStep) rodCur[el.rod] = true; });
+    const cur = tubes[buildStep];
+    const info = document.getElementById('buildInfo');
+    if (cur) {
+      const isNew = tr.firstIdx[cur.rod] === buildStep;
+      const via = cur.via === 'tube' ? 'along the tube' : 'through the middle';
+      let txt = `Step ${buildStep + 1} / ${bLen} · tube #${bRodNum[cur.rod]} · ${via}`;
+      txt += isNew ? ' · NEW' : ` · revisit (first at step ${tr.firstIdx[cur.rod] + 1})`;
+      info.textContent = txt; info.style.display = '';
+    } else info.style.display = 'none';
+  } else {
+    document.getElementById('buildInfo').style.display = 'none';
+  }
+
   // ── Phase 2: draw rods, then strings. ───────────────────────────────────────
   const stringMat = new THREE.MeshPhongMaterial({ color: 0xffa53a, specular: 0x222222, shininess: 30 });
   const stringR = 0.035;   // fixed; the thin/thick slider changes rods only
@@ -2613,9 +2726,11 @@ function buildStraight() {
     const e0 = P.clone().addScaledVector(d, -rod.Lminus);
     const e1 = P.clone().addScaledVector(d,  rod.Lplus);
     const dir = new THREE.Vector3().subVectors(e1, e0);
+    let rodColor = rod.color.clone();
+    if (buildMode && bRodNum[i] > 0) { if (rodCur[i]) rodColor = B_CUR.clone(); else if (rodBuilt[i]) rodColor = B_BUILT.clone(); }
     const rodMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(tubeRadius, tubeRadius, dir.length(), 10, 1),
-      new THREE.MeshPhongMaterial({ color: rod.color.clone(), specular: 0x333333, shininess: 40 }));
+      new THREE.MeshPhongMaterial({ color: rodColor, specular: 0x333333, shininess: 40 }));
     rodMesh.position.copy(e0).addScaledVector(dir, 0.5);
     rodMesh.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     rodMesh.frustumCulled = false;
@@ -2623,6 +2738,21 @@ function buildStraight() {
     // strings: each end -> its hole (the hole may belong to another, hidden component)
     if (t0[i] >= 0) drawString(e0, Pf[t0[i]]);
     if (t1[i] >= 0) drawString(e1, Pf[t1[i]]);
+  }
+
+  // Build mode: billboarded number tag on each rod in the loop (option c) —
+  // current tube boldest, visited tubes bright, not-yet-visited faint.
+  if (buildMode && bRodNum) {
+    const tagSize = arcRef * MAX_Y * 0.05;
+    for (let i = 0; i < rods.length; i++) {
+      if (bRodNum[i] === 0 || (componentMode && rods[i].comp !== 0)) continue;
+      const cur = rodCur[i], visited = rodBuilt[i] || cur;
+      const col = cur ? B_CUR : visited ? B_TAG_V : B_TAG_U;
+      const sp = makeNumberSprite(String(bRodNum[i]), col, cur ? 1 : visited ? 0.95 : 0.4,
+                                  tagSize * (cur ? 1.4 : 1));
+      sp.position.copy(Pf[i]);
+      knotGroup.add(sp);
+    }
   }
 
   // Fixed scale — based on the reference cylinder height only, so it does NOT
@@ -2672,6 +2802,12 @@ document.getElementById('optToggle').addEventListener('click', () => {
   document.getElementById('optToggle').classList.toggle('active', straightOpt);
   document.getElementById('cylSliders').style.display   = straightOpt ? 'none' : '';
   document.getElementById('lambdaSlider').style.display = straightOpt ? '' : 'none';
+  if (showStraight) buildStraight();
+});
+document.getElementById('buildToggle').addEventListener('click', () => {
+  buildMode = !buildMode;
+  buildStep = 0;
+  document.getElementById('buildToggle').classList.toggle('active', buildMode);
   if (showStraight) buildStraight();
 });
 // Largest on-screen outer radius that still fits the drawing area (plus the
