@@ -2403,45 +2403,50 @@ function strFormFind(rods, t0, t1, initDirs, mu) {
   return { P, d };
 }
 
-// Build mode: trace the single string loop through the tensegrity.  The string
+// Build mode: trace the string loop(s) through the WHOLE tensegrity.  The string
 // threads each tube twice — once along the tube (end to end) and once through
 // its middle hole — so the build is a sequence of tube-passes, each tagged
 // via:'tube' (along) or via:'hole' (through the middle); strings are implicit.
-// Returns { tubes, rodNum, firstIdx }: the ordered tube-passes, each rod's
-// first-appearance number (1-based; 0 = not in loop), and each rod's first
-// tube-pass index.  `allow(i)` limits to the drawn component.
-function traceBuildLoop(rods, t0, t1, allow) {
+// Links have several loops (and tubes can be shared across components), so we
+// trace every loop, concatenated, with ONE continuous numbering.  Returns
+// { tubes, rodNum, firstIdx, loops }: the ordered tube-passes (each also tagged
+// loop:index), each rod's first-appearance number (1-based) and first tube-pass
+// index, and the loop count.
+function traceBuildLoop(rods, t0, t1) {
   const R = rods.length;
   const incoming = Array.from({ length: R }, () => []);   // ends whose string ends at hole i
   for (let i = 0; i < R; i++) {
-    if (!allow(i)) continue;
-    if (t0[i] >= 0 && allow(t0[i])) incoming[t0[i]].push([i, 0]);
-    if (t1[i] >= 0 && allow(t1[i])) incoming[t1[i]].push([i, 1]);
-  }
-  let start = -1, topY = -Infinity;                        // start at a top rod
-  for (let i = 0; i < R; i++) {
-    if (allow(i) && rods[i].ringY > topY) { topY = rods[i].ringY; start = i; }
+    if (t0[i] >= 0) incoming[t0[i]].push([i, 0]);
+    if (t1[i] >= 0) incoming[t1[i]].push([i, 1]);
   }
   const seq = [];
-  const rodNum = new Array(R).fill(0), firstIdx = new Array(R).fill(-1);
-  if (start < 0) return { tubes: seq, rodNum, firstIdx };
-  let cr = start, ce = 0;
-  for (let g = 0; g < 4 * R + 4; g++) {
-    const oe = 1 - ce;
-    seq.push({ rod: cr, via: 'tube' });                    // along the tube (end to end)
-    const H = oe === 0 ? t0[cr] : t1[cr];
-    if (H < 0 || !allow(H)) break;
-    const other = incoming[H].find(([r, e]) => !(r === cr && e === oe));
-    if (!other) break;
-    seq.push({ rod: H, via: 'hole' });                     // through the middle (hole)
-    cr = other[0]; ce = other[1];
-    if (cr === start && ce === 0) break;                   // loop closed
+  const tubeDone = new Array(R).fill(false);   // rod threaded along its tube yet?
+  let loop = 0;
+  for (;;) {
+    let start = -1, topY = -Infinity;          // next loop starts at the top unthreaded tube
+    for (let i = 0; i < R; i++) if (!tubeDone[i] && rods[i].ringY > topY) { topY = rods[i].ringY; start = i; }
+    if (start < 0) break;
+    let cr = start, ce = 0;
+    for (let g = 0; g < 4 * R + 4; g++) {
+      seq.push({ rod: cr, via: 'tube', loop });            // along the tube (end to end)
+      tubeDone[cr] = true;
+      const oe = 1 - ce;
+      const H = oe === 0 ? t0[cr] : t1[cr];
+      if (H < 0) break;
+      const other = incoming[H].find(([r, e]) => !(r === cr && e === oe));
+      if (!other) break;
+      seq.push({ rod: H, via: 'hole', loop });             // through the middle (hole)
+      cr = other[0]; ce = other[1];
+      if (cr === start && ce === 0) break;                 // loop closed
+    }
+    loop++;
   }
+  const rodNum = new Array(R).fill(0), firstIdx = new Array(R).fill(-1);
   let n = 0;
   seq.forEach((el, k) => {
     if (rodNum[el.rod] === 0) { rodNum[el.rod] = ++n; firstIdx[el.rod] = k; }
   });
-  return { tubes: seq, rodNum, firstIdx };   // tubes: ordered tube-passes (strings implicit)
+  return { tubes: seq, rodNum, firstIdx, loops: loop };
 }
 
 // A billboarded number tag (always faces the camera), drawn always-on-top.
@@ -2682,25 +2687,46 @@ function buildStraight() {
     el.style.display = '';
   }
 
-  // ── Build mode: trace the string loop as a sequence of tube-passes; the cursor
-  //    is a tube (strings are not counted).  Classify each tube built/current. ──
-  const drawn = i => !componentMode || rods[i].comp === 0;
-  let bRodNum = null, rodBuilt = null, rodCur = null, bLen = 0;
+  // ── Build mode: trace the string loop(s) over the whole structure as tube-
+  //    passes; the cursor is a tube (strings are not counted).  The "current
+  //    component" is the one whose tube the string is running ALONG; Solo shows
+  //    only that.  When the current step threads THROUGH THE MIDDLE of a tube in
+  //    another component, that one foreign tube (extraTube) is shown for this
+  //    step only.  Classify each tube built/current. ──────────────────────────
+  let bRodNum = null, rodBuilt = null, rodCur = null, bLen = 0, soloComp = 0, extraTube = -1;
   if (buildMode) {
-    const tr = traceBuildLoop(rods, t0, t1, drawn);
+    const tr = traceBuildLoop(rods, t0, t1);
     const tubes = tr.tubes;
     bRodNum = tr.rodNum; bLen = tubes.length;
     if (bLen === 0) buildStep = 0; else buildStep = Math.max(0, Math.min(buildStep, bLen - 1));
     rodBuilt = new Array(rods.length).fill(false);
     rodCur   = new Array(rods.length).fill(false);
     tubes.forEach((el, k) => { if (k < buildStep) rodBuilt[el.rod] = true; else if (k === buildStep) rodCur[el.rod] = true; });
+    // Per-loop step numbering (steps count within a component/loop, not globally).
+    const loopStart = [], loopLen = [];
+    tubes.forEach((el, k) => { if (loopStart[el.loop] === undefined) loopStart[el.loop] = k; loopLen[el.loop] = (loopLen[el.loop] || 0) + 1; });
+    const inLoop = k => k - loopStart[tubes[k].loop] + 1;   // 1-based step within its loop
     const cur = tubes[buildStep];
     const info = document.getElementById('buildInfo');
     if (cur) {
+      if (cur.via === 'tube') {
+        soloComp = rods[cur.rod].comp;               // running along this tube -> its component
+      } else {
+        let j = buildStep; while (j >= 0 && tubes[j].via !== 'tube') j--;   // governing along-tube
+        soloComp = rods[(j >= 0 ? tubes[j].rod : cur.rod)].comp;
+        if (rods[cur.rod].comp !== soloComp) extraTube = cur.rod;           // foreign tube, show just it
+      }
       const isNew = tr.firstIdx[cur.rod] === buildStep;
-      const via = cur.via === 'tube' ? 'along the tube' : 'through the middle';
-      let txt = `Step ${buildStep + 1} / ${bLen} · tube #${bRodNum[cur.rod]} · ${via}`;
-      txt += isNew ? ' · NEW' : ` · revisit (first at step ${tr.firstIdx[cur.rod] + 1})`;
+      const via = cur.via === 'tube' ? 'along the tube'
+                : extraTube >= 0 ? 'through the middle (tube in another component)' : 'through the middle';
+      const multi = tr.loops > 1;
+      const loopTag = multi ? `loop ${cur.loop + 1}/${tr.loops} · ` : '';
+      let txt = `${loopTag}step ${inLoop(buildStep)}/${loopLen[cur.loop]} · tube #${bRodNum[cur.rod]} · ${via}`;
+      if (isNew) txt += ' · NEW';
+      else {
+        const f = tr.firstIdx[cur.rod];
+        txt += ` · revisit (first at ${multi ? `loop ${tubes[f].loop + 1} ` : ''}step ${inLoop(f)})`;
+      }
       info.textContent = txt; info.style.display = '';
     } else info.style.display = 'none';
   } else {
@@ -2721,16 +2747,18 @@ function buildStraight() {
     knotGroup.add(str);
   };
   for (let i = 0; i < rods.length; i++) {
-    if (componentMode && rods[i].comp !== 0) continue;   // Solo: draw one component only
+    if (componentMode && rods[i].comp !== soloComp && i !== extraTube) continue;   // Solo: current component (+ a foreign tube being threaded through)
     const rod = rods[i], P = Pf[i], d = df[i];
     const e0 = P.clone().addScaledVector(d, -rod.Lminus);
     const e1 = P.clone().addScaledVector(d,  rod.Lplus);
     const dir = new THREE.Vector3().subVectors(e1, e0);
+    const foreign = (i === extraTube);   // a tube from another component, threaded through its middle
     let rodColor = rod.color.clone();
     if (buildMode && bRodNum[i] > 0) { if (rodCur[i]) rodColor = B_CUR.clone(); else if (rodBuilt[i]) rodColor = B_BUILT.clone(); }
+    const rodMat = new THREE.MeshPhongMaterial({ color: rodColor, specular: 0x333333, shininess: 40 });
+    if (foreign) { rodMat.transparent = true; rodMat.opacity = 0.3; }   // dim the foreign tube
     const rodMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(tubeRadius, tubeRadius, dir.length(), 10, 1),
-      new THREE.MeshPhongMaterial({ color: rodColor, specular: 0x333333, shininess: 40 }));
+      new THREE.CylinderGeometry(tubeRadius, tubeRadius, dir.length(), 10, 1), rodMat);
     rodMesh.position.copy(e0).addScaledVector(dir, 0.5);
     rodMesh.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     rodMesh.frustumCulled = false;
@@ -2745,11 +2773,11 @@ function buildStraight() {
   if (buildMode && bRodNum) {
     const tagSize = arcRef * MAX_Y * 0.05;
     for (let i = 0; i < rods.length; i++) {
-      if (bRodNum[i] === 0 || (componentMode && rods[i].comp !== 0)) continue;
-      const cur = rodCur[i], visited = rodBuilt[i] || cur;
+      if (bRodNum[i] === 0 || (componentMode && rods[i].comp !== soloComp && i !== extraTube)) continue;
+      const cur = rodCur[i], visited = rodBuilt[i] || cur, foreign = (i === extraTube);
       const col = cur ? B_CUR : visited ? B_TAG_V : B_TAG_U;
-      const sp = makeNumberSprite(String(bRodNum[i]), col, cur ? 1 : visited ? 0.95 : 0.4,
-                                  tagSize * (cur ? 1.4 : 1));
+      const sp = makeNumberSprite(String(bRodNum[i]), col, foreign ? 0.4 : cur ? 1 : visited ? 0.95 : 0.4,
+                                  tagSize * (foreign ? 1 : cur ? 1.4 : 1));
       sp.position.copy(Pf[i]);
       knotGroup.add(sp);
     }
