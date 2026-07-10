@@ -259,6 +259,7 @@
     <button id="evenToggle" class="view-btn" style="display:none;">Even</button>
     <button id="uniformToggle" class="view-btn" style="display:none;">Uniform</button>
     <button id="buildToggle" class="view-btn" style="display:none;">Build</button>
+    <button id="phaseToggle" class="view-btn" style="display:none;">Thread</button>
   </div>
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
@@ -277,7 +278,7 @@
 <div id="c3ErrorDisplay" style="position:fixed;display:none;top:14px;left:50%;transform:translateX(-50%);max-width:70%;font-size:12px;color:#fff;background:rgba(180,30,30,0.92);border:1px solid rgba(255,120,120,0.7);border-radius:6px;padding:9px 14px;font-family:'SF Mono','Fira Code','Consolas',monospace;z-index:20;text-align:center;"></div>
 <div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
-<div id="buildInfo" style="position:fixed;display:none;left:50%;top:14px;transform:translateX(-50%);font-size:14px;color:#fff;background:rgba(0,20,40,0.82);border:1px solid rgba(0,255,136,0.5);border-radius:6px;padding:8px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:0.5px;z-index:12;text-align:center;pointer-events:none;"></div>
+<div id="buildInfo" style="position:fixed;display:none;left:50%;top:14px;transform:translateX(-50%);white-space:nowrap;max-width:96vw;font-size:14px;color:#fff;background:rgba(0,20,40,0.82);border:1px solid rgba(0,255,136,0.5);border-radius:6px;padding:8px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:0.5px;z-index:12;text-align:center;pointer-events:none;"></div>
 <canvas id="diagram"></canvas>
 
 <script type="importmap">
@@ -1421,12 +1422,14 @@ let showStraight = false;
 let straightOpt   = false;   // Straight view: symmetric anchor optimization (move rings)
 let straightUniform = false; // Straight view: cut all rods to the shortest rod's length
 let straightEven  = false;   // Straight view (Optimize): equalize each rod's two end-strings by rotation
-let buildMode = false;       // Tensegrity: interactive build — step the string loop rod/string/rod...
-let buildStep = 0;           // current element index in the build sequence
+let buildMode = false;       // Tensegrity: interactive build
+let buildStep = 0;           // current step index within the current phase
+let buildPhase = 'tie';      // 'tie' = place tubes top-down with temp ties; 'thread' = final string
 // Build-mode colors (easy to tweak): current element, already-built, and the
 // number tags for visited vs not-yet-visited tubes.
 const B_CUR   = new THREE.Color(0x00ff88);   // current element (rod or string)
 const B_BUILT = new THREE.Color(0x3a7bd5);   // already built
+const B_TIE   = new THREE.Color(0xffcc33);   // phase 1: a tube the current one ties to
 const B_TAG_V = new THREE.Color(0xffffff);   // tag: visited tube
 const B_TAG_U = new THREE.Color(0x707070);   // tag: not yet visited
 const diagramCanvas = document.getElementById('diagram');
@@ -1440,6 +1443,7 @@ function setViewButtons(current) {
   document.getElementById('uniformToggle').style.display = current === 'straight' ? '' : 'none'; // Uniform: straight only
   document.getElementById('evenToggle').style.display  = current === 'straight' ? '' : 'none';   // Even: straight only
   document.getElementById('buildToggle').style.display = current === 'straight' ? '' : 'none';   // Build: straight only
+  document.getElementById('phaseToggle').style.display = (current === 'straight' && buildMode) ? '' : 'none';
   if (current !== 'straight') document.getElementById('buildInfo').style.display = 'none';
 }
 
@@ -2449,6 +2453,32 @@ function traceBuildLoop(rods, t0, t1) {
   return { tubes: seq, rodNum, firstIdx, loops: loop };
 }
 
+// Phase-1 placement order: tubes are added layer by layer from the TOP (highest
+// ringY) down, and within a layer in angular order around the cylinder (same
+// direction throughout; the starting tube is arbitrary).  Returns { order (rod
+// indices in placement order), placeNum (1-based per rod), layerIdx (0-based
+// layer per rod, 0 = top), layers (count) }.  This numbering is shared by the
+// threading phase so a tube keeps one number throughout.
+// Angle around the cylinder in [0, 2π).  rods[].theta is kept unmodded (for
+// tangent continuity), so reduce it mod 2π to get the true around-cylinder order.
+function rodAng(r) { const a = r.theta % (2 * Math.PI); return a < 0 ? a + 2 * Math.PI : a; }
+
+function buildPlacement(rods) {
+  const R = rods.length;
+  const idx = [...Array(R).keys()];
+  idx.sort((a, b) => (rods[b].ringY - rods[a].ringY) || (rodAng(rods[a]) - rodAng(rods[b])));
+  const placeNum = new Array(R), layerIdx = new Array(R);
+  let layers = 0, prevY = null;
+  idx.forEach((r, k) => {
+    if (prevY === null || rods[r].ringY !== prevY) { if (prevY !== null) layers++; prevY = rods[r].ringY; }
+    layerIdx[r] = layers;
+    placeNum[r] = k + 1;
+  });
+  const layerSize = new Array(layers + 1).fill(0);
+  for (const r of idx) layerSize[layerIdx[r]]++;
+  return { order: idx, placeNum, layerIdx, layers: layers + 1, layerSize };
+}
+
 // A billboarded number tag (always faces the camera), drawn always-on-top.
 function makeNumberSprite(text, color, alpha, worldSize) {
   const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S;
@@ -2687,74 +2717,107 @@ function buildStraight() {
     el.style.display = '';
   }
 
-  // ── Build mode: trace the string loop(s) over the whole structure as tube-
-  //    passes; the cursor is a tube (strings are not counted).  The "current
-  //    component" is the one whose tube the string is running ALONG; Solo shows
-  //    only that.  When the current step threads THROUGH THE MIDDLE of a tube in
-  //    another component, that one foreign tube (extraTube) is shown for this
-  //    step only.  Classify each tube built/current. ──────────────────────────
-  let bRodNum = null, rodBuilt = null, rodCur = null, bLen = 0, soloComp = 0, extraTube = -1;
+  // ── Build mode.  Numbering is by PLACEMENT order (top-down, layer by layer),
+  //    shared by both phases.  Phase 'tie': add tubes one at a time, showing the
+  //    temp ties to already-placed tubes; only placed tubes are drawn.  Phase
+  //    'thread': the final string loop (as before). ────────────────────────────
+  let bTubeNum = null, rodBuilt = null, rodCur = null, bLen = 0, soloComp = 0, extraTube = -1;
+  let phase1 = false, placedSet = null, curTieSet = null, curRodIdx = -1;
   if (buildMode) {
-    const tr = traceBuildLoop(rods, t0, t1);
-    const tubes = tr.tubes;
-    bRodNum = tr.rodNum; bLen = tubes.length;
-    if (bLen === 0) buildStep = 0; else buildStep = Math.max(0, Math.min(buildStep, bLen - 1));
+    const pl = buildPlacement(rods);
+    bTubeNum = pl.placeNum;
+    const info = document.getElementById('buildInfo');
     rodBuilt = new Array(rods.length).fill(false);
     rodCur   = new Array(rods.length).fill(false);
-    tubes.forEach((el, k) => { if (k < buildStep) rodBuilt[el.rod] = true; else if (k === buildStep) rodCur[el.rod] = true; });
-    // Per-loop step numbering (steps count within a component/loop, not globally).
-    const loopStart = [], loopLen = [];
-    tubes.forEach((el, k) => { if (loopStart[el.loop] === undefined) loopStart[el.loop] = k; loopLen[el.loop] = (loopLen[el.loop] || 0) + 1; });
-    const inLoop = k => k - loopStart[tubes[k].loop] + 1;   // 1-based step within its loop
-    const cur = tubes[buildStep];
-    const info = document.getElementById('buildInfo');
-    if (cur) {
-      if (cur.via === 'tube') {
-        soloComp = rods[cur.rod].comp;               // running along this tube -> its component
-      } else {
-        let j = buildStep; while (j >= 0 && tubes[j].via !== 'tube') j--;   // governing along-tube
-        soloComp = rods[(j >= 0 ? tubes[j].rod : cur.rod)].comp;
-        if (rods[cur.rod].comp !== soloComp) extraTube = cur.rod;           // foreign tube, show just it
-      }
-      const isNew = tr.firstIdx[cur.rod] === buildStep;
-      const via = cur.via === 'tube' ? 'along the tube'
-                : extraTube >= 0 ? 'through the middle (tube in another component)' : 'through the middle';
-      const multi = tr.loops > 1;
-      const loopTag = multi ? `loop ${cur.loop + 1}/${tr.loops} · ` : '';
-      let txt = `${loopTag}step ${inLoop(buildStep)}/${loopLen[cur.loop]} · tube #${bRodNum[cur.rod]} · ${via}`;
-      if (isNew) txt += ' · NEW';
-      else {
-        const f = tr.firstIdx[cur.rod];
-        txt += ` · revisit (first at ${multi ? `loop ${tubes[f].loop + 1} ` : ''}step ${inLoop(f)})`;
-      }
-      info.textContent = txt; info.style.display = '';
-    } else info.style.display = 'none';
+    if (buildPhase === 'tie') {
+      phase1 = true;
+      const order = pl.order, R = order.length;
+      bLen = R;
+      buildStep = R === 0 ? 0 : Math.max(0, Math.min(buildStep, R - 1));
+      const c = order[buildStep];                        // tube being placed now
+      for (let k = 0; k < buildStep; k++) rodBuilt[order[k]] = true;
+      if (R) { rodCur[c] = true; curRodIdx = c; }
+      placedSet = new Set(order.slice(0, buildStep + 1));
+      // ties = already-placed tubes the current one connects to (final strings)
+      const nbr = new Set();
+      if (t0[c] >= 0) nbr.add(t0[c]);
+      if (t1[c] >= 0) nbr.add(t1[c]);
+      for (let j = 0; j < rods.length; j++) if (t0[j] === c || t1[j] === c) nbr.add(j);
+      const ties = [...nbr].filter(j => j !== c && placedSet.has(j));
+      const cy = rods[c].ringY;
+      const higher = ties.filter(j => rods[j].ringY > cy).sort((a, b) => rodAng(rods[a]) - rodAng(rods[b]));
+      const same   = ties.filter(j => rods[j].ringY === cy).sort((a, b) => rodAng(rods[a]) - rodAng(rods[b]));
+      const ordered = [...higher, ...same];
+      curTieSet = new Set(ordered);
+      if (R) {
+        let before = 0; for (let L = 0; L < pl.layerIdx[c]; L++) before += pl.layerSize[L];
+        const inLayer = bTubeNum[c] - before, layerN = pl.layerSize[pl.layerIdx[c]];
+        let txt = `Ties · layer ${pl.layerIdx[c] + 1}/${pl.layers} · tube #${bTubeNum[c]} of ${R} · #${inLayer}/${layerN} in layer`;
+        txt += ordered.length ? ` · tie to ${ordered.map(j => '#' + bTubeNum[j]).join(' ')}` : ' · first tube (no ties)';
+        info.textContent = txt; info.style.display = '';
+      } else info.style.display = 'none';
+    } else {
+      const tr = traceBuildLoop(rods, t0, t1);
+      const tubes = tr.tubes;
+      bLen = tubes.length;
+      buildStep = bLen === 0 ? 0 : Math.max(0, Math.min(buildStep, bLen - 1));
+      tubes.forEach((el, k) => { if (k < buildStep) rodBuilt[el.rod] = true; else if (k === buildStep) rodCur[el.rod] = true; });
+      const loopStart = [], loopLen = [];
+      tubes.forEach((el, k) => { if (loopStart[el.loop] === undefined) loopStart[el.loop] = k; loopLen[el.loop] = (loopLen[el.loop] || 0) + 1; });
+      const inLoop = k => k - loopStart[tubes[k].loop] + 1;
+      const cur = tubes[buildStep];
+      if (cur) {
+        if (cur.via === 'tube') {
+          soloComp = rods[cur.rod].comp;
+        } else {
+          let j = buildStep; while (j >= 0 && tubes[j].via !== 'tube') j--;
+          soloComp = rods[(j >= 0 ? tubes[j].rod : cur.rod)].comp;
+          if (rods[cur.rod].comp !== soloComp) extraTube = cur.rod;
+        }
+        const isNew = tr.firstIdx[cur.rod] === buildStep;
+        const via = cur.via === 'tube' ? 'along the tube'
+                  : extraTube >= 0 ? 'through the middle (tube in another component)' : 'through the middle';
+        const multi = tr.loops > 1;
+        const loopTag = multi ? `loop ${cur.loop + 1}/${tr.loops} · ` : '';
+        let txt = `Thread · ${loopTag}step ${inLoop(buildStep)}/${loopLen[cur.loop]} · tube #${bTubeNum[cur.rod]} · ${via}`;
+        if (isNew) txt += ' · NEW';
+        else { const f = tr.firstIdx[cur.rod]; txt += ` · revisit (first at ${multi ? `loop ${tubes[f].loop + 1} ` : ''}step ${inLoop(f)})`; }
+        info.textContent = txt; info.style.display = '';
+      } else info.style.display = 'none';
+    }
   } else {
     document.getElementById('buildInfo').style.display = 'none';
   }
 
-  // ── Phase 2: draw rods, then strings. ───────────────────────────────────────
+  // ── Draw rods, then strings/ties. ────────────────────────────────────────────
   const stringMat = new THREE.MeshPhongMaterial({ color: 0xffa53a, specular: 0x222222, shininess: 30 });
+  const tieMat    = new THREE.MeshPhongMaterial({ color: B_TIE, specular: 0x222222, shininess: 30 });
   const stringR = 0.035;   // fixed; the thin/thick slider changes rods only
-  const drawString = (a, b) => {
+  const drawString = (a, b, mat) => {
     const sd = new THREE.Vector3().subVectors(b, a);
     const sl = sd.length();
     if (sl < 1e-6) return;
-    const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, sl, 6, 1), stringMat);
+    const str = new THREE.Mesh(new THREE.CylinderGeometry(stringR, stringR, sl, 6, 1), mat || stringMat);
     str.position.copy(a).addScaledVector(sd, 0.5);
     str.quaternion.setFromUnitVectors(yAxis, sd.clone().normalize());
     str.frustumCulled = false;
     knotGroup.add(str);
   };
+  const endOf = (i, e) => Pf[i].clone().addScaledVector(df[i], e === 0 ? -rods[i].Lminus : rods[i].Lplus);
   for (let i = 0; i < rods.length; i++) {
-    if (componentMode && rods[i].comp !== soloComp && i !== extraTube) continue;   // Solo: current component (+ a foreign tube being threaded through)
+    if (phase1) { if (!placedSet.has(i)) continue; }                 // phase 1: only placed tubes
+    else if (componentMode && rods[i].comp !== soloComp && i !== extraTube) continue;
     const rod = rods[i], P = Pf[i], d = df[i];
     const e0 = P.clone().addScaledVector(d, -rod.Lminus);
     const e1 = P.clone().addScaledVector(d,  rod.Lplus);
     const dir = new THREE.Vector3().subVectors(e1, e0);
-    const foreign = (i === extraTube);   // a tube from another component, threaded through its middle
+    const foreign = (i === extraTube);   // thread phase: a tube from another component, threaded through its middle
     let rodColor = rod.color.clone();
-    if (buildMode && bRodNum[i] > 0) { if (rodCur[i]) rodColor = B_CUR.clone(); else if (rodBuilt[i]) rodColor = B_BUILT.clone(); }
+    if (buildMode) {
+      if (phase1)          rodColor = rodCur[i] ? B_CUR.clone() : curTieSet.has(i) ? B_TIE.clone() : B_BUILT.clone();
+      else if (rodCur[i])  rodColor = B_CUR.clone();
+      else if (rodBuilt[i]) rodColor = B_BUILT.clone();
+    }
     const rodMat = new THREE.MeshPhongMaterial({ color: rodColor, specular: 0x333333, shininess: 40 });
     if (foreign) { rodMat.transparent = true; rodMat.opacity = 0.3; }   // dim the foreign tube
     const rodMesh = new THREE.Mesh(
@@ -2763,21 +2826,38 @@ function buildStraight() {
     rodMesh.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     rodMesh.frustumCulled = false;
     knotGroup.add(rodMesh);
-    // strings: each end -> its hole (the hole may belong to another, hidden component)
-    if (t0[i] >= 0) drawString(e0, Pf[t0[i]]);
-    if (t1[i] >= 0) drawString(e1, Pf[t1[i]]);
+    if (!phase1) {   // final strings (thread phase / normal view); phase 1 draws ties below
+      if (t0[i] >= 0) drawString(e0, Pf[t0[i]]);
+      if (t1[i] >= 0) drawString(e1, Pf[t1[i]]);
+    }
   }
 
-  // Build mode: billboarded number tag on each rod in the loop (option c) —
-  // current tube boldest, visited tubes bright, not-yet-visited faint.
-  if (buildMode && bRodNum) {
+  // Phase 1: draw every temporary tie among already-placed tubes (they persist as
+  // you step); the current tube's ties are bright, earlier ones dimmed.
+  if (phase1 && placedSet) {
+    const dimTieMat = new THREE.MeshPhongMaterial({ color: B_TIE, specular: 0x222222, shininess: 30, transparent: true, opacity: 0.45 });
+    for (let i = 0; i < rods.length; i++) {
+      if (!placedSet.has(i)) continue;
+      for (const [e, tj] of [[0, t0[i]], [1, t1[i]]]) {
+        if (tj < 0 || !placedSet.has(tj)) continue;
+        const isCurTie = (i === curRodIdx || tj === curRodIdx);
+        drawString(endOf(i, e), Pf[tj], isCurTie ? tieMat : dimTieMat);
+      }
+    }
+  }
+
+  // Number tags (placement numbers) — billboarded, always-on-top.
+  if (buildMode && bTubeNum) {
     const tagSize = arcRef * MAX_Y * 0.05;
     for (let i = 0; i < rods.length; i++) {
-      if (bRodNum[i] === 0 || (componentMode && rods[i].comp !== soloComp && i !== extraTube)) continue;
-      const cur = rodCur[i], visited = rodBuilt[i] || cur, foreign = (i === extraTube);
-      const col = cur ? B_CUR : visited ? B_TAG_V : B_TAG_U;
-      const sp = makeNumberSprite(String(bRodNum[i]), col, foreign ? 0.4 : cur ? 1 : visited ? 0.95 : 0.4,
-                                  tagSize * (foreign ? 1 : cur ? 1.4 : 1));
+      if (phase1) { if (!placedSet.has(i)) continue; }
+      else if (componentMode && rods[i].comp !== soloComp && i !== extraTube) continue;
+      const isCur = rodCur[i], isTie = phase1 && curTieSet.has(i), foreign = (!phase1 && i === extraTube);
+      const visited = rodBuilt[i] || isCur;
+      const col = isCur ? B_CUR : isTie ? B_TIE : visited ? B_TAG_V : B_TAG_U;
+      const sp = makeNumberSprite(String(bTubeNum[i]), col,
+                                  foreign ? 0.4 : (isCur || isTie) ? 1 : visited ? 0.95 : 0.4,
+                                  tagSize * (isCur ? 1.35 : 1));
       sp.position.copy(Pf[i]);
       knotGroup.add(sp);
     }
@@ -2834,8 +2914,16 @@ document.getElementById('optToggle').addEventListener('click', () => {
 });
 document.getElementById('buildToggle').addEventListener('click', () => {
   buildMode = !buildMode;
-  buildStep = 0;
+  buildStep = 0; buildPhase = 'tie';
   document.getElementById('buildToggle').classList.toggle('active', buildMode);
+  document.getElementById('phaseToggle').style.display = (buildMode && showStraight) ? '' : 'none';
+  document.getElementById('phaseToggle').textContent = 'Thread';   // label = phase you'll enter
+  if (showStraight) buildStraight();
+});
+document.getElementById('phaseToggle').addEventListener('click', () => {
+  buildPhase = buildPhase === 'tie' ? 'thread' : 'tie';
+  buildStep = 0;
+  document.getElementById('phaseToggle').textContent = buildPhase === 'tie' ? 'Thread' : 'Ties';
   if (showStraight) buildStraight();
 });
 // Largest on-screen outer radius that still fits the drawing area (plus the
