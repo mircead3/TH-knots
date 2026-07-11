@@ -2686,7 +2686,9 @@ function buildStraight() {
     // doesn't move the anchors).
     df = straightEven ? strEqualizeDirs(rods, anchorByKey, true) : ff.d;
   } else {
-    df = rods.map(r => r.dir);
+    // Even without Optimize: equalize each rod's two end-strings on the raw
+    // (un-moved) configuration; eqDirs is exactly that.
+    df = straightEven ? eqDirs : rods.map(r => r.dir);
   }
   const Pf = rods.map(r => r.P);
 
@@ -2707,13 +2709,20 @@ function buildStraight() {
     console.log(`distinct string lengths (${sTally.length}): ${sTally.map(([v, n]) => `${v}×${n}`).join('  ')}`);
   }
 
-  // On-screen: rods grouped by length (integer diagonal units), under the bights.
+  // On-screen: rods grouped by length (integer diagonal units), under the bights,
+  // plus the total string length in those same units (1 unit = arcRef·√2).
   {
     const t = new Map();
     rods.forEach(r => t.set(r.diagLen, (t.get(r.diagLen) || 0) + 1));
     const groups = [...t.entries()].sort((a, b) => a[0] - b[0]);
+    const unit = arcRef * Math.SQRT2;
+    const strWorld = lensFor(Pf, df).reduce((x, y) => x + y, 0);
+    const rodWorld = rods.reduce((s, r) => s + r.Lminus + r.Lplus, 0);
+    const strTot  = strWorld / unit;                    // connecting strings only
+    const loopTot = (strWorld + rodWorld) / unit;       // full string loop (through every tube)
     const el = document.getElementById('infoRods');
-    el.textContent = 'rods: ' + groups.map(([len, n]) => `${n}×${len}`).join('  ·  ');
+    el.textContent = 'rods: ' + groups.map(([len, n]) => `${n}×${len}`).join('  ·  ') +
+                     `  ·  strings: ${strTot.toFixed(1)}  ·  loop: ${loopTot.toFixed(1)}`;
     el.style.display = '';
   }
 
