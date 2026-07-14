@@ -497,13 +497,84 @@ function clearKnotGroup() {
   }
 }
 
+// ── Fillet-rounded strands (shared by the braid and knot views) ────────────
+// Runs stay straight (so crossings are exactly the zigzag's — no spurious
+// intersections).  Each bight is rounded by a proper TANGENT fillet: a quarter
+// circle tangent to both runs, sampled as arc points so the spline follows it
+// with no slope kink where the straight run meets the arc.
+const FILLET_RMAX = 1.8;   // max fillet radius (diagram units)
+
+// Fillet radius at each bight-vertex v (runs v-1 and v meet there).  Capped
+// by geometry (0.6·shorter run) AND by the nearest crossing on either side:
+// the tangent point (inset R/√2) must stay on the straight run, before any
+// crossing, so the arc is crossing-free and never kinks at a crossing.
+// segLen[s] = length of run s; segCross[s] = its crossings sorted by t.
+function filletRadii(segLen, segCross) {
+  const D = segLen.length;
+  return segLen.map((_, v) => {
+    const p  = (v - 1 + D) % D;
+    const cP = segCross[p], cV = segCross[v];
+    const dP = cP.length ? segLen[p] - cP[cP.length - 1].t : segLen[p];   // vertex-to-last-crossing, incoming run
+    const dV = cV.length ? cV[0].t                         : segLen[v];   // vertex-to-first-crossing, outgoing run
+    return Math.min(FILLET_RMAX, 0.6 * Math.min(segLen[p], segLen[v]), Math.min(dP, dV) * Math.SQRT2 * 0.9);
+  });
+}
+
+// Over/under z-profile along absolute x: keyframes hold ±delta at crossings
+// and 0 at bights, with COSINE easing between.  Every crossing reaches full
+// ±delta and the profile stays smooth through the fillets and across bights.
+// keyf must be sorted by x; the evaluator clamps outside the range.
+function makeZProfile(keyf) {
+  return x => {
+    if (x <= keyf[0].x) return keyf[0].z;
+    let lo = 0, hi = keyf.length - 1;
+    if (x >= keyf[hi].x) return keyf[hi].z;
+    while (lo + 1 < hi) { const m = (lo + hi) >> 1; if (keyf[m].x <= x) lo = m; else hi = m; }
+    const a = keyf[lo], b = keyf[lo + 1];
+    const dx = b.x - a.x;
+    const t = dx > 0 ? (x - a.x) / dx : 0;
+    return a.z + (b.z - a.z) * (1 - Math.cos(Math.PI * t)) / 2;
+  };
+}
+
+// Emit one run of a fillet-rounded strand: the straight part between the two
+// fillet tangent points (evenly sampled every ~spacing, plus a point at every
+// crossing, dropping near-coincident points), then the INTERIOR points of the
+// tangent quarter-circle at the END bight — the tangent points themselves are
+// the last run sample and the first sample of the next run.  push(x, y)
+// maps a diagram point to 3D and appends it.  fromVertex starts the run at
+// the vertex itself (open curve start) instead of the fillet tangent point.
+function emitFilletRun(push, Ax, Ay, Bx, By, Rstart, Rend, crossTs, spacing, minGap, fromVertex) {
+  const len  = Bx - Ax;                              // = |By - Ay|
+  const sign = Math.sign(By - Ay);                   // +1 up-run (end = peak), -1 down (valley)
+  const yAt  = x => Ay + (By - Ay) * (x - Ax) / len;
+  const x0 = fromVertex ? Ax : Ax + Rstart / Math.SQRT2;
+  const xe = Bx - Rend / Math.SQRT2;
+  const xs = [];
+  const nStraight = Math.max(1, Math.round((xe - x0) / spacing));   // even spacing, lands exactly on x0 & xe
+  for (let i = 0; i <= nStraight; i++) xs.push(x0 + (xe - x0) * i / nStraight);
+  for (const t of crossTs) xs.push(Ax + t);
+  xs.sort((a, b) => a - b);
+  let prevX = -Infinity;
+  for (const x of xs) { if (x - prevX < minGap) continue; prevX = x; push(x, yAt(x)); }
+  // Tangent fillet arc (quarter circle, center on the interior bisector).
+  const Cy = By - sign * Rend * Math.SQRT2;
+  const a0 = sign > 0 ? 3 * Math.PI / 4 : 5 * Math.PI / 4;
+  const a1 = sign > 0 ?     Math.PI / 4 : 7 * Math.PI / 4;
+  const nArc = 5;
+  for (let i = 1; i <= nArc; i++) {
+    const a = a0 + (a1 - a0) * i / (nArc + 1);
+    push(Bx + Rend * Math.cos(a), Cy + Rend * Math.sin(a));
+  }
+}
+
 function buildTubeDiagram() {
   clearKnotGroup();
 
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const xStretch   = parseFloat(document.getElementById('xStretchSlider').value);
   const scaleY     = 8;
-  const delta      = tubeRadius * 3;
+  const delta      = tubeRadius * 1.5;   // z-offset at crossings: clear gap without bulging
   const pad        = tubeRadius * 2;
   const oH         = scaleY * 1.6 + pad;
 
@@ -636,80 +707,39 @@ function buildTubeDiagram() {
     for (let s = 0; s < D; s++)
       strandCrossings[k][s].sort((a, b) => a.t - b.t);
 
-  // ── One tube per strand ────────────────────────────────────────────────────
-  // Runs stay straight (so crossings are exactly the zigzag's — no spurious
-  // intersections).  Each bight is rounded by a proper TANGENT fillet: a quarter
-  // circle tangent to both runs, sampled as arc points so the spline follows it
-  // with no slope kink where the straight run meets the arc.  The fillet radius
-  // at a bight is shared by its two runs (min of their lengths), so both sides
-  // round symmetrically.  Over/under is a smooth raised-cosine z-bump.
+  // ── One tube per strand — fillet-rounded (shared helpers above) ───────────
   const radialSegs = 32;
-  const Rmax       = 1.8;   // max fillet radius (diagram units)
   const segLen     = ZIGZAG.map((_, s) => Math.abs(ZIGZAG[(s + 1) % D][1] - ZIGZAG[s][1]));
 
   const strandCount = componentMode ? 1 : LEADS;
   for (let k = 0; k < strandCount; k++) {
     const xk  = k * step;
     const pts = [];
+    const Rbight = filletRadii(segLen, strandCrossings[k]);
 
-    // Fillet radius at each bight-vertex v (runs v-1 and v meet there).  Capped
-    // by geometry (0.6·shorter run) AND by the nearest crossing on either side:
-    // the tangent point (inset R/√2) must stay on the straight run, before any
-    // crossing, so the arc is crossing-free and never kinks at a crossing.
-    const Rbight = ZIGZAG.map((_, v) => {
-      const p  = (v - 1 + D) % D;
-      const cP = strandCrossings[k][p], cV = strandCrossings[k][v];
-      const dP = cP.length ? segLen[p] - cP[cP.length - 1].t : segLen[p];   // vertex-to-last-crossing, incoming run
-      const dV = cV.length ? cV[0].t                         : segLen[v];   // vertex-to-first-crossing, outgoing run
-      return Math.min(Rmax, 0.6 * Math.min(segLen[p], segLen[v]), Math.min(dP, dV) * Math.SQRT2 * 0.9);
-    });
+    // z keyframes over every drawn period (one extra at each end so the open
+    // ends interpolate), in absolute diagram x — monotonic along the strand.
+    const keyf = [];
+    for (let r = -1; r <= REPS; r++) {
+      const rOff = r * PERIOD + xk;
+      for (let s = 0; s < D; s++) {
+        const Ax = ZIGZAG[s][0] + rOff;
+        keyf.push({ x: Ax, z: 0 });
+        for (const cr of strandCrossings[k][s]) keyf.push({ x: Ax + cr.t, z: cr.isOver ? delta : -delta });
+      }
+    }
+    const zAt  = makeZProfile(keyf);
+    const push = (x, y) => pts.push(toFlat(x, y, zAt(x)));
 
     for (let r = -1; r < REPS; r++) {
       const rOff = r * PERIOD + xk;
-
       for (let s = 0; s < D; s++) {
         const sn = (s + 1) % D;
         const Ax = ZIGZAG[s][0]  + rOff;
-        const Ay = ZIGZAG[s][1];
         const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
-        const By = ZIGZAG[sn][1];
-        const len  = Bx - Ax;                                 // = |By - Ay|
-        const sign = Math.sign(By - Ay);                      // +1 up-run (end = peak), -1 down (valley)
-        const Rend = Rbight[sn], Rstart = Rbight[s];
-        const yAt = x => Ay + (By - Ay) * (x - Ax) / len;     // straight run
-        const W   = 1.0;                                      // over/under bump half-width
-        const zAt = x => {
-          let z = 0;
-          for (const cr of strandCrossings[k][s]) {
-            const d = (x - (Ax + cr.t)) / W;
-            if (Math.abs(d) < 1) z += (cr.isOver ? delta : -delta) * (1 + Math.cos(Math.PI * d)) / 2;
-          }
-          return z;
-        };
-
-        // Straight part between the fillet tangent points (inset R/√2 along the
-        // run), plus a control point at every crossing.
-        const x0 = pts.length === 0 ? Ax : Ax + Rstart / Math.SQRT2;
-        const xe = Bx - Rend / Math.SQRT2;
-        const xs = [];
-        const nStraight = Math.max(1, Math.round((xe - x0) / 0.5));   // even spacing, lands exactly on x0 & xe
-        for (let i = 0; i <= nStraight; i++) xs.push(x0 + (xe - x0) * i / nStraight);
-        for (const cr of strandCrossings[k][s]) xs.push(Ax + cr.t);
-        xs.sort((a, b) => a - b);
-        let prevX = -Infinity;
-        for (const x of xs) { if (x - prevX < 0.12) continue; prevX = x; pts.push(toFlat(x, yAt(x), zAt(x))); }   // drop near-coincident points
-
-        // Tangent fillet arc at the end bight (quarter circle, center on the
-        // interior bisector).  Interior points only — the tangent points are the
-        // last run sample here and the first of the next run.
-        const Cx = Bx, Cy = By - sign * Rend * Math.SQRT2;
-        const a0 = sign > 0 ? 3 * Math.PI / 4 : 5 * Math.PI / 4;
-        const a1 = sign > 0 ?     Math.PI / 4 : 7 * Math.PI / 4;
-        const nArc = 5;
-        for (let i = 1; i <= nArc; i++) {
-          const a = a0 + (a1 - a0) * i / (nArc + 1);
-          pts.push(toFlat(Cx + Rend * Math.cos(a), Cy + Rend * Math.sin(a), 0));
-        }
+        emitFilletRun(push, Ax, ZIGZAG[s][1], Bx, ZIGZAG[sn][1],
+                      Rbight[s], Rbight[sn], strandCrossings[k][s].map(c => c.t),
+                      0.5, 0.12, pts.length === 0);
       }
     }
 
@@ -2141,27 +2171,24 @@ function buildKnot() {
   // cylinder (middle) rotated 90° about x so it's seen from the side.  Composes
   // with manual orbit (OrbitControls drives the camera, this rotates the knot).
   knotGroup.rotation.x = -vt * Math.PI / 2;
-  // Cylinder height scales with the row count MAX_Y, calibrated so the strands
-  // sit at ~45° on the surface (square cells: height/MAX_Y == circumference/mod,
-  // circumference = 2*pi*worldOuterR — the constant cylinder radius).  Capped a
-  // bit below CAM_R so the full height (2*h_half) stays just inside the screen
-  // height (frustum +/-CAM_R).
-  const h_half = Math.min(Math.PI * worldOuterR * MAX_Y / mod, CAM_R * 0.85);
+  // Cylinder height is FIXED at (just under) the full display height; the
+  // inner-radius slider changes only the cylinder radius.  The strand angle
+  // follows from the radius/height ratio (no square-cell calibration).
+  const h_half = CAM_R * 0.85;
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
     const yR     = rev ? (MAX_Y - y) : y;          // swap inner/outer on the right
     const r_flat = worldInnerR + (yR / MAX_Y) * (worldOuterR - worldInnerR);
     // Flat state: radius r_flat in plane, crossing offset axial (+z).
-    // Cylinder state: radius = the (fixed) OUTER ring; the roll grows the inner
-    // ring out to meet it, so the cylinder radius is the constant worldOuterR and
-    // the inner-radius slider has no effect in cylinder view (only off-cylinder,
-    // where it sets the inner ring).  Crossing offset radial.
+    // Cylinder state: radius = the INNER ring; the roll shrinks the outer ring
+    // in to meet it, so the inner-radius slider sets the cylinder radius too.
+    // Crossing offset radial.
     const fx = r_flat * Math.cos(theta) + xCenter;
     const fy = r_flat * Math.sin(theta);
     const fz = z;
-    const cx = (worldOuterR + z) * Math.cos(theta);
-    const cy = (worldOuterR + z) * Math.sin(theta);
+    const cx = (worldInnerR + z) * Math.cos(theta);
+    const cy = (worldInnerR + z) * Math.sin(theta);
     const cz = (y / MAX_Y - 0.5) * 2 * h_half;
     return new THREE.Vector3(
       fx * (1 - vt) + cx * vt,
@@ -2210,29 +2237,15 @@ function buildKnot() {
       return sharedPts.has(`${b[0]},${b[1]}`) ? d * bightSep : 0;
     });
 
-    // Fillet-rounded strand, same technique as the braid view: runs stay
-    // straight (densely sampled so CatmullRom follows the nonlinear polar/helix
-    // map), each bight rounded by a tangent quarter-circle whose radius is capped
-    // by geometry and by the nearest crossing, so the arc is crossing-free.
-    const Rmax = 1.8;
+    // Fillet-rounded strand (shared helpers): runs sampled densely so
+    // CatmullRom follows the nonlinear polar/helix map.
     const dxOf = j => Math.abs(bights[(j + 1) % n][1] - bights[j][1]);
     const segCross = [];
     for (let j = 0; j < n; j++) segCross[j] = (crossMap.get(j) || []).slice().sort((a, b) => a.t - b.t);
-    const Rbight = bights.map((_, v) => {
-      const p   = (v - 1 + n) % n;
-      const dxp = dxOf(p), dxv = dxOf(v);
-      const cP  = segCross[p], cV = segCross[v];
-      const dP  = cP.length ? dxp - cP[cP.length - 1].t : dxp;   // vertex-to-last-crossing, incoming run
-      const dV  = cV.length ? cV[0].t                   : dxv;   // vertex-to-first-crossing, outgoing run
-      return Math.min(Rmax, 0.6 * Math.min(dxp, dxv), Math.min(dP, dV) * Math.SQRT2 * 0.9);
-    });
+    const Rbight = filletRadii(bights.map((_, j) => dxOf(j)), segCross);
 
-    // Over/under along the strand: keyframe z at each crossing (±delta) and each
-    // bight (0), with COSINE easing between.  Every crossing reaches full ±delta
-    // (no bump-cancellation between opposite neighbours) and the profile stays
-    // smooth through the fillets and across bights.  Keyframes are in absolute x
-    // (monotonic along the strand); run-0's are repeated one period on so the
-    // seam interpolates.
+    // z keyframes in absolute x (monotonic along the strand); run-0's are
+    // repeated one period on so the closed-curve seam interpolates.
     const keyf = [];
     { let rx = bights[0][0];
       for (let j = 0; j < n; j++) {
@@ -2243,49 +2256,19 @@ function buildKnot() {
       keyf.push({ x: rx, z: 0 });
       for (const cr of segCross[0]) keyf.push({ x: rx + cr.t, z: cr.isUnder ? -delta : delta });
     }
-    const zAtG = x => {
-      if (x <= keyf[0].x) return keyf[0].z;
-      let lo = 0, hi = keyf.length - 1;
-      if (x >= keyf[hi].x) return keyf[hi].z;
-      while (lo + 1 < hi) { const m = (lo + hi) >> 1; if (keyf[m].x <= x) lo = m; else hi = m; }
-      const a = keyf[lo], b = keyf[lo + 1];
-      const dxk = b.x - a.x;
-      const t = dxk > 0 ? (x - a.x) / dxk : 0;
-      return a.z + (b.z - a.z) * (1 - Math.cos(Math.PI * t)) / 2;
-    };
+    const zAtG = makeZProfile(keyf);
 
     for (let i = 0; i < numSegs; i++) {
       const Ay = bights[i][1];
       const By = bights[(i + 1) % n][1];
-      const dx   = Math.abs(By - Ay);
-      const sign = Math.sign(By - Ay);
+      const dx = Math.abs(By - Ay);
       const Ax = rawX, Bx = rawX + dx;
-      const Rstart = Rbight[i], Rend = Rbight[(i + 1) % n];
       const dispA  = bightDisp[i], dispB = bightDisp[(i + 1) % n];
-      const dispAt = x => { const f = (x - Ax) / dx; return dispA * (1 - f) + dispB * f; };
-      const yAt = x => Ay + (By - Ay) * (x - Ax) / dx + dispAt(x);   // straight run + displacement taper
-
-      // Straight part between the two fillet tangent points, + every crossing.
-      const x0 = Ax + Rstart / Math.SQRT2;
-      const xe = Bx - Rend / Math.SQRT2;
-      const xs = [];
-      const nStraight = Math.max(1, Math.round((xe - x0) / 0.3));   // dense: polar map curves the run
-      for (let j = 0; j <= nStraight; j++) xs.push(x0 + (xe - x0) * j / nStraight);
-      for (const cr of segCross[i]) xs.push(Ax + cr.t);
-      xs.sort((a, b) => a - b);
-      let prevX = -Infinity;
-      for (const x of xs) { if (x - prevX < 0.1) continue; prevX = x; pts.push(toR(x, yAt(x), zAtG(x))); }
-
-      // Tangent fillet arc at the end bight (quarter circle, interior points).
-      const Cx = Bx, Cy = By - sign * Rend * Math.SQRT2;
-      const a0 = sign > 0 ? 3 * Math.PI / 4 : 5 * Math.PI / 4;
-      const a1 = sign > 0 ?     Math.PI / 4 : 7 * Math.PI / 4;
-      const nArc = 5;
-      for (let j = 1; j <= nArc; j++) {
-        const a  = a0 + (a1 - a0) * j / (nArc + 1);
-        const px = Cx + Rend * Math.cos(a), py = Cy + Rend * Math.sin(a);
-        pts.push(toR(px, py + dispAt(px), zAtG(px)));
-      }
+      const dispAt = x => { const f = (x - Ax) / dx; return dispA * (1 - f) + dispB * f; };   // displacement taper
+      const push   = (x, y) => pts.push(toR(x, y + dispAt(x), zAtG(x)));
+      emitFilletRun(push, Ax, Ay, Bx, By, Rbight[i], Rbight[(i + 1) % n],
+                    segCross[i].map(c => c.t),
+                    0.3, 0.1, false);   // 0.3 spacing: dense, the polar map curves the run
       rawX += dx;
     }
 
