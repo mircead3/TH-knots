@@ -270,8 +270,6 @@
     <button id="flipToggle"      class="view-btn">Flip</button>
     <button id="formToggle"      class="view-btn" style="display:none;">Form ▸</button>
   </div>
-  <!-- Bights view kept for future debugging; hidden from the UI -->
-  <button id="bightsToggle" class="view-btn" style="display:none;">Bights</button>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
   <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
 </div>
@@ -304,12 +302,15 @@ scene.background = new THREE.Color(0x060610);
 const orthoCamera = new THREE.OrthographicCamera(-8, 8, 4, -4, 0.1, 100);
 orthoCamera.position.set(0, 0, 20);
 orthoCamera.lookAt(0, 0, 0);
-let activeCamera = orthoCamera;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.prepend(renderer.domElement);
+
+// ── Shared layout constants ────────────────────────────────────────────────
+const PANEL_W = 235;   // control-panel width reserved on the left (px)
+const CAM_R   = 6.5;   // ortho camera half-height for the knot/tensegrity views
 
 // ── Controls ───────────────────────────────────────────────────────────────
 
@@ -482,13 +483,22 @@ function generateAllComponents(B) {
 const knotGroup = new THREE.Group();
 scene.add(knotGroup);
 
-function buildTubeDiagram() {
-  knotGroup.scale.setScalar(1);   // straight view may have shrunk it
+// Empty the group and free GPU resources (geometry, material, sprite textures),
+// resetting the transform the straight view may have changed.
+function clearKnotGroup() {
+  knotGroup.scale.setScalar(1);
+  knotGroup.rotation.set(0, 0, 0);
   while (knotGroup.children.length) {
     const child = knotGroup.children[0];
-    child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
+    child.geometry.dispose();
+    if (child.material.map) child.material.map.dispose();
+    child.material.dispose();
+    knotGroup.remove(child);
   }
-  knotGroup.rotation.set(0, 0, 0);
+}
+
+function buildTubeDiagram() {
+  clearKnotGroup();
 
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const xStretch   = parseFloat(document.getElementById('xStretchSlider').value);
@@ -504,7 +514,6 @@ function buildTubeDiagram() {
   const step = PERIOD / LEADS;
 
   // Camera: fixed aspect, content scales with xStretch
-  const PANEL_W    = 235;
   const aspect     = (innerWidth - PANEL_W) / innerHeight;
   const oW         = oH * aspect;
   const REPS       = Math.max(1, Math.ceil(oW / (PERIOD * unitScaleX)));
@@ -634,7 +643,6 @@ function buildTubeDiagram() {
   // with no slope kink where the straight run meets the arc.  The fillet radius
   // at a bight is shared by its two runs (min of their lengths), so both sides
   // round symmetrically.  Over/under is a smooth raised-cosine z-bump.
-  const tmp        = new THREE.Color();
   const radialSegs = 32;
   const Rmax       = 1.8;   // max fillet radius (diagram units)
   const segLen     = ZIGZAG.map((_, s) => Math.abs(ZIGZAG[(s + 1) % D][1] - ZIGZAG[s][1]));
@@ -707,45 +715,16 @@ function buildTubeDiagram() {
 
     if (pts.length < 2) continue;
 
-    tmp.setHSL(k / LEADS, 0.9, 0.62);
-
     const curve       = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
-    const tubularSegs = Math.max(pts.length * 12, 60);
+    const tubularSegs = Math.max(pts.length * 4, 60);
     const geo         = new THREE.TubeGeometry(curve, tubularSegs, tubeRadius, radialSegs, false);
 
-    const ringCount    = tubularSegs + 1;
-    const vertsPerRing = radialSegs + 1;
-    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
-    for (let vi = 0; vi < ringCount * vertsPerRing; vi++) {
-      cols[vi*3] = tmp.r; cols[vi*3+1] = tmp.g; cols[vi*3+2] = tmp.b;
-    }
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
-      vertexColors: true, specular: new THREE.Color(0xffffff), shininess: 140,
+      color: new THREE.Color().setHSL(k / LEADS, 0.9, 0.62),
+      specular: new THREE.Color(0xffffff), shininess: 140,
     }));
     mesh.frustumCulled = false;
     knotGroup.add(mesh);
-  }
-
-  if (showBights) {
-    const sphereR   = tubeRadius * 0.75;
-    const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
-    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    for (let k = 0; k < strandCount; k++) {
-      const xk = k * step;
-      for (let r = -1; r < REPS; r++) {
-        const rOff = r * PERIOD + xk;
-        for (let s = 0; s < D; s++) {
-          const sn = (s + 1) % D;
-          const Bx = ZIGZAG[sn][0] + rOff + (s === D - 1 ? PERIOD : 0);
-          const By = ZIGZAG[sn][1];
-          const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-          sphere.position.copy(toFlat(Bx, By, 0));
-          sphere.frustumCulled = false;
-          knotGroup.add(sphere);
-        }
-      }
-    }
   }
 }
 
@@ -1187,6 +1166,15 @@ function getAB() { return [currentA, currentB]; }
 function minLeads()  { return currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
 function minBights() { return currentC === 1 ? 2 : 1; }
 
+// Redraw whichever view is currently active.
+function redrawCurrentView() {
+  if (showDiagram) drawDiagram();
+  else if (showTubeDiag) buildTubeDiagram();
+  else if (showRoundDiag) drawRoundDiagram();
+  else if (showStraight) buildStraight();
+  else buildKnot();
+}
+
 function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
@@ -1194,12 +1182,7 @@ function rebuildKnot() {
   if (currentC === 2 && ab2ValidList.length === 0) return;
   if (currentC === 3 && c3ValidList.length === 0) return;
   setKnotFromUI(m);
-  if (showDiagram) drawDiagram();
-  else if (showTubeDiag) buildTubeDiagram();
-  else if (showRoundDiag) drawRoundDiagram();
-  else if (showStraight) buildStraight();
-  else if (showKnot) buildKnot();
-  else buildKnot();
+  redrawCurrentView();
 }
 
 // Build everything for a specific leads count m (no input reads/writes).
@@ -1208,11 +1191,7 @@ function buildForM(m) {
   if (currentC === 2 && !syncAB2List(m)) return;
   if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
-  if (showDiagram) drawDiagram();
-  else if (showTubeDiag) buildTubeDiagram();
-  else if (showRoundDiag) drawRoundDiagram();
-  else if (showStraight) buildStraight();
-  else buildKnot();
+  redrawCurrentView();
 }
 
 // The per-L rebuild can take ~1s at large L.  The native number-input spinner
@@ -1248,12 +1227,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
   if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
-  if (showDiagram) drawDiagram();
-  else if (showTubeDiag) buildTubeDiagram();
-  else if (showRoundDiag) drawRoundDiagram();
-  else if (showStraight) buildStraight();
-  else if (showKnot) buildKnot();
-  else buildKnot();
+  redrawCurrentView();
 });
 
 function setComplexity(c) {
@@ -1326,13 +1300,7 @@ document.addEventListener('keydown', e => {
     rebuildKnot();
   }
 });
-document.getElementById('thickInput').addEventListener('input', () => {
-  const B = parseInt(document.getElementById('bInput').value);
-  if (showTubeDiag) buildTubeDiagram();
-  else if (showStraight) buildStraight();
-  else if (showKnot) buildKnot();
-  else buildKnot();
-});
+document.getElementById('thickInput').addEventListener('input', redrawCurrentView);
 
 // ── Flip ───────────────────────────────────────────────────────────────────
 // Reflect the flat knot vertically (y → MAX_Y − y): upside-down in the flat
@@ -1448,7 +1416,6 @@ function computeDiagramCrossingsAll(components, mod) {
   return result;
 }
 
-let showBights   = false;
 let showDiagram  = false;
 let showTubeDiag = false;
 let showRoundDiag = false;
@@ -1491,7 +1458,6 @@ function enterDiagramMode() {
   document.getElementById('knotSliders').style.display = 'none';
   document.getElementById('diagRoundRow').style.display = '';
   document.getElementById('bInput').disabled = false;
-  document.getElementById('bightsToggle').disabled = true;
   const ct = document.getElementById('componentToggle');
   ct.disabled = false;
   ct.textContent = componentMode ? 'Full' : 'Solo';
@@ -1526,7 +1492,7 @@ function setThickMax(v) {
 
 function enterBraidMode() {
   showDiagram = false; showTubeDiag = true; showRoundDiag = false; showKnot = false; showStraight = false;
-  activeCamera = orthoCamera; orthoOrbit.enabled = false;
+  orthoOrbit.enabled = false;
   // Reset the shared ortho camera — knot mode may have zoomed/rotated it.
   orthoCamera.zoom = 1;
   orthoCamera.position.set(0, 0, 20);
@@ -1546,7 +1512,6 @@ function enterBraidMode() {
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = true;
-  document.getElementById('bightsToggle').disabled = false;
   const ct = document.getElementById('componentToggle');
   ct.disabled = false;
   ct.textContent = componentMode ? 'Full' : 'Solo';
@@ -1566,7 +1531,6 @@ function drawDiagram() {
 
   // Scale depends only on leads (LEADS = m): more leads → smaller unit.
   // ox is fixed just right of the panel; right edge is fixed at screen right.
-  const PANEL_W  = 235;
   const LABEL_W  = 40;
   const padR     = 30;
   const diagH    = innerHeight * 0.75;
@@ -1687,6 +1651,26 @@ function drawDiagram() {
   ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
   ctx.clip();
 
+  // Solo: extend each zigzag segment's line down to y=0, thicker than the
+  // grid, so the segment's baseline foot (x-axis label) is easy to read.
+  if (componentMode) {
+    const bights = components[0];
+    const n = bights.length;
+    ctx.strokeStyle = 'rgba(100,130,255,0.55)';
+    ctx.lineWidth = 2.5;
+    let cumX = bights[0][0];
+    for (let s = 0; s < D; s++) {
+      const ay = bights[s][1], by = bights[(s + 1) % n][1];
+      const dx = Math.abs(by - ay);
+      if (by > ay) {          // ascending: foot at (cumX - ay, 0)
+        if (ay > 0) { ctx.beginPath(); ctx.moveTo(px(cumX - ay), py(0)); ctx.lineTo(px(cumX), py(ay)); ctx.stroke(); }
+      } else {                // descending: foot at (cumX + ay, 0)
+        if (by > 0) { ctx.beginPath(); ctx.moveTo(px(cumX + dx), py(by)); ctx.lineTo(px(cumX + ay), py(0)); ctx.stroke(); }
+      }
+      cumX += dx;
+    }
+  }
+
   // Pass 1: draw all segments for all components
   for (const segs of allSegs)
     for (const rSegs of segs)
@@ -1742,21 +1726,34 @@ function drawDiagram() {
       group.sort((a, b) => bights[a][0] - bights[b][0]);
       group.forEach((j, idx) => { bightLabel[j] = idx; });
     }
-    for (let r = rStart; r < REPS; r++) {
-      const xOff = r * mod;
-      for (let j = 0; j < n; j++) {
-        const [x, y] = bights[j];
-        const sx = px(x + xOff), sy = py(y);
-        const prevY = bights[(j - 1 + n) % n][1];
-        const nextY = bights[(j + 1) % n][1];
-        const isTop = prevY < y && nextY < y;
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.font = '11px monospace';
-        ctx.fillStyle = 'rgba(255,240,160,0.95)';
-        ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 23 : sy - 16);
+    const dot = (sx, j) => {
+      const y  = bights[j][1];
+      const sy = py(y);
+      const prevY = bights[(j - 1 + n) % n][1];
+      const nextY = bights[(j + 1) % n][1];
+      const isTop = prevY < y && nextY < y;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = '11px monospace';
+      ctx.fillStyle = 'rgba(255,240,160,0.95)';
+      ctx.fillText(String(bightLabel[j]), sx, isTop ? sy + 23 : sy - 16);
+    };
+    if (componentMode) {
+      if (comp > 0) continue;   // solo: only the drawn strand's dots
+      // Follow the drawn zigzag in cumulative x to its end (one full PERIOD —
+      // can span more than one mod repetition).
+      let cumX = bights[0][0];
+      for (let jj = 0; jj <= D; jj++) {
+        const j = jj % n;
+        dot(px(cumX), j);
+        cumX += Math.abs(bights[(j + 1) % n][1] - bights[j][1]);
+      }
+    } else {
+      for (let r = rStart; r < drawReps; r++) {
+        const xOff = r * mod;
+        for (let j = 0; j < n; j++) dot(px(bights[j][0] + xOff), j);
       }
     }
   }
@@ -1892,7 +1889,6 @@ function drawRoundDiagram() {
   ctx.fillStyle = '#060610';
   ctx.fillRect(0, 0, innerWidth, innerHeight);
 
-  const PANEL_W = 235;
   const cx = (innerWidth + PANEL_W) / 2;
   const cy = innerHeight / 2;
   const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
@@ -2087,7 +2083,7 @@ function drawRoundDiagram() {
 
 function enterKnotMode() {
   showDiagram = false; showTubeDiag = false; showRoundDiag = false; showKnot = true; showStraight = false;
-  activeCamera = orthoCamera; orthoOrbit.enabled = true;
+  orthoOrbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('knot');
@@ -2102,17 +2098,11 @@ function enterKnotMode() {
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
-  document.getElementById('bightsToggle').disabled = false;
   buildKnot();
 }
 
 function buildKnot() {
-  knotGroup.scale.setScalar(1);   // straight view may have shrunk it
-  while (knotGroup.children.length) {
-    const child = knotGroup.children[0];
-    child.geometry.dispose(); child.material.dispose(); knotGroup.remove(child);
-  }
-  knotGroup.rotation.set(0, 0, 0);
+  clearKnotGroup();
 
   const B          = parseInt(document.getElementById('bInput').value);
   const mod        = 2 * currentC * B;
@@ -2126,17 +2116,15 @@ function buildKnot() {
   // world units using the same factor as the screen projection, so the rings
   // appear at exactly the same pixel radii as in the round diagram.
   // The center shifts right by PANEL_W/2 px to match the round diagram's cx.
-  const PANEL_W   = 235;
   const aspect    = innerWidth / innerHeight;
-  const camR      = 6.5;
-  const pxToWorld = 2 * camR / innerHeight;
+  const pxToWorld = 2 * CAM_R / innerHeight;
   const worldOuterR = outerR_raw * pxToWorld;
   const worldInnerR = innerR_raw * pxToWorld;
-  const xCenter     = PANEL_W * camR / innerHeight;
-  orthoCamera.left   = -camR * aspect;
-  orthoCamera.right  =  camR * aspect;
-  orthoCamera.top    =  camR;
-  orthoCamera.bottom = -camR;
+  const xCenter     = PANEL_W * CAM_R / innerHeight;
+  orthoCamera.left   = -CAM_R * aspect;
+  orthoCamera.right  =  CAM_R * aspect;
+  orthoCamera.top    =  CAM_R;
+  orthoCamera.bottom = -CAM_R;
   orthoCamera.updateProjectionMatrix();
 
   // Slider: 0 = flat, 0.5 = cylinder, 1 = flat again.  vt is the cylinder amount
@@ -2156,9 +2144,9 @@ function buildKnot() {
   // Cylinder height scales with the row count MAX_Y, calibrated so the strands
   // sit at ~45° on the surface (square cells: height/MAX_Y == circumference/mod,
   // circumference = 2*pi*worldOuterR — the constant cylinder radius).  Capped a
-  // bit below camR so the full height (2*h_half) stays just inside the screen
-  // height (frustum +/-camR).
-  const h_half = Math.min(Math.PI * worldOuterR * MAX_Y / mod, camR * 0.85);
+  // bit below CAM_R so the full height (2*h_half) stays just inside the screen
+  // height (frustum +/-CAM_R).
+  const h_half = Math.min(Math.PI * worldOuterR * MAX_Y / mod, CAM_R * 0.85);
 
   const toR = (rawX, y, z = 0) => {
     const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
@@ -2306,52 +2294,34 @@ function buildKnot() {
     const curve   = new THREE.CatmullRomCurve3(pts, closed, 'centripetal', 0.5);
     const tubSegs = Math.max(pts.length * 4, 60);
     const geo     = new THREE.TubeGeometry(curve, tubSegs, tubeRadius, radialSegs, closed);
-    const ringCount    = tubSegs + 1;
-    const vertsPerRing = radialSegs + 1;
-    const cols         = new Float32Array(ringCount * vertsPerRing * 3);
     // Knots (g=1): full rainbow gradient along the tube; links: flat hue per component.
-    for (let i = 0; i < ringCount; i++) {
-      tmp.setHSL(g === 1 ? i / tubSegs : comp / g, 0.9, 0.62);
-      for (let j = 0; j < vertsPerRing; j++) {
-        const idx = (i * vertsPerRing + j) * 3;
-        cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
+    const matOpts = { specular: new THREE.Color(0x444444), shininess: 40 };
+    if (g === 1) {
+      const ringCount    = tubSegs + 1;
+      const vertsPerRing = radialSegs + 1;
+      const cols         = new Float32Array(ringCount * vertsPerRing * 3);
+      for (let i = 0; i < ringCount; i++) {
+        tmp.setHSL(i / tubSegs, 0.9, 0.62);
+        for (let j = 0; j < vertsPerRing; j++) {
+          const idx = (i * vertsPerRing + j) * 3;
+          cols[idx] = tmp.r; cols[idx+1] = tmp.g; cols[idx+2] = tmp.b;
+        }
       }
+      geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      matOpts.vertexColors = true;
+    } else {
+      matOpts.color = new THREE.Color().setHSL(comp / g, 0.9, 0.62);
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
-      vertexColors: true, specular: new THREE.Color(0x444444), shininess: 40,
-    }));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial(matOpts));
     mesh.frustumCulled = false;
     knotGroup.add(mesh);
-  }
-
-  if (showBights) {
-    const sphereR   = tubeRadius * 0.75;
-    const sphereGeo = new THREE.SphereGeometry(sphereR, 8, 8);
-    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
-    for (let comp = 0; comp < drawComponents.length; comp++) {
-      const bights  = drawComponents[comp];
-      const n       = bights.length;
-      let rawX = bights[0][0];
-      for (let i = 0; i < n; i++) {
-        const ay = bights[i][1];
-        const by = bights[(i + 1) % n][1];
-        const dx = Math.abs(by - ay);
-        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.copy(toR(rawX, ay));
-        sphere.frustumCulled = false;
-        sphere.renderOrder = 1;  // draw after tubes so depthTest:false shows them on top
-        knotGroup.add(sphere);
-        rawX += dx;
-      }
-    }
   }
 }
 
 // ── Straight (tensegrity rods) view — C=1 only for now ───────────────────────
 function enterStraightMode() {
   showDiagram = false; showTubeDiag = false; showRoundDiag = false; showKnot = false; showStraight = true;
-  activeCamera = orthoCamera; orthoOrbit.enabled = true;
+  orthoOrbit.enabled = true;
   diagramCanvas.style.display = 'none';
   renderer.domElement.style.display = 'block';
   setViewButtons('straight');
@@ -2367,7 +2337,6 @@ function enterStraightMode() {
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
-  document.getElementById('bightsToggle').disabled = true;
   buildStraight();
 }
 
@@ -2381,7 +2350,7 @@ function enterStraightMode() {
 // mu form an interval [lo,hi] per rod.  We use the smallest mu every rod can
 // reach (= max of the per-rod lo's) -> equal AND as taut as equal allows.
 // Returns a direction per rod (parallel to `rods`); non-solvable rods keep dir.
-function strEqualizeDirs(rods, anchorByKey, quiet) {
+function strEqualizeDirs(rods, anchorByKey) {
   const info = rods.map(rod => {
     const Hm = anchorByKey.get(rod.keyMinus), Hp = anchorByKey.get(rod.keyPlus);
     if (!Hm || !Hp) return { ok: false };
@@ -2414,8 +2383,6 @@ function strEqualizeDirs(rods, anchorByKey, quiet) {
     const k = rods[i].ringY;
     ringMu.set(k, Math.max(ringMu.get(k) ?? 0, d.lo));
   });
-  const muList = [...ringMu.entries()].sort((a, b) => a[0] - b[0]);
-  if (!quiet) console.log(`equalize per-ring: rings=${ringMu.size}  ring-mu=[${muList.map(e => e[1].toFixed(2)).join(', ')}]`);
 
   return info.map((d, i) => {
     if (!d.ok) return rods[i].dir.clone();          // keep current direction
@@ -2577,22 +2544,15 @@ function makeNumberSprite(text, color, alpha, worldSize) {
 // straightened) is one straight rod tangent to a reference cylinder at the
 // crossing (the "anchor").  Tensegrity: these are the rods; strings come later.
 function buildStraight() {
-  while (knotGroup.children.length) {
-    const child = knotGroup.children[0];
-    child.geometry.dispose();
-    if (child.material.map) child.material.map.dispose();   // sprite tags
-    child.material.dispose(); knotGroup.remove(child);
-  }
+  clearKnotGroup();
   knotGroup.rotation.set(-Math.PI / 2, 0, 0);   // cylinder axis (local z) -> vertical, side view
-  knotGroup.scale.setScalar(1);                  // reset; we fit-scale at the end
 
   const B   = parseInt(document.getElementById('bInput').value);
   const mod  = 2 * currentC * B;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
 
   const aspect = innerWidth / innerHeight;
-  const camR   = 6.5;
-  const pxToWorld = 2 * camR / innerHeight;
+  const pxToWorld = 2 * CAM_R / innerHeight;
   // Axial scale is fixed (so total height stays put); the radius slider only
   // changes the angular scale -> the rod angles change.  At radius 260 the cells
   // are square (45°); smaller radius -> steeper rods, larger -> flatter.
@@ -2603,8 +2563,8 @@ function buildStraight() {
   const arcRef = 2 * Math.PI * (260 * pxToWorld) / mod;             // fixed rod-length scale
   const R = radiusRaw * pxToWorld;                                  // anchor radius
   const H = 2 * Math.PI * (heightRaw * pxToWorld) / mod * MAX_Y;    // anchor height spread
-  orthoCamera.left = -camR * aspect; orthoCamera.right =  camR * aspect;
-  orthoCamera.top  =  camR;          orthoCamera.bottom = -camR;
+  orthoCamera.left = -CAM_R * aspect; orthoCamera.right =  CAM_R * aspect;
+  orthoCamera.top  =  CAM_R;          orthoCamera.bottom = -CAM_R;
   orthoCamera.updateProjectionMatrix();
 
   const components   = generateAllComponents(B);
@@ -2710,7 +2670,7 @@ function buildStraight() {
       const dLen = 2 * Math.round(Math.min(Math.abs(anchorPos.y - e0.y), Math.abs(e1.y - anchorPos.y)));
 
       anchorByKey.set(keyOf(anchorPos), P);
-      rods.push({ P, dir, Lminus: L, Lplus: L, theta, yFrac: anchorPos.y / MAX_Y - 0.5,
+      rods.push({ P, dir, Lminus: L, Lplus: L, theta,
                   ringY: Math.round(anchorPos.y), comp,
                   diagLen: dLen,   // rod length in diagonal units (integer, symmetric about the hole)
                   keyAnchor: keyOf(anchorPos), keyMinus: keyOf(A), keyPlus: keyOf(Bd), color });
@@ -2764,30 +2724,13 @@ function buildStraight() {
     // Orientations: force-balance (from the relaxation), or — with Even on — rotate
     // each rod to equalize its two end-strings (a free mechanism at uniform tension,
     // doesn't move the anchors).
-    df = straightEven ? strEqualizeDirs(rods, anchorByKey, true) : ff.d;
+    df = straightEven ? strEqualizeDirs(rods, anchorByKey) : ff.d;
   } else {
     // Even without Optimize: equalize each rod's two end-strings on the raw
     // (un-moved) configuration; eqDirs is exactly that.
     df = straightEven ? eqDirs : rods.map(r => r.dir);
   }
   const Pf = rods.map(r => r.P);
-
-  // Report the displayed config's cable lengths (vs the default-cylinder raw total).
-  {
-    const sum = a => a.reduce((x, y) => x + y, 0);
-    const Rref = 260 * pxToWorld, Hdef = arcRef * MAX_Y;
-    const Pdef = rods.map(r => new THREE.Vector3(
-      Rref * Math.cos(r.theta), Rref * Math.sin(r.theta), r.yFrac * Hdef));
-    const rawDefT = sum(lensFor(Pdef, rods.map(r => r.dir)));
-    const cl = lensFor(Pf, df), tot = sum(cl);
-    console.log(`strings=${tot.toFixed(1)}  rawDefault=${rawDefT.toFixed(1)}  ` +
-                `ratio=${(tot / rawDefT).toFixed(3)}  ` +
-                `min=${Math.min(...cl).toFixed(2)} max=${Math.max(...cl).toFixed(2)}`);
-    const tally = new Map();
-    cl.forEach(v => { const k = v.toFixed(2); tally.set(k, (tally.get(k) || 0) + 1); });
-    const sTally = [...tally.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
-    console.log(`distinct string lengths (${sTally.length}): ${sTally.map(([v, n]) => `${v}×${n}`).join('  ')}`);
-  }
 
   // On-screen: rods grouped by length (integer diagonal units), under the bights,
   // plus the total string length in those same units (1 unit = arcRef·√2).
@@ -2957,7 +2900,7 @@ function buildStraight() {
   // constant on-screen size, and the sliders visibly move the anchors instead of
   // rezooming the whole view.  Orbit/zoom if a large cylinder runs off-screen.
   const refH = arcRef * MAX_Y;
-  knotGroup.scale.setScalar(refH > 1e-6 ? (2 * camR * 0.8) / refH : 1);
+  knotGroup.scale.setScalar(refH > 1e-6 ? (2 * CAM_R * 0.8) / refH : 1);
 }
 
 document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
@@ -3019,7 +2962,7 @@ document.getElementById('phaseToggle').addEventListener('click', () => {
 // label ring).  The slider is capped to this, and the PDF maps this max to a
 // page-filling diagram.
 function roundOuterMax() {
-  return Math.max(120, Math.floor(Math.min(innerHeight / 2, (innerWidth - 235) / 2) - 24));
+  return Math.max(120, Math.floor(Math.min(innerHeight / 2, (innerWidth - PANEL_W) / 2) - 24));
 }
 function syncRoundOuterMax() {
   const sl = document.getElementById('roundOuterSlider');
@@ -3035,22 +2978,7 @@ document.getElementById('straightLambdaSlider').addEventListener('input', () => 
 document.getElementById('componentToggle').addEventListener('click', () => {
   componentMode = !componentMode;
   document.getElementById('componentToggle').textContent = componentMode ? 'Full' : 'Solo';
-  const B = parseInt(document.getElementById('bInput').value);
-  if (showDiagram) drawDiagram();
-  else if (showTubeDiag) buildTubeDiagram();
-  else if (showRoundDiag) drawRoundDiagram();
-  else if (showStraight) buildStraight();
-  else if (showKnot) buildKnot();
-  else buildKnot();
-});
-
-document.getElementById('bightsToggle').addEventListener('click', () => {
-  showBights = !showBights;
-  document.getElementById('bightsToggle').classList.toggle('active', showBights);
-  const B = parseInt(document.getElementById('bInput').value);
-  if (showTubeDiag) buildTubeDiagram();
-  else if (showKnot) buildKnot();
-  else buildKnot();
+  redrawCurrentView();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -3233,7 +3161,7 @@ const PDF_SS = 2;   // supersampling: render at 2x, place in PDF at logical size
 const PAGE_W = 612, PAGE_H = 792, SIDE_MARGIN = 36;
 const CONTENT_W = PAGE_W - 2 * SIDE_MARGIN;          // 540 pt = 7.5"
 
-function renderRoundExportPage(swap) {
+function renderRoundExportPage(swap, components, allCrossings) {
   const B        = parseInt(document.getElementById('bInput').value);
   const mod      = 2 * currentC * B;
   const innerRaw = parseFloat(document.getElementById('roundInnerSlider').value);
@@ -3300,9 +3228,7 @@ function renderRoundExportPage(swap) {
     ctx.fillText(String(y), lx + 5, ly + 4);
   }
 
-  const components   = generateAllComponents(B);
   const g            = components.length;
-  const allCrossings = computeDiagramCrossingsAll(components, mod);
   const drawComponents = componentMode ? components.slice(0, 1) : components;
 
   let pathLenPx = 0;   // total drawn-path length in logical px (= PDF points)
@@ -3502,20 +3428,22 @@ function renderRoundExportPage(swap) {
 document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
   if (!window.jspdf || !window.jspdf.jsPDF) { alert('PDF library failed to load.'); return; }
   const { jsPDF } = window.jspdf;
-  const page1 = renderRoundExportPage(false);
-  const page2 = renderRoundExportPage(true);
+  const m   = parseInt(document.getElementById('mInput').value);
+  const B   = parseInt(document.getElementById('bInput').value);
+  const mod = 2 * currentC * B;
+  const components   = generateAllComponents(B);
+  const allCrossings = computeDiagramCrossingsAll(components, mod);
+  const page1 = renderRoundExportPage(false, components, allCrossings);
+  const page2 = renderRoundExportPage(true,  components, allCrossings);
   // Scale the square diagram to the content width and center it on a Letter page,
   // with 0.5" left/right margins.  The diagram center lands on the page's
   // vertical centerline, so the two pages register for duplex printing.
   const dim = CONTENT_W;
   const x   = SIDE_MARGIN;
   const y   = (PAGE_H - dim) / 2;
-  const m = parseInt(document.getElementById('mInput').value);
-  const B = parseInt(document.getElementById('bInput').value);
 
   // Header line for the top of each page.
-  const mod = 2 * currentC * B;
-  const crossings = computeDiagramCrossingsAll(generateAllComponents(B), mod).crossingCount;
+  const crossings = allCrossings.crossingCount;
   const seq = currentC === 2 ? `${ab2ValidIdx + 1}/${ab2ValidList.length}`
             : currentC === 3 ? `${c3ValidIdx + 1}/${c3ValidList.length}`
             : '1/1';
@@ -3543,18 +3471,14 @@ enterKnotMode();
 (function animate() {
   requestAnimationFrame(animate);
   if (showKnot || showStraight) orthoOrbit.update();
-  renderer.render(scene, activeCamera);
+  renderer.render(scene, orthoCamera);
 })();
 
 // ── Resize ─────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   syncRoundOuterMax();
-  if (showDiagram) { drawDiagram(); }
-  if (showTubeDiag) buildTubeDiagram();
-  if (showRoundDiag) drawRoundDiagram();
-  if (showKnot) buildKnot();
-  if (showStraight) buildStraight();
+  redrawCurrentView();
 });
 </script>
 </body>
