@@ -1330,7 +1330,11 @@ document.addEventListener('keydown', e => {
     rebuildKnot();
   }
 });
-document.getElementById('thickInput').addEventListener('input', redrawCurrentView);
+document.getElementById('thickInput').addEventListener('input', () => {
+  const v = parseFloat(document.getElementById('thickInput').value);
+  if (showStraight) thickStraightVal = v; else thickKnotVal = v;
+  redrawCurrentView();
+});
 
 // ── Flip ───────────────────────────────────────────────────────────────────
 // Reflect the flat knot vertically (y → MAX_Y − y): upside-down in the flat
@@ -1512,12 +1516,16 @@ function enterDiagramMode() {
   }
 }
 
-// Thin/Thick slider ceiling: knot & braid views cap at 75% of the full range
-// (0.45 -> 0.34); other views (tensegrity) keep the full range.
-function setThickMax(v) {
+// Thin/Thick slider: knot & braid share one thickness (capped range),
+// tensegrity keeps its own on the full range.  Each view restores its last
+// value on entry (no clamping of a shared value back and forth); both start
+// at the middle of their range.
+let thickKnotVal     = 0.15;   // knot & braid
+let thickStraightVal = 0.24;   // tensegrity
+function setThickSlider(max, value) {
   const el = document.getElementById('thickInput');
-  el.max = String(v);
-  if (parseFloat(el.value) > v) el.value = String(v);
+  el.max = String(max);
+  el.value = String(value);
 }
 
 function enterBraidMode() {
@@ -1535,7 +1543,7 @@ function enterBraidMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = 'none';
   document.getElementById('knotSliders').style.display = '';
-  setThickMax(0.28);   // knot & braid cap (~62% of the full 0.45 range)
+  setThickSlider(0.28, thickKnotVal);   // knot & braid: shared thickness, capped range
   document.getElementById('xStretchSection').style.display = '';
   document.getElementById('roundSection').style.display = 'none';
   document.getElementById('straightSection').style.display = 'none';
@@ -2120,7 +2128,7 @@ function enterKnotMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
-  setThickMax(0.28);   // knot & braid cap (~62% of the full 0.45 range)
+  setThickSlider(0.28, thickKnotVal);   // knot & braid: shared thickness, capped range
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
   document.getElementById('outerRadiusSection').style.display = 'none';
@@ -2311,7 +2319,7 @@ function enterStraightMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = 'none';   // no flat<->cyl roll here
   document.getElementById('knotSliders').style.display = '';          // keep the thin/thick slider
-  setThickMax(0.45);                                                  // tensegrity keeps full range
+  setThickSlider(0.45, thickStraightVal);                             // tensegrity: own thickness, full range
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = 'none';
   document.getElementById('straightSection').style.display = '';      // cylinder / lambda sliders
