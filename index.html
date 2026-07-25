@@ -870,6 +870,152 @@ function computeValidC3(m) {
   return list;
 }
 
+// ── Alexander polynomial (diagnostic) ───────────────────────────────────────
+// Wirtinger presentation + Fox calculus, for verifying a SUSPECTED dedup miss
+// (see the note below): unlike the Gauss code the dedup itself uses, this is
+// an invariant of the KNOT, not the diagram, so it can't be fooled by a flype
+// or any other diagram-level move — equal knot ⇒ equal polynomial, always.
+// Only handles single-component knots (a link's components would need one
+// polynomial each, and a multivariable Alexander polynomial to compare them
+// jointly — not implemented).
+//
+// Every crossing here is between one "ascending" run (dx,dy)=(1,1) and one
+// "descending" run (dx,dy)=(1,-1) (the two only families that ever meet, by
+// construction), which fixes each crossing's sign from over/under alone:
+// ascending-over ⇒ negative, descending-over ⇒ positive.  Standard Fox-
+// calculus rows for the two cases (arc "a" = incoming under, "b" = outgoing
+// under, "c" = the over-arc; entries are [const, tCoeff] i.e. const+tCoeff·t):
+//   positive: a:-t  b:1   c:(t-1)
+//   negative: a:1   b:-t  c:(t-1)
+// Verified against the standard right trefoil (all-positive, 3 crossings):
+// reproduces t²-t+1 exactly (determinant 3) at six different t.
+//
+// buildCrossingList mirrors computeDiagramCrossingsAll's single-component
+// crossing scan, but additionally keeps each crossing's two path positions
+// (needed to order the 2N crossing-instances around the strand and split it
+// into N Wirtinger arcs) instead of collapsing to per-segment {t, isUnder}.
+function buildCrossingList(bights, mod) {
+  const n = bights.length;
+  const seen = new Map();
+  for (let p = 0; p < n; p++) {
+    const [ax, ay] = bights[p];
+    const dxp = bights[(p+1)%n][1] - ay;
+    if (dxp <= 0) continue;
+    for (let q = 0; q < n; q++) {
+      const [cx, cy] = bights[q];
+      const dxq = cy - bights[(q+1)%n][1];
+      if (dxq <= 0) continue;
+      const diffY = cy - ay;
+      for (let t = 1; t < dxp; t++) {
+        const u = diffY - t;
+        if (u <= 0 || u >= dxq) continue;
+        if ((ax + t) % mod !== (cx + u) % mod) continue;
+        const key = `${(ax+t)%mod},${ay+t}`;
+        if (!seen.has(key)) seen.set(key, {p, t, q, u});
+      }
+    }
+  }
+  const lst = [...seen.values()];
+  const cum = [0];
+  for (let i = 0; i < n; i++) cum.push(cum[i] + Math.abs(bights[(i+1)%n][1] - bights[i][1]));
+  const enc = [];
+  lst.forEach((cr, i) => { enc.push([cum[cr.p]+cr.t, i, true]); enc.push([cum[cr.q]+cr.u, i, false]); });
+  enc.sort((A, B) => A[0]-B[0]);
+  const rank = new Array(lst.length);
+  enc.forEach((e, r) => { if (e[2]) rank[e[1]] = r; });
+  let over = lst.map((_, i) => rank[i] % 2 === 0);   // pIsOver
+  let bestSeg = Infinity, bestT = Infinity, fio = true;
+  lst.forEach((cr, i) => {
+    const laterSeg = Math.max(cr.p, cr.q);
+    const tOnLater = cr.p > cr.q ? cr.t : cr.u;
+    const isOverLater = cr.p > cr.q ? over[i] : !over[i];
+    if (laterSeg < bestSeg || (laterSeg === bestSeg && tOnLater < bestT)) {
+      bestSeg = laterSeg; bestT = tOnLater; fio = isOverLater;
+    }
+  });
+  if (!fio) over = over.map(o => !o);
+  return lst.map((cr, i) => ({ pPos: cum[cr.p] + cr.t, qPos: cum[cr.q] + cr.u, pIsOver: over[i] }));
+}
+
+// crossings: [{pPos, qPos, pIsOver}] → N×N Fox/Alexander matrix of [const, tCoeff].
+function alexanderMatrix(crossings) {
+  const n = crossings.length;
+  const instances = [];
+  crossings.forEach((cr, k) => {
+    instances.push({ pos: cr.pPos, k, isUnder: !cr.pIsOver });
+    instances.push({ pos: cr.qPos, k, isUnder:  cr.pIsOver });
+  });
+  instances.sort((x, y) => x.pos - y.pos);
+  let arcIdx = 0;
+  const underArc = new Array(n), overArc = new Array(n);
+  for (const inst of instances) {
+    if (inst.isUnder) { underArc[inst.k] = arcIdx; arcIdx = (arcIdx + 1) % n; }
+    else               { overArc[inst.k]  = arcIdx; }
+  }
+  const M = Array.from({length: n}, () => Array.from({length: n}, () => [0, 0]));
+  const add = (row, col, val) => { M[row][col][0] += val[0]; M[row][col][1] += val[1]; };
+  for (let k = 0; k < n; k++) {
+    const a = underArc[k], b = (a + 1) % n, c = overArc[k];
+    if (!crossings[k].pIsOver) { add(k, a, [0,-1]); add(k, b, [1,0]);  add(k, c, [-1,1]); }   // positive
+    else                       { add(k, a, [1,0]);  add(k, b, [0,-1]); add(k, c, [-1,1]); }   // negative
+  }
+  return M;
+}
+
+// Evaluate the [const,tCoeff] matrix at integer t, drop the last row+column,
+// exact integer determinant via fraction-free (Bareiss) elimination — the
+// Alexander polynomial at t, up to the usual ± tᵏ unit ambiguity.  Only
+// |det| at t=-1 (the classical knot DETERMINANT) is unit-ambiguity-free and
+// safe to compare directly between two different diagrams/matrix sizes; at
+// other t the same unknown tᵏ factor could scale the two sides differently,
+// so those are informative but not on their own conclusive.
+function alexDetAt(M, t) {
+  const n = M.length;
+  const sz = n - 1;
+  if (sz <= 0) return 1n;
+  const A = [];
+  for (let i = 0; i < sz; i++) {
+    const row = [];
+    for (let j = 0; j < sz; j++) row.push(BigInt(M[i][j][0]) + BigInt(M[i][j][1]) * BigInt(t));
+    A.push(row);
+  }
+  let prev = 1n;
+  for (let k = 0; k < sz - 1; k++) {
+    if (A[k][k] === 0n) {
+      let sw = -1;
+      for (let i = k+1; i < sz; i++) if (A[i][k] !== 0n) { sw = i; break; }
+      if (sw < 0) return 0n;
+      [A[k], A[sw]] = [A[sw], A[k]];
+      prev = -prev;
+    }
+    for (let i = k+1; i < sz; i++)
+      for (let j = k+1; j < sz; j++)
+        A[i][j] = (A[i][j]*A[k][k] - A[i][k]*A[k][j]) / prev;
+    prev = A[k][k];
+  }
+  return A[sz-1][sz-1];
+}
+function knotDeterminantOf(M) { const d = alexDetAt(M, -1); return d < 0n ? -d : d; }
+
+// Diagnostic: |Δ(-1)| (the knot determinant) for the CURRENTLY DISPLAYED knot
+// at a given bight count B (must be coprime to LEADS — single component only).
+// Two different diagrams of the SAME knot always give the same determinant;
+// a mismatch is conclusive proof they're different knots.  Use this to check
+// a suspected dedup miss before trusting a visual "these look like duplicates"
+// — matching crossing counts or similar-looking diagrams are NOT sufficient
+// (verified: a genuine flype-style false alarm turned out to have different
+// determinants at every B tried).  Call from browser console: knotDeterminant(B)
+window.knotDeterminant = function(B) {
+  const mod = 2 * currentC * B;
+  const components = generateAllComponents(B);
+  if (components.length !== 1) { console.log(`g=${components.length} components — pick a B coprime to LEADS for a single-component knot`); return null; }
+  const crossings = buildCrossingList(components[0], mod);
+  const M = alexanderMatrix(crossings);
+  const det = knotDeterminantOf(M);
+  console.log(`B=${B}: ${crossings.length} crossings, |Δ(-1)| = ${det}`);
+  return det;
+};
+
 // ── Knot-identity dedup (C=3) ──────────────────────────────────────────────
 // computeValidC3 removes only *segment-sequence* duplicates; genuinely equal
 // knots still appear under different (a,b,c,d) — they differ by a flype, so the
@@ -877,7 +1023,9 @@ function computeValidC3(m) {
 // over/under Gauss code, which for these prime reduced *alternating* diagrams
 // is a knot invariant: equal code ⇒ same knot, so no distinct knot is ever
 // dropped (the only residual risk is a flype-related duplicate slipping
-// through).  Mirrors are folded in (policy: collapse mirrors, keep flip button).
+// through — use window.knotDeterminant(B) on the two suspects to check before
+// assuming that's what happened; matching crossing counts alone is not proof).
+// Mirrors are folded in (policy: collapse mirrors, keep flip button).
 // Computed at the smallest bight count coprime to m — fewest crossings, and the
 // knot identity is bight-independent.
 function smallestCoprimeB(m) { let B = 2; while (gcd(m, B) !== 1) B++; return B; }
