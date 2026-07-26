@@ -265,6 +265,9 @@
   <div class="btn-row" id="diagRoundRow" style="display:none;">
     <button id="roundToggle" class="view-btn">Round</button>
   </div>
+  <div class="btn-row" id="symmetryRow" style="display:none;">
+    <button id="symmetryToggle" class="view-btn">Symmetry</button>
+  </div>
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
     <button id="flipToggle"      class="view-btn">Flip</button>
@@ -1598,11 +1601,111 @@ function computeDiagramCrossingsAll(components, mod) {
   return result;
 }
 
+// ── Frieze-symmetry detection (Symmetry toggle) ─────────────────────────────
+// Finds the symmetries of the diagram AS DRAWN (over/under included, per a
+// crossing's overSlope below) among the ones a horizontally-repeating strip
+// pattern (a "frieze") can have: vertical mirrors, one horizontal mirror
+// (only one is possible — it must lie on the strip's own centerline, y =
+// MAX_Y/2), 180° rotation centers (also forced to y = MAX_Y/2), and glide
+// reflections.  None of these touch the z axis (over/under), so a genuine
+// symmetry of the diagram must preserve over/under exactly, never swap it —
+// that's the test each candidate has to pass.
+//
+// Coordinates are worked in DOUBLED units (X=round(2x), Y=round(2y): exact
+// integers, since diagram coordinates here are always integer or half-
+// integer) so every comparison is exact-integer, no floating-point
+// tolerance.  A mirror/rotation axis position can be a quarter-integer of
+// the original scale (the average of two half-integer points), so those are
+// searched directly in the doubled-X space (Xc = 2·X0, an integer).
+//
+// bights: [{x,y,dir}] (dir=+1 valley/v-bight, -1 peak/^-bight).
+// crossings: [{x,y,overSlope}] (overSlope=+1 if the ascending (slope +1)
+// strand is over, -1 if the descending (slope -1) strand is over — every
+// crossing here is between one of each, so this fully determines it).
+// Both periodic in x with period `period`; y ranges over [0, MAX_Y].
+function findFriezeSymmetries(period, MAX_Y, bightList, crossList) {
+  const P = 2 * period;              // modulus for doubled X
+  const Y0 = MAX_Y;                  // = 2*(MAX_Y/2): doubled y-center, always integer
+  const mod = (v, m) => ((v % m) + m) % m;
+
+  const bMap = new Map(), cMap = new Map();
+  for (const p of bightList) bMap.set(mod(Math.round(2*p.x), P) + ',' + Math.round(2*p.y), p.dir);
+  for (const p of crossList) cMap.set(mod(Math.round(2*p.x), P) + ',' + Math.round(2*p.y), p.overSlope);
+
+  // mapXFn(X) -> X' (doubled X, pre-mod); Lx,Ly in {-1,+1} (Ly acts on Y about Y0).
+  function testTransform(mapXFn, Lx, Ly) {
+    for (const [key, dir] of bMap) {
+      const [X, Y] = key.split(',').map(Number);
+      const X2 = mod(mapXFn(X), P);
+      const Y2 = Ly * (Y - Y0) + Y0;
+      if (bMap.get(X2 + ',' + Y2) !== Ly * dir) return false;
+    }
+    for (const [key, slope] of cMap) {
+      const [X, Y] = key.split(',').map(Number);
+      const X2 = mod(mapXFn(X), P);
+      const Y2 = Ly * (Y - Y0) + Y0;
+      if (cMap.get(X2 + ',' + Y2) !== Lx * Ly * slope) return false;
+    }
+    return true;
+  }
+
+  const vMirrors = [];
+  for (let Xc = 0; Xc < 2 * P; Xc++)
+    if (testTransform(X => Xc - X, -1, 1)) vMirrors.push(Xc / 4);
+
+  const hMirror = testTransform(X => X, 1, -1);
+
+  const rotCenters = [];
+  for (let Xc = 0; Xc < 2 * P; Xc++)
+    if (testTransform(X => Xc - X, -1, -1)) rotCenters.push(Xc / 4);
+
+  const glideOffsets = [];
+  for (let Off = 1; Off < P; Off++)   // Off=0 would just be the horizontal mirror
+    if (testTransform(X => X + Off, 1, -1)) glideOffsets.push(Off / 2);
+
+  const v = vMirrors.length > 0, h = hMirror, r = rotCenters.length > 0, g = glideOffsets.length > 0;
+  let groupName = 'p1';
+  if (v && h && r) groupName = 'p2mm';
+  else if (h)      groupName = 'p11m';
+  else if (v && r && g) groupName = 'p2mg';
+  else if (r)      groupName = 'p2';
+  else if (v)      groupName = 'p1m1';
+  else if (g)      groupName = 'p11g';
+
+  return { period, MAX_Y, vMirrors, hMirror, rotCenters, glideOffsets, groupName };
+}
+
+// Gathers findFriezeSymmetries' input from the SAME components+allCrossings
+// data a view has already computed (works for both the flat diagram, at any
+// B, and the braid — the braid's fundamental period is exactly the B=1
+// diagram, i.e. mod=2·currentC·1=D=PERIOD/LEADS: verified numerically to
+// reproduce buildTubeDiagram's own crossing computation exactly).
+function symmetryDataFromComponents(components, allCrossings) {
+  const bights = [], crossings = [];
+  components.forEach((bP, comp) => {
+    const n = bP.length;
+    const crossMap = allCrossings[comp];
+    for (let i = 0; i < n; i++) {
+      const [ax, ay] = bP[i];
+      const [, by] = bP[(i + 1) % n];
+      const dir = Math.sign(by - ay);
+      bights.push({ x: ax, y: ay, dir });
+      const thisSlope = dir;   // this segment's own slope: +1 ascending, -1 descending
+      for (const cr of (crossMap.get(i) || [])) {
+        const overSlope = cr.isUnder ? -thisSlope : thisSlope;
+        crossings.push({ x: ax + cr.t, y: ay + thisSlope * cr.t, overSlope });
+      }
+    }
+  });
+  return { bights, crossings };
+}
+
 let showDiagram  = false;
 let showTubeDiag = false;
 let showRoundDiag = false;
 let showKnot  = false;
 let showStraight = false;
+let showSymmetry = false;   // Symmetry toggle: flat diagram only
 let straightOpt   = false;   // Straight view: symmetric anchor optimization (move rings)
 let straightUniform = false; // Straight view: cut all rods to the shortest rod's length
 let straightEven  = false;   // Straight view (Optimize): equalize each rod's two end-strings by rotation
@@ -1629,6 +1732,10 @@ function setViewButtons(current) {
   document.getElementById('buildToggle').style.display = current === 'straight' ? '' : 'none';   // Build: straight only
   document.getElementById('phaseToggle').style.display = (current === 'straight' && buildMode) ? '' : 'none';
   if (current !== 'straight') document.getElementById('buildInfo').style.display = 'none';
+  // Symmetry: flat diagram only (shown/hidden by enterDiagramMode / the Round
+  // button, since setViewButtons doesn't see the flat/round split) — hidden
+  // here for every other view, including braid.
+  document.getElementById('symmetryRow').style.display = 'none';
 }
 
 
@@ -1652,6 +1759,7 @@ function enterDiagramMode() {
     document.getElementById('outerRadiusSection').style.display = '';
     document.getElementById('downloadBtn').style.display = 'none';
     document.getElementById('pdfDownloadBtn').style.display = '';
+    document.getElementById('symmetryRow').style.display = 'none';   // Symmetry: flat diagram only
     drawRoundDiagram();
   } else {
     showDiagram = true;
@@ -1660,6 +1768,7 @@ function enterDiagramMode() {
     document.getElementById('roundSection').style.display = 'none';
     document.getElementById('downloadBtn').style.display = '';
     document.getElementById('pdfDownloadBtn').style.display = 'none';
+    document.getElementById('symmetryRow').style.display = '';
     drawDiagram();
   }
 }
@@ -1945,6 +2054,59 @@ function drawDiagram() {
   }
   ctx.restore();
 
+  // Symmetry overlay: vertical/horizontal mirrors, glide axis, rotation
+  // centers, repeated across the same reps as the drawn strands.  At most one
+  // horizontal-axis line is drawn (mirror takes precedence over glide — both
+  // live on the same y=MAX_Y/2 line, so showing both would just double-draw it).
+  //
+  // SHAPE symmetry (bights/strand skeleton only, over/under ignored): the
+  // stricter diagram symmetry (crossings must also match) turns out to
+  // essentially never hold for this app's C=2/C=3 knots — mirroring an
+  // alternating diagram's shape almost always flips crossing handedness,
+  // so requiring an exact over/under match rejects nearly every candidate
+  // (verified: 0/65 valid C=2 knots for m=4..12, and a sample of C=3 knots,
+  // show any crossing-preserving symmetry).  The bare strand shape is far
+  // less restrictive and is what's shown here.
+  // Solo shows just one component/strand in isolation, cut out of its
+  // periodic context — the frieze reasoning (which relies on the FULL
+  // repeating pattern) doesn't apply to it, so the toggle is disabled there.
+  document.getElementById('symmetryToggle').disabled = componentMode;
+  let symResult = null;
+  if (showSymmetry && !componentMode) {
+    const { bights: symB } = symmetryDataFromComponents(drawComponents, allCrossings);
+    symResult = findFriezeSymmetries(mod, MAX_Y, symB, []);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ox, py(MAX_Y), availDiagW, MAX_Y * scale);
+    ctx.clip();
+    const symColor = 'rgba(255,90,220,0.9)';
+    ctx.strokeStyle = symColor; ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 5]);
+    for (let r = rStart; r < drawReps; r++)
+      for (const x0 of symResult.vMirrors) {
+        ctx.beginPath();
+        ctx.moveTo(px(x0 + r * mod), py(0));
+        ctx.lineTo(px(x0 + r * mod), py(MAX_Y));
+        ctx.stroke();
+      }
+    const xL = px(rStart * mod), xR = px(drawReps * mod);
+    if (symResult.hMirror) {
+      ctx.setLineDash([8, 5]);
+      ctx.beginPath(); ctx.moveTo(xL, py(MAX_Y / 2)); ctx.lineTo(xR, py(MAX_Y / 2)); ctx.stroke();
+    } else if (symResult.glideOffsets.length > 0) {
+      ctx.setLineDash([2, 5]);
+      ctx.beginPath(); ctx.moveTo(xL, py(MAX_Y / 2)); ctx.lineTo(xR, py(MAX_Y / 2)); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    for (let r = rStart; r < drawReps; r++)
+      for (const x0 of symResult.rotCenters) {
+        const cx0 = px(x0 + r * mod), cy0 = py(MAX_Y / 2);
+        ctx.beginPath(); ctx.arc(cx0, cy0, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx0, cy0, 1.5, 0, Math.PI * 2); ctx.fillStyle = symColor; ctx.fill();
+      }
+    ctx.restore();
+  }
+
   // C=3 parameter rulers — only in component (Period) mode.
   // Endpoints are where adjacent same-slope segment lines cross the ruler's own y-level.
   if (currentC === 3 && componentMode) {
@@ -2063,6 +2225,12 @@ function drawDiagram() {
   ctx.fillText(ZIGZAG.map(([x,y]) => `(${x},${y})`).join(' → '), ox + availDiagW / 2, infoY);
   ctx.textAlign = 'right';
   ctx.fillText(`${allCrossings.crossingCount} crossings`, ox + availDiagW, infoY);
+
+  if (symResult) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,90,220,0.9)';
+    ctx.fillText(`shape symmetry: ${symResult.groupName}`, ox, infoY + 18);
+  }
 }
 
 function drawRoundDiagram() {
@@ -2267,6 +2435,15 @@ function drawRoundDiagram() {
   }
 }
 
+// Re-center the inner-radius slider and rebuild — the knot view's frontal
+// (slider-driven, non-orbited) framing.  Shared by enterKnotMode and 'r'.
+function resetKnotFrontalView() {
+  const sl = document.getElementById('roundInnerSlider');
+  const step = parseFloat(sl.step) || 1;
+  sl.value = Math.round((parseFloat(sl.min) + parseFloat(sl.max)) / 2 / step) * step;
+  buildKnot();
+}
+
 function enterKnotMode() {
   showDiagram = false; showTubeDiag = false; showRoundDiag = false; showKnot = true; showStraight = false;
   orthoOrbit.enabled = true;
@@ -2284,7 +2461,8 @@ function enterKnotMode() {
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
   document.getElementById('bInput').disabled = false;
-  buildKnot();
+  orthoOrbit.reset();
+  resetKnotFrontalView();   // frontal view on entry, same as pressing 'r'
 }
 
 function buildKnot() {
@@ -3053,6 +3231,7 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     document.getElementById('outerRadiusSection').style.display = '';
     document.getElementById('downloadBtn').style.display = 'none';
     document.getElementById('pdfDownloadBtn').style.display = '';
+    document.getElementById('symmetryRow').style.display = 'none';   // Symmetry: flat diagram only
     drawRoundDiagram();
   } else {
     showDiagram = true; showRoundDiag = false;
@@ -3061,6 +3240,7 @@ document.getElementById('roundToggle').addEventListener('click', () => {
     document.getElementById('roundSection').style.display = 'none';
     document.getElementById('downloadBtn').style.display = '';
     document.getElementById('pdfDownloadBtn').style.display = 'none';
+    document.getElementById('symmetryRow').style.display = '';
     drawDiagram();
   }
 });
@@ -3120,22 +3300,29 @@ document.getElementById('componentToggle').addEventListener('click', () => {
   redrawCurrentView();
 });
 
+document.getElementById('symmetryToggle').addEventListener('click', () => {
+  showSymmetry = !showSymmetry;
+  document.getElementById('symmetryToggle').classList.toggle('active', showSymmetry);
+  redrawCurrentView();
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showKnot || showStraight)) enterKnotMode();
-  // 'r' reverts the knot view to the standard (slider-driven) angle after an
-  // orbit/zoom/pan.  reset() restores the construction-time camera (pos 0,0,20,
-  // target origin, zoom 1); the slider tilt lives on the knot group, so the
-  // standard flat-from-above / cylinder-from-side framing returns.
-  if ((e.key === 'r' || e.key === 'R') && (showKnot || showStraight) &&
+  // 'r' resets the current view to its standard framing:
+  //  - knot/straight: revert orbit (reset() restores the construction-time
+  //    camera: pos 0,0,20, target origin, zoom 1 — the slider tilt lives on
+  //    the knot group, so the standard flat-from-above / cylinder-from-side
+  //    framing returns) and, for knot, re-center the inner-radius slider.
+  //  - flat diagram/braid: return the narrow-wide (xStretch) slider to its
+  //    default (no orbit there to reset).
+  if ((e.key === 'r' || e.key === 'R') && (showKnot || showStraight || showDiagram || showTubeDiag) &&
       !(document.activeElement && document.activeElement.tagName === 'INPUT')) {
-    orthoOrbit.reset();
-    if (showKnot) {
-      const sl = document.getElementById('roundInnerSlider');
-      const step = parseFloat(sl.step) || 1;
-      sl.value = Math.round((parseFloat(sl.min) + parseFloat(sl.max)) / 2 / step) * step;
-      buildKnot();
-    } else {
-      buildStraight();
+    if (showKnot) { orthoOrbit.reset(); resetKnotFrontalView(); }
+    else if (showStraight) { orthoOrbit.reset(); buildStraight(); }
+    else {
+      const xs = document.getElementById('xStretchSlider');
+      xs.value = xs.defaultValue;
+      if (showDiagram) drawDiagram(); else buildTubeDiagram();
     }
   }
 });
