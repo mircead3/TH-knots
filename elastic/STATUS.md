@@ -10,6 +10,21 @@ at wire radius r (default 0.001·L); optional twist term; no friction/gravity.
   (vibration surrogate, tunnel-safe), `--beta --tw0` (twist: E=4pi^2*beta*(Lk-Wr)^2,
   Lk frozen at weld; beta≈0.77 round wire). Knot type verified every run via Fox
   determinant of initial+final curve (`knot_det`); mismatch = strand tunneling = bug.
+  Also has `relax_general(loops0, r, ...)`: bending+contact only (NO twist), accepts
+  an arbitrary list of raw (p,3) point-cloud loops instead of only (p,b) — used by
+  server.py for the browser's Relax button on ANY knot (Turk's-head or general
+  C=2/C=3 catalog, single loop or link). Reuses bending/precondition/tangent_project/
+  project_edges/resample_closed/knot_det unchanged (they're already per-array); adds
+  `build_pairs_multi`/`seg_closest_multi`/`project_constraints_multi` for contact
+  across several independently-closed loops. knot_det only applies (and only makes
+  sense) for a single loop; links are unverified for now (see Open items).
+- `server.py` — stdlib-only local HTTP server (`python3 elastic/server.py`, default
+  port 8731) wrapping relax_general() for the browser: POST /relax with
+  `{loops, r}`, returns `{loops, energy, iter, converged}` once relaxation
+  converges (or hits a step cap) — no progress streaming, matches "just show me
+  the final shape." index.html's Relax button (2026-08-28: switched from an
+  in-browser JS physics approximation to this) fetches it directly; must be
+  started manually and left running, browsers can't launch local processes.
 - `sweep_parallel.py` — one knot per process. Wrap in `caffeinate -i` (Mac sleeps!).
 - `make_summary.py` — rebuilds `results.js` for `viewer.html` (open in Safari).
 - `snapshot.py` — 3-view PNGs into `snaps/`.
@@ -43,6 +58,12 @@ L>2B springs to tight rope-like skein (tight core, B-fold + 2-fold symmetric).
    sim gives `bights` lobes, user remembers n lobes for n×(n+1) — verify on bench.
 5. kappa_max~450 runs are marginal at N=600; use N=900 for p≥7 (slow Intel i5 Mac,
    ~30-60s/knot typical, ropes minutes).
+6. relax_general/server.py tested via direct Python calls + urllib (single loop
+   trefoil: det preserved, planarity~0.004 flat coil; synthetic Hopf-link: no
+   crash, stays separated) but the actual browser fetch()-from-file:// path has
+   NOT been exercised in a real browser — confirm the Relax button still works
+   end-to-end (start `python3 elastic/server.py` first) and report any CORS/
+   connection error verbatim if it doesn't.
 
 ## Continuing on a smaller model
 Everything needed is in this file + the code. Typical commands:

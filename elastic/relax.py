@@ -1397,6 +1397,244 @@ def relax(p, b, r=0.001, N=600, steps=60000, seed=1, log=None, qstar_mult=5,
     }
     return res
 
+# ------------------------------------------------ general multi-loop relax
+#
+# relax() above only ever builds its OWN initial curve from (p, b) via
+# th_weave/th_coil/torus_knot — it has no notion of an arbitrary knot's
+# crossing diagram. This section adds a second entry point, relax_general(),
+# that instead accepts ANY closed curve (or several, for links) as raw
+# input — used by server.py to relax whatever the browser's Knot view is
+# currently displaying, Turk's-head or general C=2/C=3 catalog knot alike,
+# rather than only the (p, b)-parametrized family.
+#
+# Scope, deliberately: bending + inextensibility + hard contact only, same
+# as relax()'s beta=0 default — NO twist support here. Generalizing twist
+# to several independently-closed loops needs mutual linking-number cross
+# terms between components (not just each loop's own writhe), which is out
+# of scope for this general-purpose entry point; relax()'s (p, b) path
+# remains the place for the validated, twist-calibrated TH experiments.
+# Similarly, knot-determinant verification (knot_det) only makes sense for
+# a single closed curve, so it's applied when there's exactly one loop and
+# skipped (not an error, just unavailable) for multi-component links.
+#
+# Unlike relax(), coordinates are NOT rescaled to unit total length: the
+# caller's units are used as-is (the browser sends its three.js world
+# coordinates, with r already in those same units — see index.html's
+# getKnotPointsForRelax()), only recentered at the combined centroid for
+# numerical hygiene.
+#
+# Reuses relax()'s already-validated per-loop building blocks (bending,
+# precondition, tangent_project, project_edges, resample_closed, knot_det)
+# completely UNCHANGED — each operates on whatever single array it's given,
+# so calling them once per loop in a Python loop is already correct; only
+# CONTACT needs new code, since it must consider segment pairs from
+# DIFFERENT loops, which the original build_pairs/seg_closest/
+# project_constraints (single %N-cyclic array) cannot express.
+
+def _pack_loops(loops):
+    """Concatenate a list of (Ni,3) loop arrays into one (sum Ni,3) array,
+    plus a `nxt` index array giving, for each global point, the global
+    index of the NEXT point along its OWN loop (wrapping within that loop,
+    not into the next one) — the multi-loop generalization of the `%N`
+    cyclic indexing every single-loop function here relies on."""
+    starts = np.concatenate([[0], np.cumsum([len(l) for l in loops])]).astype(int)
+    Pall = np.concatenate(loops, axis=0)
+    nxt = np.arange(len(Pall)) + 1
+    for s0, s1 in zip(starts[:-1], starts[1:]):
+        nxt[s1 - 1] = s0
+    return Pall, nxt, starts
+
+def _unpack_loops(Pall, starts, loops):
+    """Inverse of _pack_loops: scatter a (possibly modified) packed array
+    back into the original per-loop arrays, in place."""
+    for k in range(len(loops)):
+        loops[k][:] = Pall[starts[k]:starts[k + 1]]
+
+def seg_closest_multi(P, nxt, pairs):
+    """Exactly seg_closest()'s math (see that function's docstring for the
+    derivation), generalized to a packed multi-loop array: segment i is
+    (P[i], P[nxt[i]]) instead of (P[i], P[(i+1)%N])."""
+    i, j = pairs[:, 0], pairs[:, 1]
+    a0, a1 = P[i], P[nxt[i]]
+    b0, b1 = P[j], P[nxt[j]]
+    d1, d2 = a1 - a0, b1 - b0
+    r12 = a0 - b0
+    a = (d1 * d1).sum(1); e = (d2 * d2).sum(1)
+    f = (d2 * r12).sum(1); c = (d1 * r12).sum(1)
+    bb = (d1 * d2).sum(1)
+    denom = a * e - bb * bb
+    s = np.where(denom > 1e-18 * a * e, (bb * f - c * e) / np.maximum(denom, 1e-30), 0.0)
+    s = np.clip(s, 0.0, 1.0)
+    t = np.clip((bb * s + f) / e, 0.0, 1.0)
+    s = np.clip((bb * t - c) / a, 0.0, 1.0)
+    pa = a0 + s[:, None] * d1
+    pb = b0 + t[:, None] * d2
+    n = pa - pb
+    dist = np.linalg.norm(n, axis=1)
+    n = n / np.maximum(dist, 1e-30)[:, None]
+    return dist, s, t, n
+
+def build_pairs_multi(loops, cutoff, w_excl):
+    """Multi-loop generalization of build_pairs(): a KD-tree over ALL
+    segment midpoints from every loop combined, excluding pairs that are
+    (a) in the same loop AND within that loop's own w_excl[k] of each
+    other along the strand (cyclic within that loop) — cross-loop pairs
+    are never excluded, since two different components can legitimately
+    touch anywhere. Returns (pairs, Pall, nxt, starts) — the packed arrays
+    are returned too since the caller (the step loop below) needs them
+    again immediately for the gmin/anti-tunneling calculation."""
+    Pall, nxt, starts = _pack_loops(loops)
+    N = len(Pall)
+    mid = 0.5 * (Pall + Pall[nxt])
+    tree = cKDTree(mid)
+    pr = tree.query_pairs(r=cutoff, output_type='ndarray')
+    if len(pr) == 0:
+        return pr.reshape(0, 2), Pall, nxt, starts
+    sizes = np.diff(starts)
+    loop_id = np.zeros(N, dtype=int)
+    local_idx = np.zeros(N, dtype=int)
+    for k in range(len(loops)):
+        loop_id[starts[k]:starts[k + 1]] = k
+        local_idx[starts[k]:starts[k + 1]] = np.arange(sizes[k])
+    li, lj = loop_id[pr[:, 0]], loop_id[pr[:, 1]]
+    same = li == lj
+    dd = np.abs(local_idx[pr[:, 0]] - local_idx[pr[:, 1]])
+    dd = np.minimum(dd, sizes[li] - dd)
+    w = np.asarray(w_excl)[li]
+    keep = (~same) | (dd > w)
+    return pr[keep], Pall, nxt, starts
+
+def project_constraints_multi(loops, hs, pairs, d0, iters=4):
+    """Multi-loop generalization of project_constraints(): per-loop
+    edge-length restoration (project_edges, unchanged) interleaved with
+    contact push-apart resolved across the packed combined array, scattered
+    back into the individual loop arrays after each sub-iteration (see
+    _pack_loops/_unpack_loops). Narrows to near-active pairs after the
+    first pass, exactly like the single-loop version — but, matching
+    project_constraints() exactly, that narrowing is LOCAL to this call
+    only (the parameter `pairs` is rebound, not mutated): the caller's own
+    wide, skin-margin-inclusive candidate list must persist across many
+    steps until relax_general() explicitly rebuilds it, so callers must
+    NOT do `pairs = project_constraints_multi(...)` — this returns nothing
+    meaningful; `loops` is updated in place."""
+    for it in range(iters):
+        for k in range(len(loops)):
+            project_edges(loops[k], hs[k])
+        if len(pairs) == 0:
+            continue
+        Pall, nxt, starts = _pack_loops(loops)
+        dist, s, t, n = seg_closest_multi(Pall, nxt, pairs)
+        if it == 0:
+            near = dist < 1.15 * d0
+            if not near.any():
+                pairs = pairs[:0]
+                continue
+            pairs = pairs[near]
+            dist, s, t, n = dist[near], s[near], t[near], n[near]
+        act = dist < d0
+        if act.any():
+            i, j = pairs[act, 0], pairs[act, 1]
+            push = (0.25 * (d0 - dist[act]))[:, None] * n[act]
+            np.add.at(Pall, i, (1 - s[act, None]) * push)
+            np.add.at(Pall, nxt[i], s[act, None] * push)
+            np.add.at(Pall, j, -(1 - t[act, None]) * push)
+            np.add.at(Pall, nxt[j], -t[act, None] * push)
+            _unpack_loops(Pall, starts, loops)
+
+def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
+                   point_budget=800, min_per_loop=60):
+    """General elastic relaxation of an arbitrary curve (or several, for
+    links) — see this section's header comment for scope and how it
+    differs from relax(). loops0: list of (Ni,3) arrays, raw (not
+    necessarily uniformly resampled) initial curves in the caller's own
+    units; r: wire radius in those same units.
+
+    Returns a result dict analogous to relax()'s, generalized to a list of
+    point arrays: 'loops' (final points per component), 'E_bend',
+    'E_bend_over_4pi2', 'steps_run', 'converged_at', 'det_initial'/
+    'det_final' (None when there's more than one loop), 'wall_s'.
+    """
+    nloops = len(loops0)
+    d0 = 2 * r
+    all0 = np.concatenate(loops0, axis=0)
+    centroid = all0.mean(axis=0)
+    per_loop = max(min_per_loop, point_budget // nloops)
+
+    loops, hs, w_excl = [], [], []
+    for P0 in loops0:
+        P = resample_closed(P0 - centroid, per_loop)
+        h = np.linalg.norm(np.roll(P, -1, 0) - P, axis=1).sum() / len(P)
+        P = project_edges(P, h, iters=40)
+        loops.append(P); hs.append(h)
+        w_excl.append(max(2, int(1.5 * d0 / h) + 1))
+
+    det0 = knot_det(loops[0]) if nloops == 1 else None
+
+    qstar = 2 * np.pi * qstar_mult
+    hMin0 = min(hs)
+    skin = max(2 * d0, 2 * hMin0)
+    cutoff = d0 + skin + hMin0
+    pairs, Pall, nxt, _ = build_pairs_multi(loops, cutoff, w_excl)
+    gmin = float(seg_closest_multi(Pall, nxt, pairs)[0].min()) if len(pairs) else np.inf
+    acc_disp = 0.0
+
+    s = hMin0 / 4
+    s_min = hMin0 / 400
+    Eb = sum(bending(P, h)[0] for P, h in zip(loops, hs))
+    E_hist = [[0, Eb]]
+    conv_at = None
+    t0 = time.time()
+    for step in range(steps):
+        dirs = []
+        for P, h in zip(loops, hs):
+            _, F = bending(P, h)
+            d = precondition(F, qstar)
+            d = tangent_project(d, P)
+            dirs.append(d)
+        m = max(float(np.linalg.norm(d, axis=1).max()) for d in dirs)
+        hMin = min(hs)
+        s_max = min(2 * hMin, max(r / 2, (gmin - d0 - 2 * acc_disp) / 4))
+        step_size = min(s, s_max)
+        if m > 0:
+            for P, d in zip(loops, dirs):
+                P += d * (step_size / m)
+        project_constraints_multi(loops, hs, pairs, d0)   # mutates loops in place
+
+        Eb_new = sum(bending(P, h)[0] for P, h in zip(loops, hs))
+        s = min(s * 1.1, 2 * hMin) if Eb_new < Eb else max(s * 0.5, s_min)
+        Eb = Eb_new
+
+        acc_disp += min(s, s_max)
+        if acc_disp > skin / 2:
+            pairs, Pall, nxt, _ = build_pairs_multi(loops, cutoff, w_excl)
+            acc_disp = 0.0
+            gmin = float(seg_closest_multi(Pall, nxt, pairs)[0].min()) if len(pairs) else np.inf
+            if gmin < 0.9 * d0 / 2:
+                print(f'  WARNING step {step}: min separation {gmin:.4g} < 0.9r', flush=True)
+
+        if step % 100 == 0:
+            E_hist.append([step, Eb])
+            if log and step % 4000 == 0:
+                print(f'  {step:6d}  Eb={Eb:10.3f}  s={s:.2e}  gmin={gmin:.4f}', flush=True)
+            if step >= 8000 and s <= 2 * s_min:
+                Eref = next(e for st, e in E_hist if st >= step - 3000)
+                if abs(Eref - Eb) < 2e-3 * abs(Eb):
+                    conv_at = step
+                    break
+
+    Eb = sum(bending(P, h)[0] for P, h in zip(loops, hs))
+    det1 = knot_det(loops[0]) if nloops == 1 else None
+    if det0 is not None and det1 is not None and det0 != det1:
+        print(f'  WARNING: determinant changed {det0} -> {det1} (knot type NOT preserved!)',
+              flush=True)
+    return {
+        'loops': [[[round(float(x), 6) for x in row] for row in P] for P in loops],
+        'r': r, 'steps_run': step + 1, 'converged_at': conv_at,
+        'E_bend': Eb, 'E_bend_over_4pi2': Eb / (4 * math.pi**2),
+        'det_initial': det0, 'det_final': det1,
+        'wall_s': round(time.time() - t0, 1),
+    }
+
 # -------------------------------------------------------------------- main
 
 # 2-lead knots validated against experiment and retired from the suite

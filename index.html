@@ -276,7 +276,7 @@
   <div class="btn-row" id="relaxRow" style="display:none;">
     <button id="relaxToggle" class="view-btn">Relax</button>
   </div>
-  <div id="relaxStatus" style="display:none;font-size:10px;letter-spacing:0.5px;color:rgba(180,195,255,0.55);text-align:center;margin:-4px 0 8px;font-family:'SF Mono','Fira Code','Consolas',monospace;"></div>
+  <div id="relaxStatus" style="display:none;font-size:10px;letter-spacing:0.5px;color:rgba(180,195,255,0.55);text-align:center;margin:8px 0;font-family:'SF Mono','Fira Code','Consolas',monospace;"></div>
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
     <button id="flipToggle"      class="view-btn">Flip</button>
@@ -2660,30 +2660,21 @@ function buildKnot() {
 
 // ── Elastic-wire relaxation ("Relax" button) ────────────────────────────────
 //
-// Live, in-browser, animated version of the offline research model in
-// elastic/relax.py (bending energy + inextensibility + hard self-contact,
-// gradient flow with a Sobolev-style preconditioner). See that file's
-// extensive docstrings for the full physical/numerical derivation — this
-// is a deliberately SIMPLIFIED port for interactive visualization, not a
-// replacement for the validated Python tool:
-//   - no twist energy (beta=0 always) and no bench-vibration "kicks"
-//   - no knot-determinant verification while running (too heavy to redo
-//     every frame; safety instead relies purely on the same anti-tunneling
-//     step cap + hard contact projection elastic/relax.py also uses)
-//   - the Sobolev(H^2) preconditioner is approximated by TWO sequential
-//     solves of a cyclic-tridiagonal implicit-smoothing system instead of
-//     an FFT-based spectral filter (no FFT library here); (I+lambda*L)^-1
-//     applied twice rolls off like 1/q^4 at high q, same asymptotic shape
-//     as relax.py's 1/(1+(q/q*)^4) filter, via a much smaller amount of
-//     code (this reuses the very same cyclic-tridiagonal solver needed for
-//     the inextensibility projection, see solveCyclicTridiagonal below)
-//   - contact candidate pairs are recomputed by brute force every step
-//     (no spatial hashing / Verlet-list amortization) — affordable only
-//     because the total point budget below is capped low enough to keep
-//     that O(N^2) cost cheap; this is what lets the implementation stay
-//     simple without an elaborate neighbor-list bookkeeping layer
-// If Python-vs-browser results ever need to match quantitatively, treat
-// elastic/relax.py as ground truth and this as a fast, approximate stand-in.
+// Calls the ACTUAL validated Python model (elastic/relax.py's
+// relax_general(), via the tiny local server in elastic/server.py) rather
+// than approximating the physics in JS: this is simpler, exactly matches
+// the offline research tool (bending + inextensibility + hard contact; no
+// twist — see relax_general()'s docstring for that scope note), and there
+// is no live animation to keep frame-rate-friendly, since the button just
+// shows a "computing…" status and then displays the final converged shape
+// once the server responds. An earlier version ran a simplified physics
+// port live in a Web Worker; that traded fidelity for real-time animation,
+// which turned out not to be wanted here, so it was replaced with this
+// straightforward POST-and-wait instead (see git history to resurrect it).
+//
+// Requires elastic/server.py to be running locally (`python3
+// elastic/server.py`, left running in a terminal) — the button shows a
+// clear error with that exact command if the request fails to connect.
 //
 // Reads the SAME strand geometry buildKnot() renders (crossing list, bight
 // list, fillet profile) via getKnotPointsForRelax() below, so it works for
@@ -2790,390 +2781,20 @@ function getKnotPointsForRelax() {
 // over/under bulge. 700 keeps that comfortably resolved for typical knots
 // while still bounding the O(N^2) contact cost per solver step (see
 // buildAllPairs in the worker source) to something real-time-friendly.
-const RELAX_POINT_BUDGET = 700;
-const RELAX_MIN_PER_LOOP = 60;
-
-// ---- Worker source, as a plain string built once via Blob URL (works
-// under file:// with no separate .js file and no CORS/module-loading
-// edge cases — see the Blob URL creation in startRelax() below). ----
-const RELAX_WORKER_SRC = String.raw`
-"use strict";
-// See the big comment above getKnotPointsForRelax() in index.html for the
-// context and the deliberate simplifications this port makes relative to
-// the validated elastic/relax.py. Everything below is a direct, literal
-// translation of that file's algorithm (same variable roles, same
-// formulas) into plain per-vertex JS loops (arrays of [x,y,z] points)
-// instead of numpy vector ops, so the two can be compared line-by-line.
-
-// ---- generic cyclic (periodic) tridiagonal solver ----
-// Solves the periodic tridiagonal system with diagonal diag[i] and
-// symmetric off-diagonal off[i] (M[i,i+1]=M[i+1,i]=off[i], off[N-1] is
-// the wraparound corner M[N-1,0]), for one or more right-hand sides at
-// once. Thomas algorithm for the "open" part + Sherman-Morrison for the
-// two corner entries the periodic wraparound introduces — see
-// elastic/relax.py's tangent_project() docstring for the full derivation;
-// this is the same trick, factored into a function since BOTH the
-// inextensibility projection and the bending-force preconditioner below
-// reduce to solving exactly this kind of system.
-function thomasSolveMulti(diag, off, rhsCols) {
-  const N = diag.length;
-  const cPrime = new Float64Array(N);
-  const dPrimes = rhsCols.map(() => new Float64Array(N));
-  cPrime[0] = off[0] / diag[0];
-  for (let k = 0; k < rhsCols.length; k++) dPrimes[k][0] = rhsCols[k][0] / diag[0];
-  for (let i = 1; i < N; i++) {
-    const offPrev = off[i - 1];
-    const m = diag[i] - offPrev * cPrime[i - 1];
-    cPrime[i] = (i < N - 1 ? off[i] : 0) / m;
-    for (let k = 0; k < rhsCols.length; k++) {
-      dPrimes[k][i] = (rhsCols[k][i] - offPrev * dPrimes[k][i - 1]) / m;
-    }
-  }
-  const out = rhsCols.map(() => new Float64Array(N));
-  for (let k = 0; k < rhsCols.length; k++) {
-    out[k][N - 1] = dPrimes[k][N - 1];
-    for (let i = N - 2; i >= 0; i--) out[k][i] = dPrimes[k][i] - cPrime[i] * out[k][i + 1];
-  }
-  return out;
-}
-function solveCyclicTridiagonal(diag, off, rhsCols) {
-  const N = diag.length;
-  const beta = off[N - 1];
-  const gamma = -2.0;
-  const d = diag.slice();
-  d[0] -= gamma;
-  d[N - 1] -= (beta * beta) / gamma;
-  const corner = new Float64Array(N); corner[0] = gamma; corner[N - 1] = beta;
-  const results = thomasSolveMulti(d, off, rhsCols.concat([corner]));
-  const z = results[results.length - 1];
-  const ys = results.slice(0, results.length - 1);
-  const out = [];
-  for (const y of ys) {
-    const fac = (y[0] + (beta / gamma) * y[N - 1]) / (1 + z[0] + (beta / gamma) * z[N - 1]);
-    const lam = new Float64Array(N);
-    for (let i = 0; i < N; i++) lam[i] = y[i] - fac * z[i];
-    out.push(lam);
-  }
-  return out;
-}
-
-// ---- geometry helpers (points are plain [x,y,z] arrays) ----
-function resampleClosed(pts, M) {
-  const N = pts.length;
-  const cum = new Float64Array(N + 1);
-  for (let i = 0; i < N; i++) {
-    const a = pts[i], b = pts[(i + 1) % N];
-    const dx = b[0]-a[0], dy = b[1]-a[1], dz = b[2]-a[2];
-    cum[i + 1] = cum[i] + Math.sqrt(dx*dx+dy*dy+dz*dz);
-  }
-  const L = cum[N];
-  const out = [];
-  let seg = 0;
-  for (let k = 0; k < M; k++) {
-    const target = (L * k) / M;
-    while (seg < N - 1 && cum[seg + 1] < target) seg++;
-    while (seg > 0 && cum[seg] > target) seg--;
-    const segLen = cum[seg + 1] - cum[seg];
-    const frac = segLen > 1e-12 ? (target - cum[seg]) / segLen : 0;
-    const a = pts[seg], b = pts[(seg + 1) % N];
-    out.push([a[0]+(b[0]-a[0])*frac, a[1]+(b[1]-a[1])*frac, a[2]+(b[2]-a[2])*frac]);
-  }
-  return { pts: out, length: L };
-}
-
-// ---- bending energy + force (direct port of relax.py's bending()) ----
-function bendingLoop(P, h) {
-  const N = P.length;
-  const e = new Array(N), le = new Float64Array(N);
-  for (let i = 0; i < N; i++) {
-    const a = P[i], b = P[(i + 1) % N];
-    e[i] = [b[0]-a[0], b[1]-a[1], b[2]-a[2]];
-    le[i] = Math.sqrt(e[i][0]**2 + e[i][1]**2 + e[i][2]**2);
-  }
-  const coef = 2 / h;
-  let E = 0;
-  const gu = new Array(N), gv = new Array(N);
-  for (let i = 0; i < N; i++) {
-    const u = e[(i - 1 + N) % N], lu = le[(i - 1 + N) % N];
-    const ei = e[i], lei = le[i];
-    const dot = u[0]*ei[0]+u[1]*ei[1]+u[2]*ei[2];
-    const c = dot / (lu * lei);
-    E += (1 - c);
-    gu[i] = [ei[0]/(lu*lei) - (c/(lu*lu))*u[0],
-              ei[1]/(lu*lei) - (c/(lu*lu))*u[1],
-              ei[2]/(lu*lei) - (c/(lu*lu))*u[2]];
-    gv[i] = [u[0]/(lu*lei) - (c/(lei*lei))*ei[0],
-              u[1]/(lu*lei) - (c/(lei*lei))*ei[1],
-              u[2]/(lu*lei) - (c/(lei*lei))*ei[2]];
-  }
-  E *= coef;
-  const F = new Array(N);
-  for (let i = 0; i < N; i++) {
-    const j = (i + 1) % N, k = (i - 1 + N) % N;
-    F[i] = [coef*(gu[i][0]-gv[i][0]) - coef*gu[j][0] + coef*gv[k][0],
-            coef*(gu[i][1]-gv[i][1]) - coef*gu[j][1] + coef*gv[k][1],
-            coef*(gu[i][2]-gv[i][2]) - coef*gu[j][2] + coef*gv[k][2]];
-  }
-  return { E, F };
-}
-
-// ---- Sobolev-like preconditioner: two cyclic-tridiagonal smoothing
-// solves in place of relax.py's FFT filter (see the big comment in
-// index.html above getKnotPointsForRelax for why this is equivalent in
-// spirit: both roll off ~1/q^4 well past the cutoff mode kstar). ----
-function preconditionLoop(F, kstar) {
-  const N = F.length;
-  const lambda = 1 / (2 - 2*Math.cos(2*Math.PI*kstar/N));
-  const diag = new Float64Array(N).fill(1 + 2*lambda);
-  const off  = new Float64Array(N).fill(-lambda);
-  const fx = new Float64Array(N), fy = new Float64Array(N), fz = new Float64Array(N);
-  for (let i = 0; i < N; i++) { fx[i]=F[i][0]; fy[i]=F[i][1]; fz[i]=F[i][2]; }
-  let [gx, gy, gz] = solveCyclicTridiagonal(diag, off, [fx, fy, fz]);
-  [gx, gy, gz] = solveCyclicTridiagonal(diag, off, [gx, gy, gz]);
-  const G = new Array(N);
-  for (let i = 0; i < N; i++) G[i] = [gx[i], gy[i], gz[i]];
-  return G;
-}
-
-// ---- inextensibility (tangent-space) projection, direct port of
-// relax.py's tangent_project() ----
-function tangentProjectLoop(F, P) {
-  const N = P.length;
-  const un = new Array(N), le = new Float64Array(N);
-  for (let i = 0; i < N; i++) {
-    const a = P[i], b = P[(i + 1) % N];
-    const v = [b[0]-a[0], b[1]-a[1], b[2]-a[2]];
-    const l = Math.sqrt(v[0]**2+v[1]**2+v[2]**2);
-    le[i] = l; un[i] = [v[0]/l, v[1]/l, v[2]/l];
-  }
-  const JF = new Float64Array(N), off = new Float64Array(N);
-  for (let i = 0; i < N; i++) {
-    const j = (i + 1) % N;
-    const dF = [F[j][0]-F[i][0], F[j][1]-F[i][1], F[j][2]-F[i][2]];
-    JF[i] = un[i][0]*dF[0]+un[i][1]*dF[1]+un[i][2]*dF[2];
-    off[i] = -(un[i][0]*un[j][0]+un[i][1]*un[j][1]+un[i][2]*un[j][2]);
-  }
-  const diag = new Float64Array(N).fill(2.0);
-  const [lam] = solveCyclicTridiagonal(diag, off, [JF]);
-  const Ft = P.map((_, i) => [F[i][0], F[i][1], F[i][2]]);
-  for (let i = 0; i < N; i++) {
-    const j = (i - 1 + N) % N;
-    Ft[i][0] += un[i][0]*lam[i] - un[j][0]*lam[j];
-    Ft[i][1] += un[i][1]*lam[i] - un[j][1]*lam[j];
-    Ft[i][2] += un[i][2]*lam[i] - un[j][2]*lam[j];
-  }
-  return Ft;
-}
-
-// ---- PBD edge-length restoration, one even+odd sweep (relax.py's
-// project_edges, iters=1) ----
-function projectEdgesLoop(P, h) {
-  const N = P.length;
-  for (let parity = 0; parity < 2; parity++) {
-    for (let idx = parity; idx < N; idx += 2) {
-      const j = (idx + 1) % N;
-      const dx = P[j][0]-P[idx][0], dy = P[j][1]-P[idx][1], dz = P[j][2]-P[idx][2];
-      const l = Math.sqrt(dx*dx+dy*dy+dz*dz);
-      const c = 0.5 * (l - h) / l;
-      P[idx][0] += c*dx; P[idx][1] += c*dy; P[idx][2] += c*dz;
-      P[j][0]   -= c*dx; P[j][1]   -= c*dy; P[j][2]   -= c*dz;
-    }
-  }
-}
-
-// ---- segment-segment closest point (relax.py's seg_closest, Ericson's
-// closed-form algorithm) ----
-function segClosest(a0, a1, b0, b1) {
-  const d1 = [a1[0]-a0[0], a1[1]-a0[1], a1[2]-a0[2]];
-  const d2 = [b1[0]-b0[0], b1[1]-b0[1], b1[2]-b0[2]];
-  const r  = [a0[0]-b0[0], a0[1]-b0[1], a0[2]-b0[2]];
-  const A = Math.max(d1[0]**2+d1[1]**2+d1[2]**2, 1e-30);
-  const E = Math.max(d2[0]**2+d2[1]**2+d2[2]**2, 1e-30);
-  const Fv = d2[0]*r[0]+d2[1]*r[1]+d2[2]*r[2];
-  const C = d1[0]*r[0]+d1[1]*r[1]+d1[2]*r[2];
-  const Bv = d1[0]*d2[0]+d1[1]*d2[1]+d1[2]*d2[2];
-  const denom = A*E - Bv*Bv;
-  let s = denom > 1e-18*A*E ? (Bv*Fv - C*E)/denom : 0;
-  s = Math.min(1, Math.max(0, s));
-  let t = (Bv*s + Fv)/E;
-  t = Math.min(1, Math.max(0, t));
-  s = (Bv*t - C)/A;
-  s = Math.min(1, Math.max(0, s));
-  const pax=a0[0]+s*d1[0], pay=a0[1]+s*d1[1], paz=a0[2]+s*d1[2];
-  const pbx=b0[0]+t*d2[0], pby=b0[1]+t*d2[1], pbz=b0[2]+t*d2[2];
-  const nx=pax-pbx, ny=pay-pby, nz=paz-pbz;
-  const dist = Math.sqrt(nx*nx+ny*ny+nz*nz);
-  const inv = dist > 1e-30 ? 1/dist : 0;
-  return { dist, s, t, nx: nx*inv, ny: ny*inv, nz: nz*inv };
-}
-
-// ---- worker state and main step loop ----
-let loops = [];       // array of {P: [[x,y,z],...], h, wExcl}
-let r = 0.001, d0 = 0.002;
-let s = 0, sMin = 0;
-let running = false;
-let iter = 0;
-let session = 0;   // echoed back in every 'update' so the main thread can
-                    // discard frames from a stopped/superseded session
-let eHist = [];     // [iter, energy] every 100 steps — convergence window
-let convergedAt = null;
-
-function totalBendingEnergy() {
-  let E = 0;
-  for (const loop of loops) E += bendingLoop(loop.P, loop.h).E;
-  return E;
-}
-
-// Build every non-excluded segment pair across ALL loops combined, with
-// its exact closest-point distance/s/t/normal — brute force, recomputed
-// fresh every step (see the module-level comment in index.html for why
-// this is affordable given the point budget, and how it substitutes for
-// relax.py's spatially-indexed, amortized Verlet-list approach).
-function buildAllPairs() {
-  const segs = [];
-  for (let li = 0; li < loops.length; li++) {
-    const P = loops[li].P, N = P.length;
-    for (let i = 0; i < N; i++) segs.push({ li, i, a0: P[i], a1: P[(i+1)%N] });
-  }
-  const pairs = [];
-  let gmin = Infinity;
-  for (let a = 0; a < segs.length; a++) {
-    for (let b = a + 1; b < segs.length; b++) {
-      const sa = segs[a], sb = segs[b];
-      if (sa.li === sb.li) {
-        const N = loops[sa.li].P.length;
-        const dd = Math.min(Math.abs(sa.i - sb.i), N - Math.abs(sa.i - sb.i));
-        if (dd <= loops[sa.li].wExcl) continue;
-      }
-      const c = segClosest(sa.a0, sa.a1, sb.a0, sb.a1);
-      if (c.dist < gmin) gmin = c.dist;
-      pairs.push({ li: sa.li, i: sa.i, lj: sb.li, j: sb.i, ...c });
-    }
-  }
-  return { pairs, gmin };
-}
-
-// Interleave edge-length restoration with hard non-penetration on a
-// (typically much smaller, pre-filtered) pair list — relax.py's
-// project_constraints, generalized across multiple loops.
-function projectConstraints(pairList, iters) {
-  for (let it = 0; it < iters; it++) {
-    for (const loop of loops) projectEdgesLoop(loop.P, loop.h);
-    for (const pr of pairList) {
-      const Pa = loops[pr.li].P, Na = Pa.length;
-      const Pb = loops[pr.lj].P, Nb = Pb.length;
-      const c = segClosest(Pa[pr.i], Pa[(pr.i+1)%Na], Pb[pr.j], Pb[(pr.j+1)%Nb]);
-      if (c.dist >= d0) continue;
-      const mag = 0.25 * (d0 - c.dist);
-      const pushx = mag*c.nx, pushy = mag*c.ny, pushz = mag*c.nz;
-      const ia = pr.i, ja = (pr.i+1)%Na, ib = pr.j, jb = (pr.j+1)%Nb;
-      Pa[ia][0] += (1-c.s)*pushx; Pa[ia][1] += (1-c.s)*pushy; Pa[ia][2] += (1-c.s)*pushz;
-      Pa[ja][0] += c.s*pushx;     Pa[ja][1] += c.s*pushy;     Pa[ja][2] += c.s*pushz;
-      Pb[ib][0] -= (1-c.t)*pushx; Pb[ib][1] -= (1-c.t)*pushy; Pb[ib][2] -= (1-c.t)*pushz;
-      Pb[jb][0] -= c.t*pushx;     Pb[jb][1] -= c.t*pushy;     Pb[jb][2] -= c.t*pushz;
-    }
-  }
-}
-
-const KSTAR = 5;         // preconditioner cutoff mode, matches relax.py's qstar_mult default
-
-function stepOnce() {
-  const { pairs, gmin } = buildAllPairs();
-  const near = pairs.filter(p => p.dist < d0 + 4*Math.min(...loops.map(l => l.h)));
-
-  const dirs = loops.map(loop => {
-    const { F } = bendingLoop(loop.P, loop.h);
-    const pf = preconditionLoop(F, KSTAR);
-    return tangentProjectLoop(pf, loop.P);
-  });
-  let m = 0;
-  for (const d of dirs) for (const v of d) m = Math.max(m, Math.abs(v[0]), Math.abs(v[1]), Math.abs(v[2]));
-  const hMin = Math.min(...loops.map(l => l.h));
-  const sMax = Math.min(2*hMin, Math.max(r/2, (gmin - d0)/4));
-  const step = Math.min(s, sMax);
-  const Eb0 = totalBendingEnergy();
-  if (m > 0) {
-    for (let li = 0; li < loops.length; li++) {
-      const P = loops[li].P, d = dirs[li];
-      for (let i = 0; i < P.length; i++) {
-        P[i][0] += d[i][0]*(step/m); P[i][1] += d[i][1]*(step/m); P[i][2] += d[i][2]*(step/m);
-      }
-    }
-  }
-  projectConstraints(near, 4);
-  const Eb1 = totalBendingEnergy();
-  s = Eb1 < Eb0 ? Math.min(s*1.1, 2*hMin) : Math.max(s*0.5, sMin);
-  iter++;
-  return Eb1;
-}
-
-// Convergence check, ported directly from relax.py's relax(): once the
-// adaptive step size s has shrunk close to its floor (the solver isn't
-// finding productive moves anymore) AND the energy from ~3000 steps ago is
-// within 0.2% of the current energy, call it converged. The relative
-// threshold (rather than requiring the energy trace to be perfectly flat)
-// is what keeps the small residual "contact chatter" fluctuation described
-// earlier from preventing convergence from ever being declared.
-function checkConverged(E) {
-  if (iter % 100 === 0) eHist.push([iter, E]);
-  if (iter < 8000 || s > 2 * sMin) return false;
-  const ref = eHist.find(([st]) => st >= iter - 3000);
-  if (!ref) return false;
-  return Math.abs(ref[1] - E) < 2e-3 * Math.abs(E);
-}
-
-function runBatch() {
-  if (!running) return;
-  const batchStart = performance.now();
-  let E = 0;
-  // Run solver steps for up to ~60ms of wall time (yielding control back
-  // to the event loop between batches so a 'stop'/'init' message is never
-  // stuck behind an unbounded synchronous loop), then report progress.
-  while (performance.now() - batchStart < 60 && iter < 300000 && convergedAt === null) {
-    E = stepOnce();
-    if (checkConverged(E)) convergedAt = iter;
-  }
-  postMessage({ type: 'update', session, iter, energy: E, converged: convergedAt !== null,
-                loops: loops.map(l => l.P) });
-  if (running && iter < 300000 && convergedAt === null) setTimeout(runBatch, 0);
-  else running = false;
-}
-
-onmessage = (ev) => {
-  const msg = ev.data;
-  if (msg.type === 'init') {
-    session = msg.session;
-    r = msg.r; d0 = 2*r;
-    loops = msg.loops.map((pts0, idx) => {
-      const { pts, length } = resampleClosed(pts0, msg.targetNs[idx]);
-      const h = length / pts.length;
-      const wExcl = Math.max(2, Math.ceil(1.5*d0/h));
-      return { P: pts, h, wExcl };
-    });
-    const hMinInit = Math.min(...loops.map(l => l.h));
-    s = hMinInit / 4;
-    sMin = hMinInit / 400;
-    iter = 0;
-    eHist = [];
-    convergedAt = null;
-    running = true;
-    runBatch();
-  } else if (msg.type === 'stop') {
-    running = false;
-  }
-};
-`;
-
-let relaxWorker = null;
+const RELAX_SERVER_URL = 'http://127.0.0.1:8731/relax';
 let relaxMeshes = [];
-// Bumped on every startRelax() call and echoed back by the worker in every
-// 'update' — lets the onmessage handler below discard messages that were
-// already in flight when the relaxation was stopped or superseded by a
-// new one (the worker only checks its 'running' flag between batches, so
-// one more 'update' can still be queued after a 'stop' is posted; without
-// this check that stale frame gets rendered on top of whatever buildKnot()
-// drew next, showing two knots at once).
-let relaxSession = 0;
+// Set while a fetch to the relax server is in flight; aborting it (Stop,
+// or any control change via buildKnot()'s guard) is what lets a superseded
+// request's eventual response be ignored instead of rendering a second,
+// stale knot on top of a freshly built one.
+let relaxAbortController = null;
+// setInterval handle for the elapsed-time counter shown while a relax
+// request is in flight; cleared on every exit path (done/error/cancel).
+let relaxTimerId = null;
+
+function stopRelaxTimer() {
+  if (relaxTimerId !== null) { clearInterval(relaxTimerId); relaxTimerId = null; }
+}
 
 function disposeRelaxMeshes() {
   for (const mesh of relaxMeshes) {
@@ -3222,56 +2843,84 @@ function renderRelaxedLoops(loopsArrays) {
   });
 }
 
-function startRelax() {
+function setRelaxStatus(text) {
+  const status = document.getElementById('relaxStatus');
+  status.style.display = '';
+  status.textContent = text;
+}
+
+async function startRelax() {
   const { loops, tubeRadius } = getKnotPointsForRelax();
   if (loops.length === 0) return;
 
   clearKnotGroup();                       // remove the pristine tied-shape meshes
   knotGroup.rotation.x = -Math.PI / 2;    // match buildKnot's vt=1 (pure cylinder) tilt
 
-  if (!relaxWorker) {
-    const blob = new Blob([RELAX_WORKER_SRC], { type: 'application/javascript' });
-    relaxWorker = new Worker(URL.createObjectURL(blob));
-    relaxWorker.onmessage = (ev) => {
-      if (ev.data.type !== 'update') return;
-      // Discard frames from a stopped or superseded session (see relaxSession's
-      // comment above) — this is what prevents a late in-flight update from
-      // rendering a second knot on top of a freshly built one.
-      if (!relaxing || ev.data.session !== relaxSession) return;
-      renderRelaxedLoops(ev.data.loops);
-      const status = document.getElementById('relaxStatus');
-      status.style.display = '';
-      const label = ev.data.converged ? 'converged' : 'relaxing…';
-      status.textContent = `${label}  iter ${ev.data.iter}   E_bend ${ev.data.energy.toFixed(2)}`;
-      // The worker stops itself once converged; mirror that on the button
-      // (stopRelax() also re-posts 'stop', a harmless no-op at that point)
-      // without touching the status text it just set above.
-      if (ev.data.converged) stopRelax();
-    };
-  }
   relaxing = true;
-  const mySession = ++relaxSession;
-  document.getElementById('relaxToggle').textContent = 'Stop';
+  document.getElementById('relaxToggle').textContent = 'Cancel';
   document.getElementById('relaxToggle').classList.add('active');
-  // Distribute the total point budget evenly across loops (min per loop
-  // so a small component in a link isn't resampled down to a near-polygon).
-  const nLoops = loops.length;
-  const perLoop = Math.max(RELAX_MIN_PER_LOOP, Math.floor(RELAX_POINT_BUDGET / nLoops));
-  const targetNs = loops.map(() => perLoop);
-  relaxWorker.postMessage({
-    type: 'init',
-    session: mySession,
-    r: tubeRadius,
-    loops,
-    targetNs,
-  });
+
+  // Live elapsed-time counter: since the server returns only the final
+  // shape (no progress stream), this ticking clock is the sole feedback
+  // that the request is still working. Updated once a second from a start
+  // timestamp; stopRelaxTimer() clears it on every exit path below.
+  const t0 = performance.now();
+  const showElapsed = () => {
+    const secs = Math.floor((performance.now() - t0) / 1000);
+    setRelaxStatus(`computing… ${secs}s   (Cancel stops it)`);
+  };
+  showElapsed();
+  relaxTimerId = setInterval(showElapsed, 1000);
+
+  relaxAbortController = new AbortController();
+  const myController = relaxAbortController;
+  let resp;
+  try {
+    resp = await fetch(RELAX_SERVER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ loops, r: tubeRadius }),
+      signal: myController.signal,
+    });
+  } catch (err) {
+    if (myController.signal.aborted) return;   // cancelled — leave things as they are
+    stopRelaxTimer();
+    relaxing = false;
+    document.getElementById('relaxToggle').textContent = 'Relax';
+    document.getElementById('relaxToggle').classList.remove('active');
+    setRelaxStatus(`can't reach the relax server — start it with:  python3 elastic/server.py`);
+    return;
+  }
+  if (myController.signal.aborted) return;   // superseded by a newer request
+
+  let data;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    data = { error: 'malformed response' };
+  }
+  stopRelaxTimer();
+  const elapsed = Math.round((performance.now() - t0) / 1000);
+  relaxing = false;
+  document.getElementById('relaxToggle').textContent = 'Relax';
+  document.getElementById('relaxToggle').classList.remove('active');
+  if (!resp.ok) {
+    setRelaxStatus(`relax server error: ${data.error || resp.status}`);
+    return;
+  }
+  renderRelaxedLoops(data.loops);
+  const label = data.converged ? 'converged' : `stopped after ${data.iter} iterations`;
+  setRelaxStatus(`${label} in ${elapsed}s   E_bend ${data.energy.toFixed(2)}`);
 }
 
 function stopRelax() {
+  const wasRelaxing = relaxing;
   relaxing = false;
-  if (relaxWorker) relaxWorker.postMessage({ type: 'stop' });
+  stopRelaxTimer();
+  if (relaxAbortController) relaxAbortController.abort();
   document.getElementById('relaxToggle').textContent = 'Relax';
   document.getElementById('relaxToggle').classList.remove('active');
+  if (wasRelaxing) setRelaxStatus('cancelled');
 }
 
 document.getElementById('relaxToggle').addEventListener('click', () => {
