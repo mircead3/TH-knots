@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Elastic TH knots — relaxed shapes</title>
+<style>
+  body { margin:0; background:#0b0e1a; color:#cdd6f4; font:13px -apple-system, sans-serif; overflow:hidden; }
+  #hud { position:absolute; top:12px; left:12px; z-index:10; background:rgba(10,14,30,0.85);
+         padding:12px 16px; border-radius:10px; max-width:330px; line-height:1.5; }
+  select, input[type=range] { width:100%; margin:4px 0 10px; }
+  select { background:#1a2138; color:#cdd6f4; border:1px solid #333c5e; border-radius:6px; padding:4px; }
+  .k { color:#7f9cf5; }
+  #cls { font-weight:600; color:#f5c27f; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.5)">
+    Elastic wire equilibrium</div>
+  <select id="runSel"></select>
+  <div id="cls"></div>
+  <div id="info"></div>
+  <div style="font-size:11px;color:rgba(180,195,255,0.5);margin-top:8px">tube thickness ×</div>
+  <input type="range" id="fat" min="1" max="6" step="0.5" value="1">
+  <label style="font-size:12px"><input type="checkbox" id="spin" checked> spin</label>
+</div>
+<script src="results.js"></script>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e1a);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.001, 50);
+camera.position.set(0, 0.13, 0.26);
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(1,2,1.5); scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0x8899ff, 0.5); dl2.position.set(-1,-1,-0.5); scene.add(dl2);
+
+const sel = document.getElementById('runSel');
+RESULTS.forEach((r,i) => {
+  const o = document.createElement('option');
+  o.value = i;
+  o.textContent = `${r.p}L × ${r.b}B  — ${r.file.replace(/^th_|\.json$/g,'')}`;
+  sel.appendChild(o);
+});
+
+let mesh = null;
+function show(i) {
+  const r = RESULTS[i];
+  if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
+  const pts = r.points.map(p => new THREE.Vector3(...p));
+  const curve = new THREE.CatmullRomCurve3(pts, true);
+  const fat = +document.getElementById('fat').value;
+  const geo = new THREE.TubeGeometry(curve, r.points.length * 2, r.r * fat, 12, true);
+  // hue along arclength so the strand passes are traceable
+  const nseg = r.points.length * 2, col = [];
+  const posAttr = geo.getAttribute('position');
+  const c = new THREE.Color();
+  for (let v = 0; v < posAttr.count; v++) {
+    const t = Math.floor(v / 13) / nseg;   // 12 radial segments + 1
+    c.setHSL(t * 0.9, 0.85, 0.6);
+    col.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+    vertexColors:true, roughness:0.35, metalness:0.15 }));
+  scene.add(mesh);
+  const m = r.metrics;
+  document.getElementById('cls').textContent = r.class;
+  document.getElementById('info').innerHTML =
+    `<span class=k>E<sub>bend</sub></span> ${r.E_bend.toFixed(1)}  =  ${r.E_bend_over_4pi2.toFixed(2)} × 4π²<br>` +
+    `<span class=k>planarity</span> ${m.planarity.toFixed(3)}   <span class=k>contact</span> ${(100*m.contact_frac).toFixed(0)}%<br>` +
+    `<span class=k>writhe</span> ${m.writhe.toFixed(2)}   <span class=k>κ</span> [${m.kappa_min.toFixed(1)}, ${m.kappa_max.toFixed(1)}]<br>` +
+    `<span class=k>steps</span> ${r.steps_run}${r.converged_at ? ' (converged)' : ' (budget hit)'}`;
+}
+sel.onchange = () => show(+sel.value);
+document.getElementById('fat').oninput = () => show(+sel.value);
+show(0);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+(function loop(){
+  requestAnimationFrame(loop);
+  if (mesh && document.getElementById('spin').checked) mesh.rotation.y += 0.004;
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
