@@ -4,37 +4,45 @@
 Why this exists: a webpage cannot launch a local program by itself, so the
 only way for index.html's "Relax" button to use the actual, validated
 elastic.relax model (instead of the browser's simplified JS approximation)
-is to POST the current knot to a small server running that model and wait
-for the final shape back. This is that server. It is deliberately tiny —
-stdlib only (http.server), no Flask/aiohttp/etc — since this machine has
-no extra Python packages installed beyond numpy/scipy, and there is
-exactly one endpoint to serve.
+is to POST the current knot to a small server running that model. This is
+that server. It is deliberately tiny — stdlib only (http.server), no
+Flask/aiohttp/etc — since this machine has no extra Python packages
+installed beyond numpy/scipy.
+
+Job model: relaxation can take a minute or more, and the browser wants to
+(a) show the shape evolving and (b) on Cancel, keep whatever was achieved
+so far. So a POST /relax starts the relaxation in a BACKGROUND THREAD and
+returns immediately; the browser then polls /relax/poll for the current
+shape and calls /relax/stop to cancel. Only ONE job runs at a time (this
+is a single-user local tool and the browser only relaxes one knot at
+once), so a single global CURRENT job is enough — no job ids. Starting a
+new job cooperatively stops any previous one first.
 
 Usage:
   python3 elastic/server.py [port]      # default port 8731
-Leave it running in a terminal, then use the Relax button in index.html as
-normal (the button will show a clear error if it can't reach the server).
+Leave it running in a terminal, then use the Relax button in index.html
+(the button shows a clear error if it can't reach the server).
 
-Request:  POST /relax
-  {"loops": [[[x,y,z], ...], ...], "r": <wire radius>}
-  (one array per closed component, in the SAME units as r — this is
-  exactly the shape index.html's getKnotPointsForRelax() already produces)
+Endpoints (all POST, all reply application/json, all CORS-open):
+  /relax   {"loops": [[[x,y,z],...],...], "r": <wire radius>}
+           -> {"ok": true}  (starts the job; loops are in the SAME units as
+           r — exactly what index.html's getKnotPointsForRelax() produces)
+  /relax/poll  {}
+           -> {"running", "loops", "energy", "iter", "converged",
+               "stopped", "error"}  (loops = latest in-progress or final
+           shape, or null if none yet)
+  /relax/stop  {}
+           -> {"ok": true}  (asks the running job to stop; its next poll
+           will report running=false with the achieved-so-far shape)
 
-Response: 200 application/json
-  {"loops": [[[x,y,z], ...], ...], "energy": <float>, "iter": <int>,
-   "converged": <bool>}
-  or 4xx/5xx with {"error": "..."} on bad input / relaxation failure.
-
-This computes to convergence (or a step budget) and returns ONLY the final
-shape — no progress streaming — matching the "I don't care about seeing it
-change, just show me the final shape" use case this was built for. See
-relax_general()'s docstring in relax.py for the physics/scope (bending +
-inextensibility + hard contact; no twist; determinant-verified for a
+See relax_general()'s docstring in relax.py for the physics/scope (bending
++ inextensibility + hard contact; no twist; determinant-verified for a
 single closed loop, unverified for links).
 """
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,46 +53,118 @@ DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
 MAX_TOTAL_POINTS = 4000    # sanity cap on request size (sum of all loops' input points)
 
+# Discretization points relax_general resamples to. This MUST scale with the
+# wire's slenderness: the hard-contact solver needs several points across one
+# wire diameter (d0 = 2r) to resolve non-penetration — at ~1 point/diameter
+# it produces spurious kinks and pumps bending energy UP instead of relaxing
+# (a thin wire, lambda = L/2r large, is where this bites). Empirically ~2.5+
+# points/diameter is clean, so we target POINTS_PER_DIAM and derive the total
+# budget = POINTS_PER_DIAM * lambda, clamped. Contact is O(N^2)/step, so the
+# upper clamp bounds the wait for very thin wire (some under-resolution there,
+# but far better than the fixed-500 blowup).
+POINTS_PER_DIAM = 3.0
+POINT_BUDGET_MIN = 400
+POINT_BUDGET_MAX = 3000
+
+def choose_point_budget(loops0, r):
+    L = sum(float(np.linalg.norm(np.roll(P, -1, 0) - P, axis=1).sum()) for P in loops0)
+    lam = L / (2 * r)                     # wire length in diameters
+    return int(min(POINT_BUDGET_MAX, max(POINT_BUDGET_MIN, round(POINTS_PER_DIAM * lam))))
+
+# ---- single global job, guarded by a lock ----
+# CURRENT holds the state of the one relaxation that is running or last ran.
+# The worker thread writes 'loops'/'energy'/'iter' as it progresses (via the
+# on_progress callback) and 'running'/'converged'/'stopped'/'error' when it
+# finishes; the HTTP handlers read it for /relax/poll and set 'stop' for
+# /relax/stop. `gen` is a monotonically increasing job counter so a stale
+# worker (from a superseded job) can tell it's no longer the current one and
+# avoid clobbering the new job's state.
+_lock = threading.Lock()
+CURRENT = {
+    'gen': 0, 'running': False, 'stop': False,
+    'loops': None, 'energy': None, 'iter': 0,
+    'converged': False, 'stopped': False, 'error': None,
+}
+
+def _run_job(gen, loops0, r):
+    """Worker thread body: run relax_general with progress + stop hooks that
+    write into CURRENT (only while this job is still the current one)."""
+    def on_progress(step, energy, loops):
+        with _lock:
+            if CURRENT['gen'] != gen:
+                return
+            CURRENT['iter'] = step
+            CURRENT['energy'] = float(energy)
+            # snapshot the live (mutated-in-place) arrays as plain lists
+            CURRENT['loops'] = [P.round(6).tolist() for P in loops]
+
+    def should_stop():
+        with _lock:
+            return CURRENT['gen'] != gen or CURRENT['stop']
+
+    try:
+        res = relax_general(loops0, r=r, steps=MAX_STEPS,
+                            point_budget=choose_point_budget(loops0, r),
+                            on_progress=on_progress, should_stop=should_stop)
+        with _lock:
+            if CURRENT['gen'] != gen:
+                return
+            CURRENT['loops'] = res['loops']
+            CURRENT['energy'] = res['E_bend']
+            CURRENT['iter'] = res['steps_run']
+            CURRENT['converged'] = res['converged_at'] is not None
+            CURRENT['stopped'] = res.get('stopped', False)
+            CURRENT['running'] = False
+    except Exception as e:
+        with _lock:
+            if CURRENT['gen'] != gen:
+                return
+            CURRENT['error'] = f'relaxation failed: {e}'
+            CURRENT['running'] = False
+
 class Handler(BaseHTTPRequestHandler):
-    # Quiet the default per-request stderr logging; a relax call already
-    # prints its own progress if invoked with log=True elsewhere, and the
-    # default BaseHTTPRequestHandler log line isn't useful noise here.
     def log_message(self, fmt, *args):
-        pass
+        pass   # silence default per-request stderr logging
 
     def _send_json(self, status, payload):
         body = json.dumps(payload).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
-        # Wide-open CORS: this is a local, single-user, loopback-only tool,
-        # and the browser page is loaded from file:// (origin "null"), which
-        # `*` covers unambiguously (no credentials are ever sent, so the
-        # normal caution about `*` + credentials doesn't apply here).
+        # Wide-open CORS: a local, single-user, loopback-only tool loaded
+        # from file:// (origin "null"); no credentials are ever sent.
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(body)
 
     def do_OPTIONS(self):
-        # CORS preflight (the browser sends this before a cross-origin POST
-        # with a JSON content type).
         self.send_response(204)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
+    def _read_body(self):
+        length = int(self.headers.get('Content-Length', 0))
+        raw = self.rfile.read(length) if length else b'{}'
+        return json.loads(raw) if raw.strip() else {}
+
     def do_POST(self):
-        if self.path != '/relax':
+        if self.path == '/relax':
+            self._handle_start()
+        elif self.path == '/relax/poll':
+            self._handle_poll()
+        elif self.path == '/relax/stop':
+            self._handle_stop()
+        else:
             self._send_json(404, {'error': f'no such endpoint: {self.path}'})
-            return
+
+    def _handle_start(self):
         try:
-            length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length))
+            body = self._read_body()
         except Exception as e:
             self._send_json(400, {'error': f'bad request body: {e}'})
             return
-
         try:
             loops0_raw = body['loops']
             r = float(body['r'])
@@ -103,18 +183,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {'error': f'invalid request: {e}'})
             return
 
-        try:
-            res = relax_general(loops0, r=r, steps=MAX_STEPS)
-        except Exception as e:
-            self._send_json(500, {'error': f'relaxation failed: {e}'})
-            return
+        # Supersede any running job (its worker sees the gen change and bows
+        # out) and start a fresh one.
+        with _lock:
+            gen = CURRENT['gen'] + 1
+            CURRENT.update(gen=gen, running=True, stop=False, loops=None,
+                           energy=None, iter=0, converged=False,
+                           stopped=False, error=None)
+        threading.Thread(target=_run_job, args=(gen, loops0, r), daemon=True).start()
+        self._send_json(200, {'ok': True})
 
-        self._send_json(200, {
-            'loops': res['loops'],
-            'energy': res['E_bend'],
-            'iter': res['steps_run'],
-            'converged': res['converged_at'] is not None,
-        })
+    def _handle_poll(self):
+        with _lock:
+            self._send_json(200, {
+                'running': CURRENT['running'],
+                'loops': CURRENT['loops'],
+                'energy': CURRENT['energy'],
+                'iter': CURRENT['iter'],
+                'converged': CURRENT['converged'],
+                'stopped': CURRENT['stopped'],
+                'error': CURRENT['error'],
+            })
+
+    def _handle_stop(self):
+        with _lock:
+            CURRENT['stop'] = True
+        self._send_json(200, {'ok': True})
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT

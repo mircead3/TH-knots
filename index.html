@@ -212,7 +212,7 @@
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Thin</span><span>Thick</span>
     </div>
-    <input type="range" id="thickInput" min="0.02" max="0.45" step="0.01" value="0.24"
+    <input type="range" id="thickInput" min="0.04" max="0.45" step="0.01" value="0.24"
            style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
   </div>
 
@@ -2488,7 +2488,8 @@ function enterKnotMode() {
 }
 
 function buildKnot() {
-  if (relaxing) stopRelax();   // any real redraw cancels an active relaxation
+  if (relaxing) abortRelax();  // a real redraw hard-abandons any active relaxation
+  relaxWorkingLoops = null;    // tied view rebuilt (knot/thickness changed): next Relax starts fresh
   clearKnotGroup();
 
   const B          = parseInt(document.getElementById('bInput').value);
@@ -2543,7 +2544,17 @@ function buildKnot() {
     // Crossing offset radial.
     const fx = r_flat * Math.cos(theta) + xCenter;
     const fy = r_flat * Math.sin(theta);
-    const fz = z;
+    // The rev radial swap (yR = MAX_Y - y) mirrors the annulus, which
+    // reverses the knot's chirality and so flips every crossing's over/under.
+    // For each flat end to be a CONSISTENT unroll of the (single, fixed)
+    // cylinder, the crossing z-bump must flip sign together with rev —
+    // otherwise the un-flipped side (left) is the mirror of what the cylinder
+    // unrolls to, and morphing to it drives the wire through itself (~1/4
+    // slider) to reconcile the two opposite chiralities. The reference clean
+    // side is rev=true with +z, so rev=false takes -z. This is weighted by
+    // (1-vt), which is 0 at the cylinder (s=0.5), so the sign switch there is
+    // continuous.
+    const fz = rev ? z : -z;
     const cx = (worldInnerR + z) * Math.cos(theta);
     const cy = (worldInnerR + z) * Math.sin(theta);
     const cz = (y / MAX_Y - 0.5) * 2 * h_half;
@@ -2688,12 +2699,20 @@ function buildKnot() {
 // curve (at vt<1 the "knot" is a flat diagram with a z-bump standing in
 // for over/under, not a real self-avoiding curve in space). Returns one
 // array of [x,y,z] points per drawn component (respecting the Solo/Full
-// componentToggle, exactly like buildKnot), plus the current wire radius.
-function getKnotPointsForRelax() {
+// componentToggle, exactly like buildKnot), plus the total curve length.
+//
+// `deltaOverride` sets the crossing over/under half-separation (the radial
+// bump amplitude) used to build the curve. Relax needs this to equal the
+// effective wire radius r_eff it will relax at, so the initial strands
+// start exactly one diameter apart (= the contact distance) — otherwise a
+// tight-wire relax could begin with strands overlapping and resolve a
+// crossing the wrong way. Defaults to the display tube radius when omitted
+// (used for the throwaway length measurement pass in startRelax).
+function getKnotPointsForRelax(deltaOverride) {
   const B          = parseInt(document.getElementById('bInput').value);
   const mod        = 2 * currentC * B;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
-  const delta      = tubeRadius;
+  const delta      = (deltaOverride != null) ? deltaOverride : tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
 
   const pxToWorld   = 2 * CAM_R / innerHeight;
@@ -2768,32 +2787,36 @@ function getKnotPointsForRelax() {
     if (pts.length < 2) continue;
     loops.push(pts);
   }
-  return { loops, tubeRadius };
+  // Total polygonal length across all components (each loop is closed).
+  let length = 0;
+  for (const pts of loops) {
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      length += Math.hypot(b[0]-a[0], b[1]-a[1], b[2]-a[2]);
+    }
+  }
+  return { loops, tubeRadius, length };
 }
 
-// Total point budget across ALL loops combined (contact is O(N_total^2)
-// per solver step, recomputed from scratch every step — see the worker
-// source below — so this cap is what keeps that affordable while staying
-// smooth enough for a live animation on ordinary hardware).
-// Crossing bumps occupy only a small fraction of a loop's total arclength,
-// so uniform-arclength resampling to too small a budget leaves each bump
-// only 1-2 samples wide — visible as a sharp kink instead of a smooth
-// over/under bulge. 700 keeps that comfortably resolved for typical knots
-// while still bounding the O(N^2) contact cost per solver step (see
-// buildAllPairs in the worker source) to something real-time-friendly.
 const RELAX_SERVER_URL = 'http://127.0.0.1:8731/relax';
 let relaxMeshes = [];
-// Set while a fetch to the relax server is in flight; aborting it (Stop,
-// or any control change via buildKnot()'s guard) is what lets a superseded
-// request's eventual response be ignored instead of rendering a second,
-// stale knot on top of a freshly built one.
-let relaxAbortController = null;
-// setInterval handle for the elapsed-time counter shown while a relax
-// request is in flight; cleared on every exit path (done/error/cancel).
-let relaxTimerId = null;
+// The server runs the relaxation in a background thread; the browser starts
+// it (POST /relax), then polls /relax/poll for the evolving shape and calls
+// /relax/stop to cancel. relaxGen is bumped on every startRelax so that late
+// poll responses from a superseded run are ignored (the server has its own
+// generation guard too). relaxPollTimer is the pending poll setTimeout (the
+// poll cadence also drives the elapsed-time display, so no separate clock).
+let relaxGen = 0;
+let relaxPollTimer = null;
+let relaxRenderR = 0.01;     // wire radius r_eff the current run relaxes at; the tube is drawn at it
+// The last relaxed shape (achieved on stop or convergence), so pressing
+// Relax again CONTINUES from it instead of restarting from the tied curve.
+// Reset to null by abortRelax() whenever the knot itself is rebuilt (L/B
+// change / view switch) — that's what makes a knot change start fresh.
+let relaxWorkingLoops = null;
 
-function stopRelaxTimer() {
-  if (relaxTimerId !== null) { clearInterval(relaxTimerId); relaxTimerId = null; }
+function stopRelaxPolling() {
+  if (relaxPollTimer !== null) { clearTimeout(relaxPollTimer); relaxPollTimer = null; }
 }
 
 function disposeRelaxMeshes() {
@@ -2805,13 +2828,18 @@ function disposeRelaxMeshes() {
   relaxMeshes = [];
 }
 
-// Rebuild the on-screen tubes from the relaxed point arrays sent back by
-// the worker — same CatmullRom+Tube approach as buildKnot()'s tail, kept
+// Rebuild the on-screen tubes from the relaxed point arrays returned by the
+// server — same CatmullRom+Tube approach as buildKnot()'s tail, kept
 // deliberately independent of that function (rather than sharing a helper)
-// since the two run on different data shapes and update at different times.
+// since the two run on different data shapes. The tube is drawn at r_eff,
+// the ACTUAL wire radius the relaxation used (= L0/2λ, set in startRelax) —
+// NOT the thin-thick slider's raw display radius, which is a different number
+// and generally thinner. Drawing at r_eff makes the tubes exactly fill the
+// contact clearance: strands just touch at crossings with no spurious gap,
+// and the over/under bump is the minimal one-diameter rise a real wire makes.
 function renderRelaxedLoops(loopsArrays) {
   disposeRelaxMeshes();
-  const tubeRadius = parseFloat(document.getElementById('thickInput').value);
+  const tubeRadius = relaxRenderR;
   const g = loopsArrays.length;
   const tmp = new THREE.Color();
   loopsArrays.forEach((ptsArr, comp) => {
@@ -2849,78 +2877,146 @@ function setRelaxStatus(text) {
   status.textContent = text;
 }
 
-async function startRelax() {
-  const { loops, tubeRadius } = getKnotPointsForRelax();
-  if (loops.length === 0) return;
+function relaxPost(path, bodyObj) {
+  return fetch(RELAX_SERVER_URL.replace('/relax', '/relax' + path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(bodyObj || {}),
+  });
+}
 
-  clearKnotGroup();                       // remove the pristine tied-shape meshes
-  knotGroup.rotation.x = -Math.PI / 2;    // match buildKnot's vt=1 (pure cylinder) tilt
+async function startRelax() {
+  // The thin-thick slider IS the wire radius — one number used for both the
+  // displayed tube and the relaxation physics, so the two always match (no
+  // gap at crossings). lambda = L0/(2·r) is merely derived (wire length in
+  // diameters), reported for information and used server-side to pick the
+  // mesh resolution. The inner-radius slider changes L0, hence lambda, hence
+  // looseness — which is physically correct (a bigger knot in the same wire
+  // is looser), not a display artifact to cancel.
+  const rEff = parseFloat(document.getElementById('thickInput').value);
+  relaxRenderR = rEff;                      // relaxed tube drawn at the same radius
+  let loops;
+  if (relaxWorkingLoops) {
+    // CONTINUE from the last relaxed shape (tied-curve meshes already gone).
+    loops = relaxWorkingLoops;
+  } else {
+    // FRESH start: the tied cylinder curve (its crossing bumps are already
+    // sized to the tube radius = rEff, so strands begin one diameter apart).
+    const meas = getKnotPointsForRelax();
+    if (meas.loops.length === 0) return;
+    loops = meas.loops;
+    clearKnotGroup();                     // remove the pristine tied-shape meshes
+    knotGroup.rotation.x = -Math.PI / 2;  // match buildKnot's vt=1 (pure cylinder) tilt
+  }
+  // lambda (wire length in diameters) for the status readout only.
+  let L0 = 0;
+  for (const pts of loops)
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      L0 += Math.hypot(b[0]-a[0], b[1]-a[1], b[2]-a[2]);
+    }
+  const lambda = L0 / (2 * rEff);
 
   relaxing = true;
-  document.getElementById('relaxToggle').textContent = 'Cancel';
+  const myGen = ++relaxGen;
+  document.getElementById('relaxToggle').textContent = 'Stop';
   document.getElementById('relaxToggle').classList.add('active');
 
-  // Live elapsed-time counter: since the server returns only the final
-  // shape (no progress stream), this ticking clock is the sole feedback
-  // that the request is still working. Updated once a second from a start
-  // timestamp; stopRelaxTimer() clears it on every exit path below.
   const t0 = performance.now();
-  const showElapsed = () => {
-    const secs = Math.floor((performance.now() - t0) / 1000);
-    setRelaxStatus(`computing… ${secs}s   (Cancel stops it)`);
+  const secsNow = () => Math.floor((performance.now() - t0) / 1000);
+
+  // Kick off the background job.
+  try {
+    const resp = await relaxPost('', { loops, r: rEff });
+    if (myGen !== relaxGen) return;        // superseded before it even started
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      finishRelax(`relax server error: ${d.error || resp.status}`);
+      return;
+    }
+  } catch (err) {
+    if (myGen !== relaxGen) return;
+    finishRelax(`can't reach the relax server — start it with:  python3 elastic/server.py`);
+    return;
+  }
+
+  // Poll the evolving shape once a second. Each poll renders the latest
+  // in-progress loops, so the knot visibly settles; when the server reports
+  // running=false (converged, stopped by the user, or errored) we finalize —
+  // and because a stopped job returns the achieved-so-far shape, Stop
+  // leaves exactly the current relaxed shape on screen.
+  const poll = async () => {
+    if (myGen !== relaxGen) return;
+    let d;
+    try {
+      const resp = await relaxPost('/poll', {});
+      d = await resp.json();
+    } catch (err) {
+      if (myGen !== relaxGen) return;
+      relaxPollTimer = setTimeout(poll, 1000);   // transient hiccup — keep trying
+      return;
+    }
+    if (myGen !== relaxGen) return;
+    if (d.loops) renderRelaxedLoops(d.loops);
+    if (d.error) { finishRelax(`relax server error: ${d.error}`); return; }
+    if (!d.running) {
+      // Remember the achieved shape so the next Relax continues from it.
+      if (d.loops) relaxWorkingLoops = d.loops;
+      const how = d.stopped ? 'stopped' : (d.converged ? 'converged' : `budget reached`);
+      finishRelax(`${how} in ${secsNow()}s   L/2r ${Math.round(lambda)}   `
+                  + `E_bend ${(d.energy ?? 0).toFixed(2)}`);
+      return;
+    }
+    setRelaxStatus(`relaxing… ${secsNow()}s   iter ${d.iter}   `
+                   + `E_bend ${(d.energy ?? 0).toFixed(2)}   (Stop keeps this shape)`);
+    relaxPollTimer = setTimeout(poll, 1000);
   };
-  showElapsed();
-  relaxTimerId = setInterval(showElapsed, 1000);
+  setRelaxStatus(`computing… 0s   (Stop keeps the current shape)`);
+  poll();
+}
 
-  relaxAbortController = new AbortController();
-  const myController = relaxAbortController;
-  let resp;
-  try {
-    resp = await fetch(RELAX_SERVER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ loops, r: tubeRadius }),
-      signal: myController.signal,
-    });
-  } catch (err) {
-    if (myController.signal.aborted) return;   // cancelled — leave things as they are
-    stopRelaxTimer();
-    relaxing = false;
-    document.getElementById('relaxToggle').textContent = 'Relax';
-    document.getElementById('relaxToggle').classList.remove('active');
-    setRelaxStatus(`can't reach the relax server — start it with:  python3 elastic/server.py`);
-    return;
-  }
-  if (myController.signal.aborted) return;   // superseded by a newer request
-
-  let data;
-  try {
-    data = await resp.json();
-  } catch (err) {
-    data = { error: 'malformed response' };
-  }
-  stopRelaxTimer();
-  const elapsed = Math.round((performance.now() - t0) / 1000);
+// Common teardown for every terminal state (done / stopped / error): stop
+// polling, restore the button to a clickable "Relax", set the final status.
+function finishRelax(statusText) {
   relaxing = false;
-  document.getElementById('relaxToggle').textContent = 'Relax';
-  document.getElementById('relaxToggle').classList.remove('active');
-  if (!resp.ok) {
-    setRelaxStatus(`relax server error: ${data.error || resp.status}`);
-    return;
-  }
-  renderRelaxedLoops(data.loops);
-  const label = data.converged ? 'converged' : `stopped after ${data.iter} iterations`;
-  setRelaxStatus(`${label} in ${elapsed}s   E_bend ${data.energy.toFixed(2)}`);
+  stopRelaxPolling();
+  const btn = document.getElementById('relaxToggle');
+  btn.textContent = 'Relax';
+  btn.classList.remove('active');
+  btn.disabled = false;
+  setRelaxStatus(statusText);
 }
 
 function stopRelax() {
-  const wasRelaxing = relaxing;
+  if (!relaxing) return;
+  // Ask the server to stop, but DON'T tear down here — let the poll loop run
+  // on until the job reports running=false so it can render the achieved-so-
+  // far shape (that's the whole point of Stop-keeps-current, and it's what
+  // the next Relax then continues from). Just reflect "stopping…" on the
+  // button; the next poll fires finishRelax.
+  relaxPost('/stop', {}).catch(() => {});
+  const btn = document.getElementById('relaxToggle');
+  btn.textContent = 'Stopping…';
+  btn.disabled = true;
+}
+
+// HARD abort: abandon the run immediately and render NOTHING further. Used
+// by buildKnot()'s guard when the knot itself is about to be rebuilt (L/B
+// change, view switch) — unlike Stop, we must not let a late poll paint
+// the old relaxed shape over the freshly built knot. Bumping relaxGen makes
+// every in-flight poll a no-op; we still tell the server to stop so its
+// background thread ends promptly. Also clears the remembered working shape,
+// so the next Relax starts fresh from the new knot instead of continuing.
+function abortRelax() {
+  relaxGen++;
   relaxing = false;
-  stopRelaxTimer();
-  if (relaxAbortController) relaxAbortController.abort();
-  document.getElementById('relaxToggle').textContent = 'Relax';
-  document.getElementById('relaxToggle').classList.remove('active');
-  if (wasRelaxing) setRelaxStatus('cancelled');
+  relaxWorkingLoops = null;
+  stopRelaxPolling();
+  relaxPost('/stop', {}).catch(() => {});
+  const btn = document.getElementById('relaxToggle');
+  btn.textContent = 'Relax';
+  btn.classList.remove('active');
+  btn.disabled = false;
 }
 
 document.getElementById('relaxToggle').addEventListener('click', () => {

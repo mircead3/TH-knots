@@ -1542,16 +1542,26 @@ def project_constraints_multi(loops, hs, pairs, d0, iters=4):
             _unpack_loops(Pall, starts, loops)
 
 def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
-                   point_budget=800, min_per_loop=60):
+                   point_budget=800, min_per_loop=60,
+                   on_progress=None, should_stop=None, progress_every=200):
     """General elastic relaxation of an arbitrary curve (or several, for
     links) — see this section's header comment for scope and how it
     differs from relax(). loops0: list of (Ni,3) arrays, raw (not
     necessarily uniformly resampled) initial curves in the caller's own
     units; r: wire radius in those same units.
 
+    on_progress(step, E_bend, loops): optional callback, invoked every
+    `progress_every` steps with the current step, bending energy, and the
+    live (list of) point arrays — used by server.py to publish the
+    in-progress shape so the browser can display it live and, on Cancel,
+    keep whatever was achieved so far.
+    should_stop(): optional callback checked every `progress_every` steps;
+    returning True breaks the loop early (a cooperative cancel) and the
+    result is finalized from the current shape, with 'stopped'=True.
+
     Returns a result dict analogous to relax()'s, generalized to a list of
     point arrays: 'loops' (final points per component), 'E_bend',
-    'E_bend_over_4pi2', 'steps_run', 'converged_at', 'det_initial'/
+    'E_bend_over_4pi2', 'steps_run', 'converged_at', 'stopped', 'det_initial'/
     'det_final' (None when there's more than one loop), 'wall_s'.
     """
     nloops = len(loops0)
@@ -1583,6 +1593,7 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
     Eb = sum(bending(P, h)[0] for P, h in zip(loops, hs))
     E_hist = [[0, Eb]]
     conv_at = None
+    stopped = False
     t0 = time.time()
     for step in range(steps):
         dirs = []
@@ -1622,6 +1633,13 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
                     conv_at = step
                     break
 
+        if step % progress_every == 0:
+            if on_progress is not None:
+                on_progress(step, Eb, loops)
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
+
     Eb = sum(bending(P, h)[0] for P, h in zip(loops, hs))
     det1 = knot_det(loops[0]) if nloops == 1 else None
     if det0 is not None and det1 is not None and det0 != det1:
@@ -1630,6 +1648,7 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
     return {
         'loops': [[[round(float(x), 6) for x in row] for row in P] for P in loops],
         'r': r, 'steps_run': step + 1, 'converged_at': conv_at,
+        'stopped': stopped,
         'E_bend': Eb, 'E_bend_over_4pi2': Eb / (4 * math.pi**2),
         'det_initial': det0, 'det_final': det1,
         'wall_s': round(time.time() - t0, 1),
