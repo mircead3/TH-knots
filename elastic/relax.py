@@ -1541,6 +1541,19 @@ def project_constraints_multi(loops, hs, pairs, d0, iters=4):
             np.add.at(Pall, nxt[j], -t[act, None] * push)
             _unpack_loops(Pall, starts, loops)
 
+def _shape_ratios(loops):
+    """Gyration radii ratios [1, g1/g0, g2/g0] of the combined point cloud —
+    a scale-free shape descriptor. Used for convergence: the flat-coil <->
+    fat-cylinder flattening is nearly BENDING-ENERGY-NEUTRAL, so an energy
+    plateau does NOT mean the shape has settled (it can keep flattening with
+    the energy flat). Watching these ratios stop changing detects the true
+    settled shape instead of stopping mid-flatten."""
+    P = np.concatenate(loops, 0)
+    Q = P - P.mean(0)
+    ev = np.sort(np.linalg.eigvalsh(Q.T @ Q / len(P)))[::-1]
+    g = np.sqrt(np.maximum(ev, 0))
+    return g / max(g[0], 1e-30)
+
 def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
                    point_budget=800, min_per_loop=60,
                    on_progress=None, should_stop=None, progress_every=200):
@@ -1592,8 +1605,20 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
     s_min = hMin0 / 400
     Eb = sum(bending(P, h)[0] for P, h in zip(loops, hs))
     E_hist = [[0, Eb]]
+    shape_hist = [[0, _shape_ratios(loops)]]
     conv_at = None
     stopped = False
+    conv_window = 3500          # shape must be stable this many steps to converge
+    # Heavy-ball MOMENTUM: the flat-coil<->fat-cylinder flattening is a soft
+    # mode (tiny energy gradient), so plain gradient descent crawls along it.
+    # Accumulating the consistent-direction descent into a velocity turns the
+    # relaxation time on a soft mode from ~1/lambda to ~1/sqrt(lambda) — a big
+    # speedup for exactly this near-degenerate flattening. FIRE-style safety:
+    # the velocity is reset to zero whenever a step raises the energy by more
+    # than a hair (a real ascent, not near-neutral chatter), so momentum can't
+    # run the shape uphill or overshoot into a tangle.
+    vel = [np.zeros_like(P) for P in loops]
+    mu = 0.85
     t0 = time.time()
     for step in range(steps):
         dirs = []
@@ -1602,17 +1627,25 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
             d = precondition(F, qstar)
             d = tangent_project(d, P)
             dirs.append(d)
-        m = max(float(np.linalg.norm(d, axis=1).max()) for d in dirs)
+        # accumulate momentum, keep it in the inextensibility tangent space
+        for li in range(nloops):
+            vel[li] = tangent_project(mu * vel[li] + dirs[li], loops[li])
+        m = max(float(np.linalg.norm(v, axis=1).max()) for v in vel)
         hMin = min(hs)
         s_max = min(2 * hMin, max(r / 2, (gmin - d0 - 2 * acc_disp) / 4))
         step_size = min(s, s_max)
         if m > 0:
-            for P, d in zip(loops, dirs):
-                P += d * (step_size / m)
+            for P, v in zip(loops, vel):
+                P += v * (step_size / m)
         project_constraints_multi(loops, hs, pairs, d0)   # mutates loops in place
 
         Eb_new = sum(bending(P, h)[0] for P, h in zip(loops, hs))
-        s = min(s * 1.1, 2 * hMin) if Eb_new < Eb else max(s * 0.5, s_min)
+        if Eb_new < Eb * (1 + 1e-4):
+            s = min(s * 1.1, 2 * hMin)     # progress (or near-neutral): keep rolling
+        else:
+            s = max(s * 0.5, s_min)        # real ascent: brake and kill momentum
+            for v in vel:
+                v[:] = 0.0
         Eb = Eb_new
 
         acc_disp += min(s, s_max)
@@ -1625,11 +1658,20 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
 
         if step % 100 == 0:
             E_hist.append([step, Eb])
+            ratios = _shape_ratios(loops)
+            shape_hist.append([step, ratios])
             if log and step % 4000 == 0:
-                print(f'  {step:6d}  Eb={Eb:10.3f}  s={s:.2e}  gmin={gmin:.4f}', flush=True)
-            if step >= 8000 and s <= 2 * s_min:
-                Eref = next(e for st, e in E_hist if st >= step - 3000)
-                if abs(Eref - Eb) < 2e-3 * abs(Eb):
+                print(f'  {step:6d}  Eb={Eb:10.3f}  s={s:.2e}  gmin={gmin:.4f}  '
+                      f'plan={ratios[2]:.3f}', flush=True)
+            # Converge on SHAPE stability (see _shape_ratios), NOT energy: the
+            # flat-coil<->fat-cylinder flattening is nearly energy-neutral, so
+            # an energy plateau stopped it mid-flatten (the "fat cylinder"
+            # artifact). Requiring the gyration ratios to be unchanged over a
+            # full window keeps a still-flattening shape running until it has
+            # genuinely settled.
+            if step >= conv_window:
+                ref = next((rt for st, rt in shape_hist if st >= step - conv_window), None)
+                if ref is not None and float(np.max(np.abs(ref - ratios))) < 6e-3:
                     conv_at = step
                     break
 
