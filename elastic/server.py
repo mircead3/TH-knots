@@ -47,29 +47,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
-from relax import relax_general
+from relax import relax_continuation
 
 DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
 MAX_TOTAL_POINTS = 4000    # sanity cap on request size (sum of all loops' input points)
 
-# Discretization points relax_general resamples to. This MUST scale with the
-# wire's slenderness: the hard-contact solver needs several points across one
-# wire diameter (d0 = 2r) to resolve non-penetration — at ~1 point/diameter
-# it produces spurious kinks and pumps bending energy UP instead of relaxing
-# (a thin wire, lambda = L/2r large, is where this bites). Empirically ~2.5+
-# points/diameter is clean, so we target POINTS_PER_DIAM and derive the total
-# budget = POINTS_PER_DIAM * lambda, clamped. Contact is O(N^2)/step, so the
-# upper clamp bounds the wait for very thin wire (some under-resolution there,
-# but far better than the fixed-500 blowup).
-POINTS_PER_DIAM = 3.0
-POINT_BUDGET_MIN = 400
-POINT_BUDGET_MAX = 3000
-
-def choose_point_budget(loops0, r):
-    L = sum(float(np.linalg.norm(np.roll(P, -1, 0) - P, axis=1).sum()) for P in loops0)
-    lam = L / (2 * r)                     # wire length in diameters
-    return int(min(POINT_BUDGET_MAX, max(POINT_BUDGET_MIN, round(POINTS_PER_DIAM * lam))))
+# Relaxation runs via relax_continuation (thickness annealing): it relaxes at
+# a thick wire first — which converges fast because contact rigidly pins the
+# shape — then steps the wire progressively thinner to the requested radius,
+# warm-starting each stage. This reaches a thin flat coil far faster (and
+# flatter) than a cold thin relaxation, and it owns the mesh-resolution
+# sizing per stage (~3 points across one wire diameter), so the server no
+# longer picks a point budget itself.
 
 # ---- single global job, guarded by a lock ----
 # CURRENT holds the state of the one relaxation that is running or last ran.
@@ -87,8 +77,8 @@ CURRENT = {
 }
 
 def _run_job(gen, loops0, r):
-    """Worker thread body: run relax_general with progress + stop hooks that
-    write into CURRENT (only while this job is still the current one)."""
+    """Worker thread body: run relax_continuation with progress + stop hooks
+    that write into CURRENT (only while this job is still the current one)."""
     def on_progress(step, energy, loops):
         with _lock:
             if CURRENT['gen'] != gen:
@@ -96,16 +86,15 @@ def _run_job(gen, loops0, r):
             CURRENT['iter'] = step
             CURRENT['energy'] = float(energy)
             # snapshot the live (mutated-in-place) arrays as plain lists
-            CURRENT['loops'] = [P.round(6).tolist() for P in loops]
+            CURRENT['loops'] = [np.asarray(P).round(6).tolist() for P in loops]
 
     def should_stop():
         with _lock:
             return CURRENT['gen'] != gen or CURRENT['stop']
 
     try:
-        res = relax_general(loops0, r=r, steps=MAX_STEPS,
-                            point_budget=choose_point_budget(loops0, r),
-                            on_progress=on_progress, should_stop=should_stop)
+        res = relax_continuation(loops0, r_target=r, steps=MAX_STEPS,
+                                 on_progress=on_progress, should_stop=should_stop)
         with _lock:
             if CURRENT['gen'] != gen:
                 return

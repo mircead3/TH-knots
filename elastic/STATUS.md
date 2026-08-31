@@ -18,13 +18,23 @@ at wire radius r (default 0.001·L); optional twist term; no friction/gravity.
   `build_pairs_multi`/`seg_closest_multi`/`project_constraints_multi` for contact
   across several independently-closed loops. knot_det only applies (and only makes
   sense) for a single loop; links are unverified for now (see Open items).
+  relax_general uses heavy-ball MOMENTUM (mu=0.85, tangent-projected, FIRE-style
+  reset on energy rise) + SHAPE-based convergence (gyration-radii ratios stable,
+  not energy plateau): the B>L fat-cylinder->flat-coil transition is nearly
+  energy-neutral, so energy-plateau stopped it mid-flatten and plain descent
+  crawled. `relax_continuation(loops0, r_target, ...)` wraps it with wire-
+  THICKNESS ANNEALING — relax thick first (contact-rigid, converges fast), then
+  step thinner to r_target warm-starting each stage; reaches a thin flat coil far
+  faster+flatter than a cold thin relax. It owns per-stage mesh sizing
+  (~3 pts/wire-diameter, clamped 400..3000); server.py calls it. (kicks were
+  tried for the flattening and dropped — they tunnel these delicate coils.)
 - `server.py` — stdlib-only local HTTP server (`python3 elastic/server.py`, default
-  port 8731) wrapping relax_general() for the browser: POST /relax with
-  `{loops, r}`, returns `{loops, energy, iter, converged}` once relaxation
-  converges (or hits a step cap) — no progress streaming, matches "just show me
-  the final shape." index.html's Relax button (2026-08-28: switched from an
-  in-browser JS physics approximation to this) fetches it directly; must be
-  started manually and left running, browsers can't launch local processes.
+  port 8731) wrapping relax_continuation() for the browser. Background-thread job
+  model: POST /relax starts it, POST /relax/poll returns the live evolving shape
+  + cumulative iter/energy, POST /relax/stop cancels and keeps the shape so far.
+  index.html's Relax button (2026-08-28: switched from an in-browser JS physics
+  approximation to this) drives it; must be started manually and left running,
+  browsers can't launch local processes.
 - `sweep_parallel.py` — one knot per process. Wrap in `caffeinate -i` (Mac sleeps!).
 - `make_summary.py` — rebuilds `results.js` for `viewer.html` (open in Safari).
 - `snapshot.py` — 3-view PNGs into `snaps/`.

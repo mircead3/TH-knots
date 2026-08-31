@@ -1696,6 +1696,73 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
         'wall_s': round(time.time() - t0, 1),
     }
 
+def relax_continuation(loops0, r_target, steps=60000, log=None,
+                        on_progress=None, should_stop=None, progress_every=200,
+                        lam_start=100.0, lam_ratio=1.5,
+                        pts_per_diam=3.0, pb_min=400, pb_max=3000):
+    """Wire-thickness annealing around relax_general().
+
+    A thin wire is nearly a free elastica — barely in contact, so it has many
+    soft, near-energy-neutral modes (the fat-cylinder<->flat-coil flattening
+    among them) that make it crawl and converge fuzzily. A THICK wire is
+    rigidly pinned by contact, so it converges fast and crisply. This exploits
+    that: relax at a thick wire first to nail the gross arrangement quickly,
+    then step the wire progressively thinner down to r_target, warm-starting
+    each stage from the last. Because the flat/settled arrangement is already
+    established, each thinning stage only refines it and converges quickly —
+    far faster than a cold thin-wire relaxation. See STATUS.md.
+
+    lambda = L/(2r) is "wire length in diameters"; thick = small lambda. The
+    schedule runs from lam_start up to lam_target (= L/2r_target) by lam_ratio.
+    If the target is already thick (lam_target near lam_start), it's a single
+    direct relax. on_progress reports CUMULATIVE step counts across stages;
+    should_stop cancels mid-stage and returns the shape achieved so far.
+    """
+    L = sum(float(np.linalg.norm(np.roll(P, -1, 0) - P, axis=1).sum()) for P in loops0)
+    lam_target = L / (2 * r_target)
+
+    def pb_for(lam):
+        return int(min(pb_max, max(pb_min, round(pts_per_diam * lam))))
+
+    if lam_target <= lam_start * 1.3:
+        lams = [lam_target]
+    else:
+        lams = []
+        lam = lam_start
+        while lam < lam_target / lam_ratio:
+            lams.append(lam)
+            lam *= lam_ratio
+        lams.append(lam_target)
+
+    loops = [np.asarray(P, dtype=float) for P in loops0]
+    base_iter = 0
+    res = None
+    for i, lam in enumerate(lams):
+        cap = steps - base_iter
+        if cap < 1000:
+            break
+        r = L / (2 * lam)
+        if log:
+            print(f'== continuation stage {i+1}/{len(lams)}: lambda={lam:.0f} r={r:.4g} '
+                  f'pb={pb_for(lam)}', flush=True)
+        # on_progress reports cumulative iterations; capture base_iter per stage
+        prog = None
+        if on_progress is not None:
+            def prog(st, E, lp, _b=base_iter):
+                on_progress(_b + st, E, lp)
+        res = relax_general(loops, r=r, steps=cap, log=log,
+                            point_budget=pb_for(lam),
+                            on_progress=prog, should_stop=should_stop,
+                            progress_every=progress_every)
+        loops = [np.asarray(P, dtype=float) for P in res['loops']]
+        base_iter += res['steps_run']
+        if res.get('stopped'):
+            break
+
+    res['steps_run'] = base_iter
+    res['r'] = r_target
+    return res
+
 # -------------------------------------------------------------------- main
 
 # 2-lead knots validated against experiment and retired from the suite
