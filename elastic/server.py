@@ -45,21 +45,33 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Optional single-threaded BLAS for reproducibility: multi-threaded reductions
+# can differ run-to-run at the last bit, which a numerically unstable relaxation
+# could amplify into visibly different shapes. Set BEFORE importing numpy.
+for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
+           'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+    os.environ.setdefault(_v, '1')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
-from relax import relax_continuation
+from relax import relax_general
 
 DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
 MAX_TOTAL_POINTS = 4000    # sanity cap on request size (sum of all loops' input points)
 
-# Relaxation runs via relax_continuation (thickness annealing): it relaxes at
-# a thick wire first — which converges fast because contact rigidly pins the
-# shape — then steps the wire progressively thinner to the requested radius,
-# warm-starting each stage. This reaches a thin flat coil far faster (and
-# flatter) than a cold thin relaxation, and it owns the mesh-resolution
-# sizing per stage (~3 points across one wire diameter), so the server no
-# longer picks a point budget itself.
+# NOTE: relax_continuation (thickness annealing) was tried here but produced
+# unstable/non-deterministic shapes on the browser's tightly-spaced curves —
+# reverted to the stable relax_general path (momentum + shape-convergence)
+# while that's diagnosed. See the debug dump below.
+POINTS_PER_DIAM = 3.0
+POINT_BUDGET_MIN = 400
+POINT_BUDGET_MAX = 3000
+
+def choose_point_budget(loops0, r):
+    L = sum(float(np.linalg.norm(np.roll(P, -1, 0) - P, axis=1).sum()) for P in loops0)
+    lam = L / (2 * r)
+    return int(min(POINT_BUDGET_MAX, max(POINT_BUDGET_MIN, round(POINTS_PER_DIAM * lam))))
 
 # ---- single global job, guarded by a lock ----
 # CURRENT holds the state of the one relaxation that is running or last ran.
@@ -93,8 +105,9 @@ def _run_job(gen, loops0, r):
             return CURRENT['gen'] != gen or CURRENT['stop']
 
     try:
-        res = relax_continuation(loops0, r_target=r, steps=MAX_STEPS,
-                                 on_progress=on_progress, should_stop=should_stop)
+        res = relax_general(loops0, r=r, steps=MAX_STEPS,
+                            point_budget=choose_point_budget(loops0, r),
+                            on_progress=on_progress, should_stop=should_stop)
         with _lock:
             if CURRENT['gen'] != gen:
                 return
@@ -171,6 +184,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'})
             return
+
+        # DEBUG: dump the exact incoming curve + r for offline analysis.
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'debug_last_relax.json'), 'w') as f:
+                json.dump({'loops': loops0_raw, 'r': r}, f)
+        except Exception:
+            pass
 
         # Supersede any running job (its worker sees the gen change and bows
         # out) and start a fresh one.
