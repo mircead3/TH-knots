@@ -60,10 +60,12 @@ DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
 MAX_TOTAL_POINTS = 4000    # sanity cap on request size (sum of all loops' input points)
 
-# NOTE: relax_continuation (thickness annealing) was tried here but produced
-# unstable/non-deterministic shapes on the browser's tightly-spaced curves —
-# reverted to the stable relax_general path (momentum + shape-convergence)
-# while that's diagnosed. See the debug dump below.
+# NOTE: relax_continuation (thickness annealing) was tried and removed — the
+# real issue for these knots isn't speed but that the browser's cylinder
+# initial shape collapses to a balled-up local minimum for thin wire (only
+# thick wire's contact holds it open into the flat coil). That needs a better
+# (flatter/coil) initial condition, not annealing. This path is stable
+# momentum + shape-convergence.
 POINTS_PER_DIAM = 3.0
 POINT_BUDGET_MIN = 400
 POINT_BUDGET_MAX = 3000
@@ -184,14 +186,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'})
             return
-
-        # DEBUG: dump the exact incoming curve + r for offline analysis.
-        try:
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   'debug_last_relax.json'), 'w') as f:
-                json.dump({'loops': loops0_raw, 'r': r}, f)
-        except Exception:
-            pass
 
         # Supersede any running job (its worker sees the gen change and bows
         # out) and start a fresh one.

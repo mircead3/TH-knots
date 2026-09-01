@@ -22,16 +22,19 @@ at wire radius r (default 0.001·L); optional twist term; no friction/gravity.
   reset on energy rise) + SHAPE-based convergence (gyration-radii ratios stable,
   not energy plateau): the B>L fat-cylinder->flat-coil transition is nearly
   energy-neutral, so energy-plateau stopped it mid-flatten and plain descent
-  crawled. `relax_continuation(loops0, r_target, ...)` wraps it with wire-
-  THICKNESS ANNEALING — relax thick first (contact-rigid, converges fast), then
-  step thinner to r_target warm-starting each stage; reaches a thin flat coil far
-  faster+flatter than a cold thin relax. It owns per-stage mesh sizing
-  (~3 pts/wire-diameter, clamped 400..3000); server.py calls it. (kicks were
-  tried for the flattening and dropped — they tunnel these delicate coils.)
+  crawled. (kicks and wire-thickness-annealing continuation were both tried and
+  dropped — kicks tunnel; continuation overloads contact on the browser's
+  tightly-packed thin-bump curves.)
+  OPEN, IMPORTANT (2026-09-01): the browser's CYLINDER initial shape collapses to
+  a balled-up local minimum when relaxed at thin wire — real 5x6 curve
+  (lambda=1506) balls to planarity 0.8; only THICK wire (lambda=150) flattens to
+  0.095. The flat coil is a different basin the offline snug/coil ICs reach. The
+  real fix is a flatter/coil initial condition for the browser Relax, NOT wire
+  thickness. server.py forces single-threaded BLAS for reproducibility.
 - `server.py` — stdlib-only local HTTP server (`python3 elastic/server.py`, default
-  port 8731) wrapping relax_continuation() for the browser. Background-thread job
+  port 8731) wrapping relax_general() for the browser. Background-thread job
   model: POST /relax starts it, POST /relax/poll returns the live evolving shape
-  + cumulative iter/energy, POST /relax/stop cancels and keeps the shape so far.
+  + iter/energy, POST /relax/stop cancels and keeps the shape so far.
   index.html's Relax button (2026-08-28: switched from an in-browser JS physics
   approximation to this) drives it; must be started manually and left running,
   browsers can't launch local processes.
