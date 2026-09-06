@@ -202,18 +202,18 @@
   </div>
 
   <div id="knotSliders">
-    <div id="flatCylSection">
-      <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
-        <span>Flat</span><span>Cylinder</span><span>Flat'</span>
-      </div>
-      <input type="range" id="viewSlider" min="0" max="1" step="0.005" value="0"
-             style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
-    </div>
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Thin</span><span>Thick</span>
     </div>
     <input type="range" id="thickInput" min="0.04" max="0.45" step="0.01" value="0.24"
            style="width:100%; margin-bottom:14px; cursor:pointer; accent-color:rgba(100,130,255,0.8);">
+    <div id="flatCylSection">
+      <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
+        <span>Flat</span><span>Height</span><span>Tall</span>
+      </div>
+      <input type="range" id="heightSlider" min="0" max="12" step="0.1" value="0"
+             style="width:100%;margin-bottom:10px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
+    </div>
   </div>
 
   <div id="xStretchSection" style="display:none;">
@@ -227,7 +227,7 @@
 
   <div id="roundSection" style="display:none;">
     <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">Inner radius</div>
-    <input type="range" id="roundInnerSlider" min="10" max="180" step="5" value="60"
+    <input type="range" id="roundInnerSlider" min="10" max="250" step="5" value="60"
            style="width:100%;margin-bottom:8px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
     <div id="outerRadiusSection">
     <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;">Outer radius</div>
@@ -2266,8 +2266,12 @@ function drawRoundDiagram() {
 
   const cx = (innerWidth + PANEL_W) / 2;
   const cy = innerHeight / 2;
-  const innerR = parseFloat(document.getElementById('roundInnerSlider').value);
   const outerR = parseFloat(document.getElementById('roundOuterSlider').value);
+  // Inner-radius slider now ranges high enough (for the knot view's tight-coil
+  // start) that it can exceed this diagram's outer radius; clamp it below outer
+  // so the round diagram never inverts.
+  const innerR = Math.min(parseFloat(document.getElementById('roundInnerSlider').value),
+                          outerR - 10);
 
   // Abstract (rawX, y) → canvas. Uses full mod period for one circle,
   // so all mod bights land at distinct angular positions.
@@ -2460,8 +2464,10 @@ function drawRoundDiagram() {
 // (slider-driven, non-orbited) framing.  Shared by enterKnotMode and 'r'.
 function resetKnotFrontalView() {
   const sl = document.getElementById('roundInnerSlider');
-  const step = parseFloat(sl.step) || 1;
-  sl.value = Math.round((parseFloat(sl.min) + parseFloat(sl.max)) / 2 / step) * step;
+  // Fixed default framing (the slider's upper range is intentionally large so
+  // it can reach a tight equal-radius coil for relax; don't derive the default
+  // from max, which would shift it).
+  sl.value = 90;
   buildKnot();
 }
 
@@ -2477,7 +2483,7 @@ function enterKnotMode() {
   setThickSlider(0.28, thickKnotVal);   // knot & braid: shared thickness, capped range
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
-  document.getElementById('outerRadiusSection').style.display = 'none';
+  document.getElementById('outerRadiusSection').style.display = 'none';  // knot: fixed outer radius, only inner varies
   document.getElementById('straightSection').style.display = 'none';
   document.getElementById('downloadBtn').style.display = 'none';
   document.getElementById('pdfDownloadBtn').style.display = 'none';
@@ -2485,6 +2491,35 @@ function enterKnotMode() {
   document.getElementById('relaxRow').style.display = '';
   orthoOrbit.reset();
   resetKnotFrontalView();   // frontal view on entry, same as pressing 'r'
+}
+
+// Fixed outer radius of the knot's frustum, in the same px units as the inner-
+// radius slider. Equals that slider's max so inner can run from small (a wide
+// flat annulus) all the way up to the outer radius (spread 0 = an equal-size
+// coil/cylinder, whose height then comes from the Height slider).
+const KNOT_OUTER_R = 250;
+
+// Shared frustum geometry for the knot view and its relax initial condition.
+// Given the world inner/outer radii and the wire radius, returns the height H
+// to use and the unit cone-normal (nr,nz) that aims the over/under crossing
+// bump (axial when flat, radial when cylindrical, tilted between).
+//   - H comes from the Height slider, but is raised just enough that adjacent
+//     loops stay a wire-diameter apart, so the shape never self-intersects:
+//     adjacent loops are 1/LEADS of the way apart along the cone slant, giving
+//     3D spacing hypot(spread,H)/LEADS, which we keep >= a wire diameter (x1.15
+//     safety). If the radial spread alone already separates them, H can be 0
+//     (a true flat annulus); otherwise H is bumped up to make up the rest.
+//   - nz = -spread/|n| (negative) so a +bump lifts "over" the same way the old
+//     flat diagram did; at spread=0 the bump is purely radial (nr=1).
+function frustumParams(worldInnerR, worldOuterR, tubeRadius) {
+  const spread   = worldOuterR - worldInnerR;
+  const minSlant = LEADS * 2 * tubeRadius * 1.15;
+  let H = parseFloat(document.getElementById('heightSlider').value);
+  if (Math.hypot(H, spread) < minSlant) {
+    H = Math.sqrt(Math.max(0, minSlant * minSlant - spread * spread));
+  }
+  const nlen = Math.hypot(H, spread) || 1;
+  return { H, nr: H / nlen, nz: -spread / nlen };
 }
 
 function buildKnot() {
@@ -2497,7 +2532,7 @@ function buildKnot() {
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
-  const outerR_raw = 260; // fixed reference size (sets the default on-screen scale); zoom adjusts
+  const outerR_raw = KNOT_OUTER_R;   // fixed outer radius; inner slider runs from its min up to this
 
   // Camera half-height matches the braid view so tube radius looks the same
   // size at the same slider value.  pxToWorld converts slider pixel values to
@@ -2515,54 +2550,30 @@ function buildKnot() {
   orthoCamera.bottom = -CAM_R;
   orthoCamera.updateProjectionMatrix();
 
-  // Slider: 0 = flat, 0.5 = cylinder, 1 = flat again.  vt is the cylinder amount
-  // (0→1→0).  The right half (rev) unrolls the cylinder from the opposite base:
-  // the radius mapping reverses (MAX_Y - y) so the inner and outer rings swap,
-  // giving the opposite flat knot.  theta is NOT mirrored, so the strands never
-  // collapse to a line and the cylinder never tumbles through 3D — it just opens
-  // back into the plane the other way.  At s=0.5 vt=1, so the flat term is
-  // weighted to zero and the rev switch is continuous.
-  const sVal   = parseFloat(document.getElementById('viewSlider').value);
-  const vt      = 1 - Math.abs(2 * sVal - 1);
-  const rev     = sVal > 0.5;
-  // Tilt the view with the slider: flat ends seen from above (no tilt), the
-  // cylinder (middle) rotated 90° about x so it's seen from the side.  Composes
-  // with manual orbit (OrbitControls drives the camera, this rotates the knot).
-  knotGroup.rotation.x = -vt * Math.PI / 2;
-  // Cylinder height is FIXED at (just under) the full display height; the
-  // inner-radius slider changes only the cylinder radius.  The strand angle
-  // follows from the radius/height ratio (no square-cell calibration).
-  const h_half = CAM_R * 0.85;
+  // The knot is a FRUSTUM (truncated cone): the loop radius runs from the
+  // inner-radius slider (R_in) at one edge of the band to the outer-radius
+  // slider (R_out) at the other, lifted over the Height slider (H). One family
+  // covers every shape the user needs:
+  //   H = 0, R_in < R_out  -> flat annulus (classic spread-out coil; the inner
+  //                           slider changes ONLY the inner radius)
+  //   R_in = R_out, H > 0  -> equal-size cylinder (short H = flat equal coil,
+  //                           tall H = tube); cones in between.
+  // The over/under crossing bump points along the CONE NORMAL (nr,nz): purely
+  // axial when flat, purely radial when cylindrical, tilted between — so
+  // crossings read correctly in every view.
+  const { H, nr, nz } = frustumParams(worldInnerR, worldOuterR, tubeRadius);
+  // Tilt: flat coil seen from above (H small), tall cylinder side-on (H large).
+  const H_ref = 8;
+  knotGroup.rotation.x = -Math.min(H, H_ref) / H_ref * (Math.PI / 2);
 
   const toR = (rawX, y, z = 0) => {
-    const theta  = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
-    const yR     = rev ? (MAX_Y - y) : y;          // swap inner/outer on the right
-    const r_flat = worldInnerR + (yR / MAX_Y) * (worldOuterR - worldInnerR);
-    // Flat state: radius r_flat in plane, crossing offset axial (+z).
-    // Cylinder state: radius = the INNER ring; the roll shrinks the outer ring
-    // in to meet it, so the inner-radius slider sets the cylinder radius too.
-    // Crossing offset radial.
-    const fx = r_flat * Math.cos(theta) + xCenter;
-    const fy = r_flat * Math.sin(theta);
-    // The rev radial swap (yR = MAX_Y - y) mirrors the annulus, which
-    // reverses the knot's chirality and so flips every crossing's over/under.
-    // For each flat end to be a CONSISTENT unroll of the (single, fixed)
-    // cylinder, the crossing z-bump must flip sign together with rev —
-    // otherwise the un-flipped side (left) is the mirror of what the cylinder
-    // unrolls to, and morphing to it drives the wire through itself (~1/4
-    // slider) to reconcile the two opposite chiralities. The reference clean
-    // side is rev=true with +z, so rev=false takes -z. This is weighted by
-    // (1-vt), which is 0 at the cylinder (s=0.5), so the sign switch there is
-    // continuous.
-    const fz = rev ? z : -z;
-    const cx = (worldInnerR + z) * Math.cos(theta);
-    const cy = (worldInnerR + z) * Math.sin(theta);
-    const cz = (y / MAX_Y - 0.5) * 2 * h_half;
+    const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
+    const t = y / MAX_Y;                                   // 0=inner edge .. 1=outer edge
+    const r = worldInnerR + t * (worldOuterR - worldInnerR) + z * nr;  // frustum radius + radial bump
     return new THREE.Vector3(
-      fx * (1 - vt) + cx * vt,
-      fy * (1 - vt) + cy * vt,
-      fz * (1 - vt) + cz * vt
-    );
+      r * Math.cos(theta),
+      r * Math.sin(theta),
+      (t - 0.5) * H + z * nz);                             // height stacking + axial bump
   };
 
   const components     = generateAllComponents(B);
@@ -2692,40 +2703,42 @@ function buildKnot() {
 // any knot currently on screen — Turk's-head or general C=2/C=3 catalog —
 // without needing knot-family-specific code.
 
-// Rebuilds the same centerline point arrays buildKnot() renders, WITHOUT
-// any of its camera/DOM side effects, and forces the pure-cylinder
-// embedding (vt=1, rev=false) regardless of the flat<->cylinder slider
-// position: only that state is a genuine, physically embeddable 3D space
-// curve (at vt<1 the "knot" is a flat diagram with a z-bump standing in
-// for over/under, not a real self-avoiding curve in space). Returns one
-// array of [x,y,z] points per drawn component (respecting the Solo/Full
-// componentToggle, exactly like buildKnot), plus the total curve length.
+// Rebuilds the same centerline point arrays buildKnot() renders — using the
+// CURRENT flat<->cylinder slider position (the exact displayed shape), WITHOUT
+// any of buildKnot's camera/DOM side effects. Relax starts from whatever is on
+// screen, so the user picks the basin: slide toward Flat to seed the flat-coil
+// arrangement (a well-separated flat annulus — the right start for B>L knots,
+// which otherwise collapse to a ball when relaxed from the cylinder), or toward
+// Cylinder for the 3D basin. Both flat and cylinder are valid embeddings — the
+// crossing z-bump (+-delta, one wire radius) keeps strands a diameter apart at
+// crossings in either. Returns one array of [x,y,z] points per drawn component
+// (respecting the Solo/Full componentToggle), plus the total curve length.
 //
-// `deltaOverride` sets the crossing over/under half-separation (the radial
-// bump amplitude) used to build the curve. Relax needs this to equal the
-// effective wire radius r_eff it will relax at, so the initial strands
-// start exactly one diameter apart (= the contact distance) — otherwise a
-// tight-wire relax could begin with strands overlapping and resolve a
-// crossing the wrong way. Defaults to the display tube radius when omitted
-// (used for the throwaway length measurement pass in startRelax).
+// `deltaOverride` sets the crossing over/under half-separation (the bump
+// amplitude). Relax passes r_eff so strands begin one diameter apart (= the
+// contact distance); defaults to the display tube radius when omitted (the
+// throwaway length-measurement pass in startRelax).
 function getKnotPointsForRelax(deltaOverride) {
   const B          = parseInt(document.getElementById('bInput').value);
   const mod        = 2 * currentC * B;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = (deltaOverride != null) ? deltaOverride : tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
+  const outerR_raw = KNOT_OUTER_R;   // fixed outer radius (matches buildKnot)
 
   const pxToWorld   = 2 * CAM_R / innerHeight;
   const worldInnerR = innerR_raw * pxToWorld;
-  const h_half      = CAM_R * 0.85;
+  const worldOuterR = outerR_raw * pxToWorld;
 
-  // Pure cylinder embedding only (vt=1, rev=false branch of buildKnot's toR).
+  // Same frustum geometry as buildKnot at the current sliders (radius runs
+  // R_in -> R_out over height H; cone-normal crossing bump). Relax starts from
+  // exactly the displayed shape, so the user chooses the basin via the sliders.
+  const { H, nr, nz } = frustumParams(worldInnerR, worldOuterR, tubeRadius);
   const toR = (rawX, y, z = 0) => {
     const theta = (rawX / mod) * 2 * Math.PI - Math.PI / 2;
-    const cx = (worldInnerR + z) * Math.cos(theta);
-    const cy = (worldInnerR + z) * Math.sin(theta);
-    const cz = (y / MAX_Y - 0.5) * 2 * h_half;
-    return [cx, cy, cz];
+    const t = y / MAX_Y;
+    const r = worldInnerR + t * (worldOuterR - worldInnerR) + z * nr;
+    return [r * Math.cos(theta), r * Math.sin(theta), (t - 0.5) * H + z * nz];
   };
 
   const components     = generateAllComponents(B);
@@ -2900,13 +2913,17 @@ async function startRelax() {
     // CONTINUE from the last relaxed shape (tied-curve meshes already gone).
     loops = relaxWorkingLoops;
   } else {
-    // FRESH start: the tied cylinder curve (its crossing bumps are already
-    // sized to the tube radius = rEff, so strands begin one diameter apart).
-    const meas = getKnotPointsForRelax();
+    // FRESH start: the currently displayed shape (flat / cylinder / anywhere
+    // between, per the slider), with crossing bumps sized to rEff so strands
+    // begin one diameter apart. Keep whatever tilt buildKnot set for that
+    // slider position, so the relaxed result appears in the same orientation
+    // as the shape it started from (flat seen from above, cylinder side-on).
+    const meas = getKnotPointsForRelax(rEff);
     if (meas.loops.length === 0) return;
     loops = meas.loops;
+    const keepTilt = knotGroup.rotation.x;
     clearKnotGroup();                     // remove the pristine tied-shape meshes
-    knotGroup.rotation.x = -Math.PI / 2;  // match buildKnot's vt=1 (pure cylinder) tilt
+    knotGroup.rotation.x = keepTilt;
   }
   // lambda (wire length in diameters) for the status readout only.
   let L0 = 0;
@@ -3750,9 +3767,8 @@ window.findSameYSets = function(m) {
   console.log(`${found} group(s) with rotationally equivalent segment sequence  (${c3ValidList.length} total)`);
 };
 
-document.getElementById('viewSlider').addEventListener('input', () => {
+document.getElementById('heightSlider').addEventListener('input', () => {
   if (showKnot) buildKnot();
-  else if (showTubeDiag) buildTubeDiagram();
 });
 
 document.getElementById('xStretchSlider').addEventListener('input', () => {

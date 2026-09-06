@@ -1663,15 +1663,21 @@ def relax_general(loops0, r=0.001, steps=60000, log=None, qstar_mult=5,
             if log and step % 4000 == 0:
                 print(f'  {step:6d}  Eb={Eb:10.3f}  s={s:.2e}  gmin={gmin:.4f}  '
                       f'plan={ratios[2]:.3f}', flush=True)
-            # Converge on SHAPE stability (see _shape_ratios), NOT energy: the
-            # flat-coil<->fat-cylinder flattening is nearly energy-neutral, so
-            # an energy plateau stopped it mid-flatten (the "fat cylinder"
-            # artifact). Requiring the gyration ratios to be unchanged over a
-            # full window keeps a still-flattening shape running until it has
-            # genuinely settled.
+            # Converge only when BOTH energy and shape have settled over a full
+            # window. Two different slow modes each hide from one criterion:
+            #  - flat<->fat-cylinder flattening is ~energy-NEUTRAL (energy flat
+            #    while the shape keeps changing) -> the shape test catches it;
+            #  - spread-coil -> tight equal-radius coil contraction keeps the
+            #    shape flat+round (ratios ~constant) while the energy DROPS ->
+            #    the energy test catches it.
+            # Requiring both stable keeps it running until it has genuinely
+            # stopped moving, instead of quitting mid-flatten or mid-contract.
             if step >= conv_window:
-                ref = next((rt for st, rt in shape_hist if st >= step - conv_window), None)
-                if ref is not None and float(np.max(np.abs(ref - ratios))) < 6e-3:
+                Eref = next((e for st, e in E_hist if st >= step - conv_window), None)
+                sref = next((rt for st, rt in shape_hist if st >= step - conv_window), None)
+                e_ok = Eref is not None and abs(Eref - Eb) < 2e-3 * abs(Eb)
+                s_ok = sref is not None and float(np.max(np.abs(sref - ratios))) < 6e-3
+                if e_ok and s_ok:
                     conv_at = step
                     break
 
