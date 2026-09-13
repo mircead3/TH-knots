@@ -192,6 +192,7 @@
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
   <div id="infoRods" style="display:none;font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;"></div>
+  <div id="knotStats" style="display:none;font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.5;color:rgba(150,180,255,0.75);background:rgba(60,80,160,0.10);border:1px solid rgba(100,130,255,0.18);border-radius:6px;padding:8px 10px;margin-bottom:14px;white-space:pre-wrap;word-break:break-word;"></div>
 
   <div id="shapeSection">
     <div id="ab2IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
@@ -768,17 +769,86 @@ function buildTubeDiagram() {
     mesh.frustumCulled = false;
     knotGroup.add(mesh);
   }
+
+  // The braid view is B-free (draws the repeating pattern), but the stats panel
+  // still describes the closed knot at the current B — compute it like the other
+  // views so leads/bights/params changes update it live.
+  const Bstat = parseInt(document.getElementById('bInput').value);
+  const modStat = 2 * currentC * Bstat;
+  const compStat = generateAllComponents(Bstat);
+  updateInfo(Bstat, compStat.length,
+             computeDiagramCrossingsAll(compStat, modStat).crossingCount, compStat);
 }
 
 // ── Info panel ─────────────────────────────────────────────────────────────
 const infoName      = document.getElementById('infoName');
 
-function updateInfo(B, g = 1, crossings = null) {
-  const parts = [`${2 * currentC * B} bights total`];
-  if (crossings != null) parts.push(`${crossings} crossings`);
-  if (g > 1) parts.push(`${g} components`);
-  infoName.textContent = parts.join('  ·  ');
+function updateInfo(B, g = 1, crossings = null, components = null) {
+  // The braid view is B-free: show only braid-relevant info (strand count),
+  // not closure quantities (bights/crossings/components).
+  if (showTubeDiag) {
+    infoName.textContent = `${LEADS}-strand braid`;
+  } else {
+    const parts = [`${2 * currentC * B} bights total`];
+    if (crossings != null) parts.push(`${crossings} crossings`);
+    if (g > 1) parts.push(`${g} components`);
+    infoName.textContent = parts.join('  ·  ');
+  }
   document.getElementById('infoRods').style.display = 'none';   // straight view re-shows it
+  updateKnotStats(B, g, crossings, components);
+}
+
+// Live invariants panel for the displayed knot/link.  crossing number is the
+// TRUE minimum (these diagrams are reduced alternating), so genus is exact too:
+// genus = (crossings − strands + 1)/2 for a knot (strands = LEADS Seifert
+// circles).  Determinant reuses the app's Fox/Alexander path (single component
+// only, same as window.knotDeterminant).  Braid word from braidWordOf.
+let _knotStatsSig = null, _knotStatsText = '';
+function updateKnotStats(B, ncomp, crossings, components) {
+  const el = document.getElementById('knotStats');
+  if (showStraight || crossings == null || components == null) { el.style.display = 'none'; return; }
+  // Invariants depend only on the knot, not the display geometry — skip the
+  // recompute (determinant, braid sweep) when dragging a pure-shape slider.
+  const sig = `${currentC}|${LEADS}|${B}|${currentA},${currentB}|${c3A},${c3B},${c3C},${c3D}|${showTubeDiag ? 'b' : 'k'}`;
+  if (sig === _knotStatsSig) { el.textContent = _knotStatsText; el.style.display = ''; return; }
+  const mod = 2 * currentC * B;
+
+  // Step block g, computed from the zigzag alone (B-independent, see below).
+  const { g, len } = stepBlockBFree();
+  const cyc   = stepCycleCount(g, LEADS);
+  const depth = (LEADS > 1 ? len / (LEADS - 1) : len).toFixed(2);   // crossings per step per pair
+  const shift = cyc === 1 ? '✓' : `✗ (${cyc})`;                     // all strands the same?
+  const sym   = flipIsNoOp() ? 'yes' : 'no';
+  // Thread (zigzag) complexity: peaks+valleys of ONE strand per period, ÷2 (a
+  // turn at the period seam counts as ½, so it's independent of where you cut).
+  // ZIGZAG lists exactly those turning points, so it's just half their count.
+  const thread = ZIGZAG.length / 2;
+
+  const lines = [];
+  if (showTubeDiag) {
+    // Braid view is B-free: just the step g and its per-step measures.
+    lines.push(`|g| ${len}   depth ${depth}   thread ${thread}`);
+    lines.push(`sym ${sym}   shift ${shift}`);
+    lines.push(`g:  ${gTokens(g)}`);
+  } else {
+    // Knot/round view: closure invariants at the current B, then the step.
+    if (ncomp === 1) {
+      const genus = (crossings - LEADS + 1) / 2;
+      let det;
+      try { det = knotDeterminantOf(alexanderMatrix(buildCrossingList(components[0], mod))).toString(); }
+      catch (e) { det = '—'; }
+      lines.push(`crossings ${crossings}   genus ${genus}   det ${det}`);
+    } else {
+      lines.push(`crossings ${crossings}   components ${ncomp}`);
+    }
+    const reps = len ? crossings / len : 0;   // N = actual repeats at the current B
+    lines.push(`|g| ${len}   depth ${depth}   thread ${thread}   sym ${sym}   shift ${shift}`);
+    lines.push(`g ×${reps}:  ${gTokens(g)}`);
+  }
+  _knotStatsText = lines.join('\n');
+  _knotStatsSig = sig;
+  el.textContent = _knotStatsText;
+  el.style.display = '';
 }
 
 // Number of different knots/links for the current C and L, shown under Leads.
@@ -1563,7 +1633,12 @@ document.getElementById('flipToggle').addEventListener('click', flipKnot);
 
 // ── Diagram view ───────────────────────────────────────────────────────────
 // Multi-component version: result[c] is a Map segIndex → [{t, isUnder}]
-function computeDiagramCrossingsAll(components, mod) {
+// Enumerate every crossing of the (possibly multi-component) diagram, each as
+// {ci,p,t,cj,q,u,x,y,pIsOver}: ascending run (ci,p) meets descending run (cj,q)
+// at physical (x,y); pIsOver = ascending is over.  Shared by the drawn-diagram
+// over/under (computeDiagramCrossingsAll) and the braid-word reader so both
+// agree exactly.
+function diagramCrossingList(components, mod) {
   const nC = components.length;
   const seen = new Map();
   for (let ci = 0; ci < nC; ci++) {
@@ -1606,6 +1681,11 @@ function computeDiagramCrossingsAll(components, mod) {
   }
   const forFlip = list.map(cr => ({p:cr.p, q:cr.q, tP:cr.t, tQ:cr.u, pIsOver:cr.pIsOver}));
   if (needsParityFlip(forFlip)) list.forEach(cr => { cr.pIsOver = !cr.pIsOver; });
+  return list;
+}
+
+function computeDiagramCrossingsAll(components, mod) {
+  const list = diagramCrossingList(components, mod);
   const result = components.map(() => new Map());
   list.forEach(({ci, p, t, cj, q, u, pIsOver}) => {
     if (!result[ci].has(p)) result[ci].set(p, []);
@@ -1615,6 +1695,82 @@ function computeDiagramCrossingsAll(components, mod) {
   });
   result.crossingCount = list.length;
   return result;
+}
+
+// ── Braid word of the displayed knot/link ──────────────────────────────────
+// Every run is slope ±1 with the circumference x strictly increasing, so the
+// diagram IS a braid with x as the time axis, on LEADS strands (the strand
+// wraps LEADS times around x).  We read the word directly: order crossings by
+// physical x, and at each one the generator index is the rank (from the bottom)
+// of the two strands meeting there.  Sign follows the diagram's over/under with
+// the app's convention (ascending strand over ⇒ σ⁻¹).  Faithful for links too,
+// since it reuses diagramCrossingList's over/under.  Returns signed indices.
+function braidWordOf(components, mod, LEADS) {
+  const list = diagramCrossingList(components, mod);
+  const runs = [];
+  for (const bP of components) {
+    const n = bP.length;
+    for (let p = 0; p < n; p++) {
+      const y0 = bP[p][1], dy = bP[(p+1)%n][1] - y0;
+      if (dy === 0) continue;
+      runs.push({ x0: bP[p][0], y0, dir: Math.sign(dy), len: Math.abs(dy) });
+    }
+  }
+  // count strand-sheets below yThr at physical X (X half-integer avoids vertices)
+  const arcsBelow = (X, yThr) => {
+    let cnt = 0;
+    for (const r of runs) {
+      const wlo = Math.floor((r.x0 - X) / mod), whi = Math.ceil((r.x0 + r.len - X) / mod);
+      for (let w = wlo; w <= whi; w++) {
+        const xu = X + w * mod;
+        if (xu >= r.x0 && xu <= r.x0 + r.len && r.y0 + r.dir * (xu - r.x0) < yThr) cnt++;
+      }
+    }
+    return cnt;
+  };
+  return list.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y)).map(cr => {
+    const gen = arcsBelow(cr.x - 0.5, cr.y - 0.5) + 1;   // 1-based σ index
+    return cr.pIsOver ? -gen : gen;                        // ascending-over ⇒ σ⁻¹
+  });
+}
+
+// The braid is a power of a single "step" block g: β = gᴺ.  Return that minimal
+// step (shortest cyclic period), its length, and N.  This is the primitive the
+// whole weave is generated from.
+function braidStep(word) {
+  const N = word.length;
+  let P = N;
+  for (let p = 1; p <= N; p++) {
+    if (N % p) continue;
+    let ok = true;
+    for (let i = 0; i < N && ok; i++) if (word[i] !== word[(i + p) % N]) ok = false;
+    if (ok) { P = p; break; }
+  }
+  return { g: word.slice(0, P), len: P, reps: P ? N / P : 0 };
+}
+
+// "All strands the same" test: applying the step g permutes the L strands in a
+// SINGLE cycle (one orbit), so every strand is a symmetry-image of every other.
+// (# distinct strand shapes = # cycles of perm(g).)  Returns cycle count.
+function stepCycleCount(g, L) {
+  const pos = Array.from({ length: L }, (_, i) => i);
+  for (const gen of g) { const i = Math.abs(gen) - 1; [pos[i], pos[i + 1]] = [pos[i + 1], pos[i]]; }
+  const seen = new Array(L).fill(false);
+  let cycles = 0;
+  for (let s = 0; s < L; s++) if (!seen[s]) { cycles++; let k = s; while (!seen[k]) { seen[k] = true; k = pos[k]; } }
+  return cycles;
+}
+
+const gTokens = g => g.map(x => (x > 0 ? 's' : 'S') + Math.abs(x)).join(' ');
+
+// Compute the step block g from the zigzag alone, WITHOUT the Bights box.  g is
+// B-independent, so we build the weave at the smallest bight count coprime to L
+// (a function of L only) — a single component with the true alternating
+// over/under — and take its period.  Only N and the closure invariants
+// (crossings/genus/determinant) use the actual displayed B.
+function stepBlockBFree() {
+  const Bc = smallestCoprimeB(LEADS);
+  return braidStep(braidWordOf(generateAllComponents(Bc), 2 * currentC * Bc, LEADS));
 }
 
 // ── Frieze-symmetry detection (Symmetry toggle) ─────────────────────────────
@@ -1921,7 +2077,7 @@ function drawDiagram() {
   const components   = generateAllComponents(B);
   const g            = components.length;
   const allCrossings = computeDiagramCrossingsAll(components, mod);
-  updateInfo(B, g, allCrossings.crossingCount);
+  updateInfo(B, g, allCrossings.crossingCount, components);
 
   // Precompute geometry for all components.
   // allSegs[comp][r][i][s] = {x1s, y1s, x2s, y2s, hue, gapF, underFs, overFs}
@@ -2317,7 +2473,7 @@ function drawRoundDiagram() {
   const components   = generateAllComponents(B);
   const g            = components.length;
   const allCrossings = computeDiagramCrossingsAll(components, mod);
-  updateInfo(B, g, allCrossings.crossingCount);
+  updateInfo(B, g, allCrossings.crossingCount, components);
   const drawComponents = componentMode ? components.slice(0, 1) : components;
 
   // Precompute segments with cumulative raw x
@@ -2579,7 +2735,7 @@ function buildKnot() {
   const components     = generateAllComponents(B);
   const g              = components.length;
   const allCrossings   = computeDiagramCrossingsAll(components, mod);
-  updateInfo(B, g, allCrossings.crossingCount);
+  updateInfo(B, g, allCrossings.crossingCount, components);
   const ct = document.getElementById('componentToggle');
   if (g === 1) { componentMode = false; ct.disabled = true; }
   else         { ct.disabled = false; }
@@ -3048,6 +3204,7 @@ function enterStraightMode() {
   renderer.domElement.style.display = 'block';
   setViewButtons('straight');
   document.getElementById('diagRoundRow').style.display = 'none';
+  document.getElementById('knotStats').style.display = 'none';        // braid stats hidden in tensegrity view
   document.getElementById('flatCylSection').style.display = 'none';   // no flat<->cyl roll here
   document.getElementById('knotSliders').style.display = '';          // keep the thin/thick slider
   setThickSlider(0.45, thickStraightVal);                             // tensegrity: own thickness, full range
@@ -3292,7 +3449,7 @@ function buildStraight() {
   const components   = generateAllComponents(B);
   const g            = components.length;
   const allCrossings = computeDiagramCrossingsAll(components, mod);
-  updateInfo(B, g, allCrossings.crossingCount);
+  updateInfo(B, g, allCrossings.crossingCount, components);
   const ct = document.getElementById('componentToggle');
   if (g === 1) { componentMode = false; ct.disabled = true; }
   else ct.disabled = false;
@@ -3469,6 +3626,7 @@ function buildStraight() {
     el.textContent = 'rods: ' + groups.map(([len, n]) => `${n}×${len}`).join('  ·  ') +
                      `  ·  strings: ${strTot.toFixed(1)}  ·  loop: ${loopTot.toFixed(1)}`;
     el.style.display = '';
+    document.getElementById('knotStats').style.display = 'none';   // no braid stats in tensegrity view
   }
 
   // ── Build mode.  Numbering is by PLACEMENT order (top-down, layer by layer),
