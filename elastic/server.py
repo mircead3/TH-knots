@@ -56,6 +56,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 from relax import relax_general
 
+# g-based knot enumeration/construction lives in the repo root (one level up).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import gcatalog
+_ENUM_CACHE = {}   # (L, glen) -> list of canonical g's
+
 DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
 MAX_TOTAL_POINTS = 4000    # sanity cap on request size (sum of all loops' input points)
@@ -160,8 +165,43 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_poll()
         elif self.path == '/relax/stop':
             self._handle_stop()
+        elif self.path == '/enumerate':
+            self._handle_enumerate()
+        elif self.path == '/construct':
+            self._handle_construct()
         else:
             self._send_json(404, {'error': f'no such endpoint: {self.path}'})
+
+    def _handle_enumerate(self):
+        try:
+            body = self._read_body()
+            L = int(body['L']); glen = int(body['glen'])
+            if not (3 <= L <= 9): raise ValueError('L must be 3..9')
+            if not (1 <= glen <= 24): raise ValueError('glen must be 1..24')
+        except Exception as e:
+            self._send_json(400, {'error': f'invalid request: {e}'}); return
+        # parity: a single L-cycle needs glen == (L-1) mod 2
+        if glen % 2 != (L - 1) % 2:
+            self._send_json(200, {'L': L, 'glen': glen, 'gs': [], 'count': 0}); return
+        key = (L, glen)
+        if key not in _ENUM_CACHE:
+            _ENUM_CACHE[key] = gcatalog.enumerate_gs(L, glen)
+        gs = _ENUM_CACHE[key]
+        self._send_json(200, {'L': L, 'glen': glen, 'gs': gs, 'count': len(gs)})
+
+    def _handle_construct(self):
+        try:
+            body = self._read_body()
+            L = int(body['L']); g = [int(x) for x in body['g']]
+            if not (3 <= L <= 9): raise ValueError('L must be 3..9')
+            if not g or any(not (1 <= x <= L-1) for x in g):
+                raise ValueError('g must be non-empty over 1..L-1')
+        except Exception as e:
+            self._send_json(400, {'error': f'invalid request: {e}'}); return
+        bd = gcatalog.build(L, g)
+        if bd is None:
+            self._send_json(422, {'error': 'construction failed', 'g': g, 'L': L}); return
+        self._send_json(200, bd)
 
     def _handle_start(self):
         try:

@@ -20,7 +20,12 @@
       width: 230px;
       color: #c0c8e8;
       user-select: none;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+      overflow-x: hidden;
     }
+    #panel::-webkit-scrollbar { width: 8px; }
+    #panel::-webkit-scrollbar-thumb { background: rgba(100,130,255,0.28); border-radius: 4px; }
 
     #panel h1 {
       font-size: 10px;
@@ -173,6 +178,7 @@
 
   <div class="label">Complexity</div>
   <div style="display:flex;gap:6px;margin-bottom:14px;">
+    <button class="c-btn" id="gBtn" title="Enumerate by step-word g">g</button>
     <button class="c-btn" id="cBtn1">1</button>
     <button class="c-btn" id="cBtn2">2</button>
     <button class="c-btn" id="cBtn3">3</button>
@@ -189,6 +195,11 @@
     </div>
   </div>
   <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;">— knots</div>
+
+  <div id="gSection" style="display:none;">
+    <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:6px;">— / —</div>
+    <div style="font-size:10px;color:rgba(140,170,255,0.5);text-align:center;margin-bottom:14px;">←→ browse · ↑↓ change |g|</div>
+  </div>
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
   <div id="infoRods" style="display:none;font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;"></div>
@@ -400,9 +411,39 @@ function setKnotDefC3(m, a, b, c, d) {
   MAX_Y  = Math.max(3*L - c - d, 3*L - a - c, 3*L - a - b);
 }
 
+// Set the knot from an explicit run-sequence (the g-based path). runs alternate
+// up,down,up,down…; ZIGZAG turning points, PERIOD, D, MAX_Y follow directly.
+function setKnotFromRuns(runs, L) {
+  let x = 0, y = 0; const pts = [];
+  for (let i = 0; i < runs.length; i++) {
+    pts.push([x, y]);
+    if (i % 2 === 0) { x += runs[i]; y += runs[i]; }   // up run
+    else             { x += runs[i]; y -= runs[i]; }   // down run
+  }
+  // The renderer assumes the strand lives in [0, MAX_Y] (C-forms start at 0 and
+  // never dip below).  g-runs can go negative, so translate the whole diagram up
+  // to sit on y=0 (a vertical shift is knot-invariant) and report the true range.
+  const yMin = Math.min(...pts.map(p => p[1]));
+  if (yMin !== 0) for (const p of pts) p[1] -= yMin;
+  ZIGZAG = pts;
+  PERIOD = x;
+  D      = runs.length;
+  LEADS  = L;
+  MAX_Y  = Math.max(...pts.map(p => p[1]));
+}
+
 let currentC = 2;
 
 function setKnotFromUI(m) {
+  if (gMode) {
+    LEADS = m;
+    const bd = currentG ? gRunsCache.get(gRunsKey(m, currentG)) : null;
+    if (bd) {
+      setKnotFromRuns(bd.runs, m);          // runs are B-independent; cached by gRebuild
+      if (knotFlipped) for (const p of ZIGZAG) p[1] = MAX_Y - p[1];   // mirror = reflect vertically
+    }
+    return;
+  }
   if (currentC === 1) { setKnotDefC1(m); return; }
   if (currentC === 2) {
     let [a, b] = getAB();
@@ -426,7 +467,7 @@ function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
 // In degenerate cases (e.g. a=b=0) the path closes before all B periods are
 // exhausted; we detect this by stopping at the first return to the start bight.
 function generateBights(B) {
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
   const bights = [];
   const seen = new Set();
   for (let k = 0; k < B; k++) {
@@ -478,7 +519,7 @@ function needsParityFlip(crossings) {
 // Generate all g = gcd(LEADS, B) components of the TH link.
 // Component j is component 0 with all bight x-coordinates shifted by j × gcd(PERIOD, mod) / g.
 function generateAllComponents(B) {
-  const mod  = 2 * currentC * B;
+  const mod  = PERIOD * B / LEADS;
   const base = generateBights(B);
   const g    = gcd(LEADS, B);
   if (g === 1) return [base];
@@ -774,7 +815,7 @@ function buildTubeDiagram() {
   // still describes the closed knot at the current B — compute it like the other
   // views so leads/bights/params changes update it live.
   const Bstat = parseInt(document.getElementById('bInput').value);
-  const modStat = 2 * currentC * Bstat;
+  const modStat = PERIOD * Bstat / LEADS;
   const compStat = generateAllComponents(Bstat);
   updateInfo(Bstat, compStat.length,
              computeDiagramCrossingsAll(compStat, modStat).crossingCount, compStat);
@@ -789,10 +830,8 @@ function updateInfo(B, g = 1, crossings = null, components = null) {
   if (showTubeDiag) {
     infoName.textContent = `${LEADS}-strand braid`;
   } else {
-    const parts = [`${2 * currentC * B} bights total`];
-    if (crossings != null) parts.push(`${crossings} crossings`);
-    if (g > 1) parts.push(`${g} components`);
-    infoName.textContent = parts.join('  ·  ');
+    // bights + crossings now live in the knotStats panel; header shows only link components.
+    infoName.textContent = g > 1 ? `${g} components` : '';
   }
   document.getElementById('infoRods').style.display = 'none';   // straight view re-shows it
   updateKnotStats(B, g, crossings, components);
@@ -809,16 +848,16 @@ function updateKnotStats(B, ncomp, crossings, components) {
   if (showStraight || crossings == null || components == null) { el.style.display = 'none'; return; }
   // Invariants depend only on the knot, not the display geometry — skip the
   // recompute (determinant, braid sweep) when dragging a pure-shape slider.
-  const sig = `${currentC}|${LEADS}|${B}|${currentA},${currentB}|${c3A},${c3B},${c3C},${c3D}|${showTubeDiag ? 'b' : 'k'}`;
+  const sig = `${gMode ? 'g' + (currentG ? currentG.join(',') : '') : currentC}|${LEADS}|${B}|${currentA},${currentB}|${c3A},${c3B},${c3C},${c3D}|${showTubeDiag ? 'b' : 'k'}|${knotFlipped ? 'f' : ''}`;
   if (sig === _knotStatsSig) { el.textContent = _knotStatsText; el.style.display = ''; return; }
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
 
   // Step block g, computed from the zigzag alone (B-independent, see below).
   const { g, len } = stepBlockBFree();
   const cyc   = stepCycleCount(g, LEADS);
+  if (cyc !== 1) console.warn(`sanity: perm(g) has ${cyc} cycles (not all-strands-same)`, g);
   const depth = (LEADS > 1 ? len / (LEADS - 1) : len).toFixed(2);   // crossings per step per pair
-  const shift = cyc === 1 ? '✓' : `✗ (${cyc})`;                     // all strands the same?
-  const sym   = flipIsNoOp() ? 'yes' : 'no';
+  const W     = PERIOD / LEADS;   // displacement (fundamental-domain width)
   // Thread (zigzag) complexity: peaks+valleys of ONE strand per period, ÷2 (a
   // turn at the period seam counts as ½, so it's independent of where you cut).
   // ZIGZAG lists exactly those turning points, so it's just half their count.
@@ -827,8 +866,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
   const lines = [];
   if (showTubeDiag) {
     // Braid view is B-free: just the step g and its per-step measures.
-    lines.push(`|g| ${len}   depth ${depth}   thread ${thread}`);
-    lines.push(`sym ${sym}   shift ${shift}`);
+    lines.push(`|g| ${len}   W ${W}   depth ${depth}   thread ${thread}`);
     lines.push(`g:  ${gTokens(g)}`);
   } else {
     // Knot/round view: closure invariants at the current B, then the step.
@@ -837,13 +875,12 @@ function updateKnotStats(B, ncomp, crossings, components) {
       let det;
       try { det = knotDeterminantOf(alexanderMatrix(buildCrossingList(components[0], mod))).toString(); }
       catch (e) { det = '—'; }
-      lines.push(`crossings ${crossings}   genus ${genus}   det ${det}`);
+      lines.push(`bights ${mod}   crossings ${crossings}   genus ${genus}   det ${det}`);
     } else {
-      lines.push(`crossings ${crossings}   components ${ncomp}`);
+      lines.push(`bights ${mod}   crossings ${crossings}   components ${ncomp}`);
     }
-    const reps = len ? crossings / len : 0;   // N = actual repeats at the current B
-    lines.push(`|g| ${len}   depth ${depth}   thread ${thread}   sym ${sym}   shift ${shift}`);
-    lines.push(`g ×${reps}:  ${gTokens(g)}`);
+    lines.push(`|g| ${len}   W ${W}   depth ${depth}   thread ${thread}`);
+    lines.push(`g:  ${gTokens(g)}`);
   }
   _knotStatsText = lines.join('\n');
   _knotStatsSig = sig;
@@ -853,6 +890,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
 
 // Number of different knots/links for the current C and L, shown under Leads.
 function updateKnotCount() {
+  if (gMode) { updateGDisplays(); return; }
   const n = countDistinctKnots();
   document.getElementById('knotCountDisplay').textContent =
     `${n} knot${n === 1 ? '' : 's'}`;
@@ -1088,7 +1126,7 @@ function knotDeterminantOf(M) { const d = alexDetAt(M, -1); return d < 0n ? -d :
 // (verified: a genuine flype-style false alarm turned out to have different
 // determinants at every B tried).  Call from browser console: knotDeterminant(B)
 window.knotDeterminant = function(B) {
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
   const components = generateAllComponents(B);
   if (components.length !== 1) { console.log(`g=${components.length} components — pick a B coprime to LEADS for a single-component knot`); return null; }
   const crossings = buildCrossingList(components[0], mod);
@@ -1423,8 +1461,8 @@ function syncAB2List(m) {
 
 function getAB() { return [currentA, currentB]; }
 
-function minLeads()  { return currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
-function minBights() { return currentC === 1 ? 2 : 1; }
+function minLeads()  { return gMode ? 3 : currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
+function minBights() { return gMode ? 1 : currentC === 1 ? 2 : 1; }
 
 // Redraw whichever view is currently active.
 function redrawCurrentView() {
@@ -1439,6 +1477,7 @@ function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
+  if (gMode) { setKnotFromUI(m); redrawCurrentView(); return; }
   if (currentC === 2 && ab2ValidList.length === 0) return;
   if (currentC === 3 && c3ValidList.length === 0) return;
   setKnotFromUI(m);
@@ -1448,6 +1487,7 @@ function rebuildKnot() {
 // Build everything for a specific leads count m (no input reads/writes).
 function buildForM(m) {
   knotFlipped = false;
+  if (gMode) { gRebuild({ reenum: true, resetView: true }); return; }
   if (currentC === 2 && !syncAB2List(m)) return;
   if (currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
@@ -1456,6 +1496,91 @@ function buildForM(m) {
   // set for the previous knot.
   if (showKnot) { orthoOrbit.reset(); resetKnotFrontalView(); }
   else redrawCurrentView();
+}
+
+// ==== g-mode: enumerate/construct knots by step-word g (server-backed) ====
+let gMode = true;             // g is the primary parametrization ("g" button)
+let currentG = null;          // selected step-word (array)
+let gErr = '';                // gLen / gList / gListIdx / gRunsCache declared with the fetch helpers
+const gParity = L => (L - 1) % 2;
+function clampGLen(L, glen) {
+  const lo = L - 1;
+  if (glen < lo) glen = lo;
+  if ((((glen % 2) + 2) % 2) !== gParity(L)) glen += 1;   // match single-cycle parity
+  return glen;
+}
+const gRunsKey = (L, g) => L + '|' + g.join(',');
+
+function updateGDisplays() {
+  const idxEl = document.getElementById('gIdx');
+  if (idxEl) idxEl.textContent = gErr ? gErr
+      : (gList.length ? `${gListIdx + 1} / ${gList.length}` : '— / —');
+  const cnt = document.getElementById('knotCountDisplay');
+  if (cnt) cnt.textContent = '';   // count is in gIdx; |g| and g live in the invariants panel
+}
+
+let gGen = 0;   // supersede stale in-flight rebuilds (rapid arrow presses)
+async function gRebuild(opts) {
+  opts = opts || {};
+  const myGen = ++gGen;
+  const dir = opts.dir || 1;                    // direction to auto-skip un-constructible knots
+  const L = parseInt(document.getElementById('mInput').value);
+  if (isNaN(L) || L < 3) return;
+  LEADS = L;
+  gLen = clampGLen(L, gLen);
+  try {
+    const key = L + '|' + gLen;
+    if (opts.reenum || gList._key !== key) {
+      const r = await gEnumerate(L, gLen);
+      if (myGen !== gGen) return;              // a newer press superseded us
+      gList = r.gs; gList._key = key;
+    }
+    if (!gList.length) { currentG = null; gErr = `none at |g|=${gLen}`; updateGDisplays(); return; }
+    gListIdx = ((gListIdx % gList.length) + gList.length) % gList.length;
+    // Try the selected knot; auto-skip ones that have no valid diagram so the UI
+    // never gets stuck on a failure. Give up only if the whole |g| level fails.
+    for (let tries = 0; tries < gList.length; tries++) {
+      const g = gList[gListIdx];
+      try {
+        const bd = await gConstruct(L, g);
+        if (myGen !== gGen) return;            // superseded while constructing
+        currentG = g;
+        setKnotFromRuns(bd.runs, L);
+        gErr = '';
+        updateGDisplays();
+        updateFlipButton();   // enable/disable flip per this knot's shape symmetry
+        if (opts.resetView && showKnot) { orthoOrbit.reset(); resetKnotFrontalView(); }
+        else redrawCurrentView();
+        return;
+      } catch (e) {
+        if (myGen !== gGen) return;
+        gListIdx = ((gListIdx + dir) % gList.length + gList.length) % gList.length;  // skip
+      }
+    }
+    currentG = null; gErr = `no valid diagrams at |g|=${gLen}`; updateGDisplays();
+  } catch (e) {
+    if (myGen !== gGen) return;                // don't clobber a newer render with a stale error
+    gErr = 'server?'; console.warn('gRebuild failed:', e);
+    updateGDisplays();
+  }
+}
+
+function enterGMode() {
+  gMode = true;
+  document.getElementById('gBtn').classList.add('active');
+  [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.remove('active'));
+  document.getElementById('shapeSection').style.display = 'none';
+  document.getElementById('c3Section').style.display = 'none';
+  document.getElementById('gSection').style.display = '';
+  knotFlipped = false;   // flip button enabled/disabled per-knot by updateFlipButton() in gRebuild
+  const ab = document.getElementById('abParamDisplay'); if (ab) ab.style.display = 'none';
+  const c3 = document.getElementById('c3ParamDisplay'); if (c3) c3.style.display = 'none';
+  const mInput = document.getElementById('mInput');
+  mInput.min = minLeads();
+  if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
+  mDisplayed = parseInt(mInput.value);
+  gLen = clampGLen(parseInt(mInput.value), gLen);
+  gRebuild({ reenum: true, resetView: true });
 }
 
 // The per-L rebuild can take ~1s at large L.  The native number-input spinner
@@ -1476,6 +1601,7 @@ function mWalk() {
   if (isNaN(target)) { mInput.value = mDisplayed; return; }
   target = Math.max(minLeads(), Math.min(parseInt(mInput.max) || 30, target));
   if (String(target) !== mInput.value) mInput.value = target;   // clamp display
+  if (gMode) { mDisplayed = target; gRebuild({ reenum: true, resetView: true }); return; }
   if (mDisplayed === null) mDisplayed = target;
   if (mDisplayed === target) return;
   mDisplayed += Math.sign(target - mDisplayed);                 // exactly one step
@@ -1489,7 +1615,7 @@ document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
-  if (currentC === 3 && !syncC3List(m)) return;
+  if (!gMode && currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
   // Bights changed: same frontal-view reset as leads changes (buildForM) —
   // matches pressing 'r' rather than keeping the previous orbit/tilt.
@@ -1498,6 +1624,9 @@ document.getElementById('bInput').addEventListener('change', () => {
 });
 
 function setComplexity(c) {
+  gMode = false;
+  document.getElementById('gBtn').classList.remove('active');
+  document.getElementById('gSection').style.display = 'none';
   currentC = c;
   knotFlipped = false;
   [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.toggle('active', n === c));
@@ -1523,6 +1652,7 @@ function setComplexity(c) {
 }
 document.getElementById('cBtn2').classList.add('active');
 [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).addEventListener('click', () => setComplexity(n)));
+document.getElementById('gBtn').addEventListener('click', enterGMode);
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
@@ -1532,6 +1662,20 @@ document.addEventListener('keydown', e => {
     buildStep += (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1;
     if (buildStep < 0) buildStep = 0;
     buildStraight();
+    return;
+  }
+  if (gMode) {
+    e.preventDefault();
+    knotFlipped = false;                                // new knot starts unflipped
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const d = e.key === 'ArrowRight' ? 1 : -1;        // browse knots at this |g|
+      gListIdx += d;
+      gRebuild({ dir: d });
+    } else {
+      gLen = clampGLen(LEADS, gLen + (e.key === 'ArrowUp' ? 2 : -2));     // step |g|
+      gListIdx = 0;
+      gRebuild({ reenum: true, dir: 1 });
+    }
     return;
   }
   knotFlipped = false;   // stepping to a new knot clears any flip
@@ -1598,7 +1742,28 @@ function c3Seq(a, b, c, d, m)      { const L3 = 3*m; return [L3-c-d, a, d, b, c,
 function c3FlipSeq(a, b, c, d, m)  { const L3 = 3*m; return [a, d, b, c, L3-a-b, L3-c-d]; }
 
 // True when flipping leaves the knot unchanged (flip would be a no-op).
+// g-mode: the flip is the vertical flip = rotate the run sequence by one (odd),
+// so it's a no-op iff the run pattern is invariant under that (up to even
+// rotations + reversal) — the same shape-symmetry test C=3 uses, generalized.
+function gShapeFlipNoOp() {
+  const n = ZIGZAG.length;
+  if (n < 2) return true;
+  const R = [];
+  for (let i = 0; i < n; i++) R.push((((ZIGZAG[(i + 1) % n][0] - ZIGZAG[i][0]) % PERIOD) + PERIOD) % PERIOD);
+  const canon = A => {
+    let best = null;
+    for (const arr of [A, A.slice().reverse()])
+      for (let s = 0; s < A.length; s += 2) {
+        const r = arr.slice(s).concat(arr.slice(0, s)).join(',');
+        if (best === null || r < best) best = r;
+      }
+    return best;
+  };
+  return canon(R) === canon(R.slice(1).concat(R.slice(0, 1)));   // R vs odd rotation (flip)
+}
+
 function flipIsNoOp() {
+  if (gMode) return gShapeFlipNoOp();
   if (currentC === 1) return true;
   const m = parseInt(document.getElementById('mInput').value);
   if (currentC === 2) return ab2ValidList.length === 0 || currentA === currentB;
@@ -1625,6 +1790,7 @@ function flipKnot() {
   // place (counter unchanged) via the knotFlipped flag; flipping twice returns
   // to the representative.  setKnotFromUI applies it (swap a,b for C=2; the
   // stored mirror tuple for C=3).
+  if (gMode) { if (flipIsNoOp()) return; knotFlipped = !knotFlipped; rebuildKnot(); return; }   // mirror the diagram
   if (currentC === 1 || flipIsNoOp()) return;
   knotFlipped = !knotFlipped;
   rebuildKnot();
@@ -1761,7 +1927,7 @@ function stepCycleCount(g, L) {
   return cycles;
 }
 
-const gTokens = g => g.map(x => (x > 0 ? 's' : 'S') + Math.abs(x)).join(' ');
+const gTokens = g => g.map(x => String(x)).join(' ');   // just the indices (negative = inverse)
 
 // Compute the step block g from the zigzag alone, WITHOUT the Bights box.  g is
 // B-independent, so we build the weave at the smallest bight count coprime to L
@@ -1770,7 +1936,7 @@ const gTokens = g => g.map(x => (x > 0 ? 's' : 'S') + Math.abs(x)).join(' ');
 // (crossings/genus/determinant) use the actual displayed B.
 function stepBlockBFree() {
   const Bc = smallestCoprimeB(LEADS);
-  return braidStep(braidWordOf(generateAllComponents(Bc), 2 * currentC * Bc, LEADS));
+  return braidStep(braidWordOf(generateAllComponents(Bc), PERIOD * Bc / LEADS, LEADS));
 }
 
 // ── Frieze-symmetry detection (Symmetry toggle) ─────────────────────────────
@@ -1917,6 +2083,7 @@ function setViewButtons(current) {
 
 
 function enterDiagramMode() {
+  if (relaxing) abortRelax();   // leaving knot view must stop the elastic relaxation
   showTubeDiag = false; showKnot = false; showStraight = false;
     diagramCanvas.style.display = 'block';
   renderer.domElement.style.display = 'none';
@@ -1963,6 +2130,7 @@ function setThickSlider(max, value) {
 }
 
 function enterBraidMode() {
+  if (relaxing) abortRelax();   // leaving knot view must stop the elastic relaxation
   showDiagram = false; showTubeDiag = true; showRoundDiag = false; showKnot = false; showStraight = false;
   orthoOrbit.enabled = false;
   // Reset the shared ortho camera — knot mode may have zoomed/rotated it.
@@ -1992,7 +2160,7 @@ function enterBraidMode() {
 
 function drawDiagram() {
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
 
   diagramCanvas.width  = innerWidth;
   diagramCanvas.height = innerHeight;
@@ -2045,6 +2213,26 @@ function drawDiagram() {
   }
 
   ctx.restore();
+
+  // Vertical guide lines every W (the displacement / fundamental-domain width).
+  // Every B-th line is a full tile seam (mod = W·B).  Debug aid for g-mode.
+  {
+    const Wdisp = PERIOD / LEADS;
+    if (Wdisp > 0) {
+      const yTop = MAX_Y, yBot = Math.min(0, ...ZIGZAG.map(p => p[1]));
+      const kLo = Math.floor((rStart * mod) / Wdisp), kHi = Math.ceil(totalW / Wdisp);
+      for (let k = kLo; k <= kHi; k++) {
+        const seam = (((k % B) + B) % B) === 0;   // coincides with a mod (tile) boundary
+        ctx.strokeStyle = seam ? 'rgba(255,140,40,0.85)' : 'rgba(255,180,70,0.45)';
+        ctx.lineWidth   = seam ? 2 : 1;
+        ctx.beginPath();
+        ctx.moveTo(px(k * Wdisp), py(yTop));
+        ctx.lineTo(px(k * Wdisp), py(yBot));
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
+  }
 
   // Bight-row guide lines spanning all repetitions
   const rows = [...new Set([0, ...ZIGZAG.map(p => p[1])])].sort((a, b) => a - b);
@@ -2412,7 +2600,7 @@ function drawDiagram() {
 
 function drawRoundDiagram() {
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
 
   diagramCanvas.width  = innerWidth;
   diagramCanvas.height = innerHeight;
@@ -2684,7 +2872,7 @@ function buildKnot() {
   clearKnotGroup();
 
   const B          = parseInt(document.getElementById('bInput').value);
-  const mod        = 2 * currentC * B;
+  const mod        = PERIOD * B / LEADS;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
@@ -2876,7 +3064,7 @@ function buildKnot() {
 // throwaway length-measurement pass in startRelax).
 function getKnotPointsForRelax(deltaOverride) {
   const B          = parseInt(document.getElementById('bInput').value);
-  const mod        = 2 * currentC * B;
+  const mod        = PERIOD * B / LEADS;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = (deltaOverride != null) ? deltaOverride : tubeRadius;
   const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
@@ -2968,6 +3156,40 @@ function getKnotPointsForRelax(deltaOverride) {
 }
 
 const RELAX_SERVER_URL = 'http://127.0.0.1:8731/relax';
+const G_SERVER_BASE = 'http://127.0.0.1:8731';
+
+// ---- g-based knot enumeration/construction (talks to elastic/server.py) ----
+let gList = [];            // enumerate result: array of g's at (LEADS, gLen)
+let gListIdx = 0;          // which knot in gList is selected
+let gLen = 0;              // current |g| (step-word length)
+const gRunsCache = new Map();   // key "L|g" -> runs (avoid refetching)
+
+async function gPost(path, body) {
+  const res = await fetch(G_SERVER_BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  if (!res.ok) throw new Error(`${path} ${res.status}: ${(await res.json()).error || res.statusText}`);
+  return res.json();
+}
+const gEnumerate = (L, glen)   => gPost('/enumerate', { L, glen });
+const gConstruct = async (L, g) => {
+  const key = L + '|' + g.join(',');
+  if (gRunsCache.has(key)) {
+    const v = gRunsCache.get(key);
+    if (v === null) throw new Error('no valid diagram');   // cached failure
+    return v;
+  }
+  try {
+    const bd = await gPost('/construct', { L, g });
+    gRunsCache.set(key, bd);
+    return bd;
+  } catch (e) {
+    gRunsCache.set(key, null);   // cache the failure; don't re-run the slow search on revisit
+    throw e;
+  }
+};
 let relaxMeshes = [];
 // The server runs the relaxation in a background thread; the browser starts
 // it (POST /relax), then polls /relax/poll for the evolving shape and calls
@@ -3185,6 +3407,7 @@ function abortRelax() {
   relaxing = false;
   relaxWorkingLoops = null;
   stopRelaxPolling();
+  disposeRelaxMeshes();   // remove the relaxed tubes so they don't bleed into the next view
   relaxPost('/stop', {}).catch(() => {});
   const btn = document.getElementById('relaxToggle');
   btn.textContent = 'Relax';
@@ -3198,6 +3421,7 @@ document.getElementById('relaxToggle').addEventListener('click', () => {
 
 // ── Straight (tensegrity rods) view — C=1 only for now ───────────────────────
 function enterStraightMode() {
+  if (relaxing) abortRelax();   // leaving knot view must stop the elastic relaxation
   showDiagram = false; showTubeDiag = false; showRoundDiag = false; showKnot = false; showStraight = true;
   orthoOrbit.enabled = true;
   diagramCanvas.style.display = 'none';
@@ -3427,7 +3651,7 @@ function buildStraight() {
   knotGroup.rotation.set(-Math.PI / 2, 0, 0);   // cylinder axis (local z) -> vertical, side view
 
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod  = 2 * currentC * B;
+  const mod  = PERIOD * B / LEADS;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
 
   const aspect = innerWidth / innerHeight;
@@ -3786,6 +4010,7 @@ function buildStraight() {
 document.getElementById('braidToggle').addEventListener('click', enterBraidMode);
 document.getElementById('diagToggle').addEventListener('click', enterDiagramMode);
 document.getElementById('roundToggle').addEventListener('click', () => {
+  if (relaxing) abortRelax();   // leaving knot view must stop the elastic relaxation
   if (showDiagram) {
     showDiagram = false; showRoundDiag = true;
     document.getElementById('roundToggle').classList.add('active');
@@ -3938,7 +4163,7 @@ document.getElementById('xStretchSlider').addEventListener('input', () => {
 // ── Tying sequence ─────────────────────────────────────────────────────────
 function generateTyingSequence() {
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
   const bights = generateBights(B);
   const n = bights.length;
 
@@ -4051,7 +4276,7 @@ const CONTENT_W = PAGE_W - 2 * SIDE_MARGIN;          // 540 pt = 7.5"
 
 function renderRoundExportPage(swap, components, allCrossings) {
   const B        = parseInt(document.getElementById('bInput').value);
-  const mod      = 2 * currentC * B;
+  const mod      = PERIOD * B / LEADS;
   const innerRaw = parseFloat(document.getElementById('roundInnerSlider').value);
   const outerRaw = parseFloat(document.getElementById('roundOuterSlider').value);
 
@@ -4318,7 +4543,7 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
   const { jsPDF } = window.jspdf;
   const m   = parseInt(document.getElementById('mInput').value);
   const B   = parseInt(document.getElementById('bInput').value);
-  const mod = 2 * currentC * B;
+  const mod = PERIOD * B / LEADS;
   const components   = generateAllComponents(B);
   const allCrossings = computeDiagramCrossingsAll(components, mod);
   const page1 = renderRoundExportPage(false, components, allCrossings);
@@ -4354,6 +4579,7 @@ setKnotFromUI(parseInt(document.getElementById('mInput').value));   // rebuild Z
 syncRoundOuterMax();
 document.getElementById('abParamDisplay').style.display = '';
 enterKnotMode();
+if (gMode) enterGMode();   // g is the default parametrization; loads the first knot from the server
 
 // ── Render loop ────────────────────────────────────────────────────────────
 (function animate() {
