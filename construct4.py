@@ -251,6 +251,55 @@ def construct_brute(g,L,Wmax=16,time_limit=6.0):
                         return ('OK',{'runs':runs,'W':W})
     return ('FAIL',None)
 
+def construct_pb_direct(g,L):
+    """W EMERGES (no Wtarget): one greedy placement per rotation; align_core searches
+       W upward from xc and returns the smallest closing width. ~|g| build attempts."""
+    Bc=b.smallest_coprime_b(L); tgt=pb4.braid_key([abs(z) for z in g],L,Bc)
+    best=None
+    for r in range(len(g)):
+        gr=g[r:]+g[:r]
+        x=columns_greedy(gr)
+        built=build_core(gr,L,x)
+        if built is None: continue
+        core,_,_=built
+        res=align_core(gr,L,core,perm_succ(gr,L),tgt,Bc,max(x))   # Wfix=None -> W emerges
+        if res[0]=='OK':
+            runs=res[1]['runs']; W=sum(runs)//L                    # actual W, not a target
+            if best is None or W<best[2]: best=(gr,runs,W)
+    return ('OK',{'rotation':best[0],'runs':best[1],'W':best[2]}) if best else ('FAIL',None)
+
+def construct_pb_search(g,L,slack=4,time_limit=3.0,cap=6000):
+    """Step 2: per rotation, a BOUNDED poset-range x-placement DFS (branches only where
+       late>early, i.e. the free/commuting crossings). W EMERGES from align_core (Wfix=None).
+       Keeps the smallest actual W (=sum/L) across placements and rotations."""
+    Bc=b.smallest_coprime_b(L); tgt=pb4.braid_key([abs(z) for z in g],L,Bc)
+    deadline=time.time()+time_limit
+    best=[None]; attempts=[0]
+    for r in range(len(g)):
+        gr=g[r:]+g[:r]; succ=perm_succ(gr,L)
+        early,late=ranges(gr,slack); n=len(gr); cnt=[0]
+        def dfs(t,x):
+            if cnt[0]>cap or time.time()>deadline: return
+            if t==n:
+                cnt[0]+=1; attempts[0]+=1
+                built=build_core(gr,L,x)
+                if built is None: return
+                core,_,_=built
+                res=align_core(gr,L,core,succ,tgt,Bc,max(x))   # Wfix=None -> W emerges
+                if res[0]=='OK':
+                    W=sum(res[1]['runs'])//L
+                    if best[0] is None or W<best[0][0]: best[0]=(W,res[1]['runs'],gr)
+                return
+            lo=early[t]
+            for u in range(t):
+                if abs(gr[u]-gr[t])<=1: lo=max(lo,x[u]+spacing(gr[u],gr[t]))
+            for xv in range(lo,late[t]+1):
+                dfs(t+1,x+[xv])
+        dfs(0,[])
+        if time.time()>deadline: break
+    if best[0] is None: return ('FAIL',None,attempts[0])
+    return ('OK',{'rotation':best[0][2],'runs':best[0][1],'W':best[0][0]},attempts[0])
+
 def construct_best(g,L,time_limit=3.0):
     """Minimal-W valid diagram. Brute (exact, fast) for small L; place-and-bend for large L."""
     if L<=5:
