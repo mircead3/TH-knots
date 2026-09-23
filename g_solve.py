@@ -81,11 +81,18 @@ RESIDUAL CAVEATS, stated rather than buried:
     sequences, it separately proved no diagram exists at W<=8 for g=[2,1,3,2,1,1,1,4,4,4]
     and reproduced the W=10 zigzag, agreeing with tier 3.  Keep it for that purpose -- it
     is the only exhaustive check here.
-  * to_runs may return a zigzag of SHORTER period than |g| when the diagram is more
-    symmetric than the word (e.g. g=[1,2,1,3,2,4,3,4] -> runs [5,5,5,5], braid word
-    [2,4,1,3]).  Cross-checks against pb4.braid_key must therefore compare at MATCHED
-    periods; comparing a period-4 diagram's key with an 8-letter word's key fails even
-    though the knots are identical.
+  * DO NOT "fix" a pb4.braid_key mismatch by repeating the diagram's word until the
+    periods line up.  That was done here once and it HID A REAL BUG: a short-period
+    diagram is a DIFFERENT knot (h^k at B = h at kB), and pb4 was correctly rejecting it.
+    Compare the diagram's own word at the same B -- that is strict_ok, and it is the only
+    check that catches this.  check() is geometry only, and gauss_ok compares
+    crossing-visit order within the tile and PASSES such a diagram.
+  * B must be COPRIME to L in any braid_key comparison, or the closure is a link rather
+    than a knot and the comparison is meaningless (this once produced 145 phantom
+    failures, exactly the L=3 and L=4 knots).
+  * L >= 6 and |g| > 10 are UNTESTED.  The app permits L up to 9 and |g| up to 24.
+    Nothing in the model is L-specific, so expect slow rather than wrong, but it has not
+    been measured.
 """
 import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
