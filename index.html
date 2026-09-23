@@ -1529,7 +1529,7 @@ function updateGDisplays() {
     const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">|g| ${gLen}</span>`;
     const rest = gErr ? gErr
         : (gList.length
-             ? `${gListIdx + 1} / ${gList.length}${_enumPoll ? '\u2026' : ''}`
+             ? `${gListIdx + 1} / ${gList.length}${_enumPoll ? ' \u00b7 scanning ' + _scanSecs() + 's' : ''}`
              : '— / —');
     idxEl.innerHTML = `${big}<span style="opacity:0.45;margin:0 8px">·</span>${rest}`;
   }
@@ -1564,7 +1564,8 @@ function clearBusy() {
 // Keyed by LEVEL, deliberately not by rebuild generation: browsing knots with
 // left/right calls gRebuild (bumping gGen) and must NOT interrupt the scan of the level
 // you are browsing.  Only a change of L or |g| ends it.
-let _enumPoll = null, _enumPollKey = null;
+let _enumPoll = null, _enumPollKey = null, _enumT0 = 0;
+const _scanSecs = () => Math.round((Date.now() - _enumT0) / 1000);
 function stopEnumPoll() {
   if (_enumPoll) { clearInterval(_enumPoll); _enumPoll = null; }
   _enumPollKey = null;
@@ -1572,7 +1573,7 @@ function stopEnumPoll() {
 function startEnumPoll(key, L, glen) {
   if (_enumPoll && _enumPollKey === key) return;    // already streaming this level
   stopEnumPoll();
-  _enumPollKey = key;
+  _enumPollKey = key; _enumT0 = Date.now();
   _enumPoll = setInterval(async () => {
     if (_enumPollKey !== key) return;               // a different level took over
     try {
@@ -1580,8 +1581,8 @@ function startEnumPoll(key, L, glen) {
       if (_enumPollKey !== key) return;
       if (s.L !== L || s.glen !== glen) { stopEnumPoll(); return; }
       gList = s.gs; gList._key = key;
+      if (s.done) stopEnumPoll();                   // clears the 'scanning' suffix
       updateGDisplays();                            // count grows under the selection
-      if (s.done) stopEnumPoll();
     } catch (e) { stopEnumPoll(); }
   }, 500);
 }

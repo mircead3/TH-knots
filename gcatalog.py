@@ -125,6 +125,51 @@ def enumerate_gs_ex(L, glen, maxknots=MAXKNOTS):
     return out, (maxknots is not None and len(out)>=maxknots)
 
 
+def _trace_sig(g, L):
+    """A complete invariant of g's COMMUTATION class (projection lemma): the letter
+    counts, plus the subsequence on each non-commuting pair of generators.
+
+    Used to memoise braid_key.  g_canon folds rotation and reflection but not
+    commutation, so a level ends up with far more canonical forms than knots -- L=7
+    |g|=10 has 79,992 canonical forms and 109 knots.  Words with the same signature are
+    the same trace, hence the same closure, hence the same key: 16x fewer calls to the
+    most expensive step in the scan.
+    """
+    from collections import Counter
+    return (tuple(sorted(Counter(g).items())),
+            tuple(tuple(x for x in g if x == a or x == a + 1) for a in range(1, L - 1)))
+
+
+def _candidate_words(L, glen):
+    """Yield, in lex order, only the words that could possibly be a canonical g.
+
+    Two facts prune the space hard, and both are exact -- no knot is lost:
+
+      * it starts with 1.  A single L-cycle word must contain every generator, so 1 is
+        its minimum, and a rotation-minimal word starts at its minimum.  Fixing the
+        first letter removes (L-2)/(L-1) of the space on its own.
+      * it contains EVERY generator 1..L-1.  So a prefix with more generators still
+        missing than positions remaining can never be completed: prune it rather than
+        enumerate its whole subtree.
+
+    Before this, iter_gs walked all (L-1)**glen words.  At L=7 |g|=10 that is 60.5M, of
+    which only the first 10.1M can hold a canonical form -- the other 50M were scanned
+    finding nothing, which is why the count sat unchanged for minutes at the end of a
+    level while the scan ground on.
+    """
+    need0 = frozenset(range(1, L))
+    w = [0] * glen
+    def rec(i, missing):
+        if glen - i < len(missing): return          # cannot still fit the missing ones
+        if i == glen:
+            yield list(w); return
+        for v in range(1, L):                       # ascending keeps the output lex-ordered
+            w[i] = v
+            yield from rec(i + 1, missing - {v} if v in missing else missing)
+    w[0] = 1
+    yield from rec(1, need0 - {1})
+
+
 def iter_gs(L, glen, maxknots=MAXKNOTS):
     """Yield the knots one at a time, in sorted order.
 
@@ -134,9 +179,8 @@ def iter_gs(L, glen, maxknots=MAXKNOTS):
     a worker thread and stops it when L or |g| changes.
     """
     Bc=b.smallest_coprime_b(L)
-    seen_canon=set(); seen_key=set(); found=0
-    for w in product(range(1,L), repeat=glen):
-        g=list(w)
+    seen_canon=set(); seen_key=set(); sig_key={}; found=0
+    for g in _candidate_words(L, glen):
         # ORDER MATTERS: perm_cycles is O(n) and discards ~75%, minperiod is O(n^2).
         # The cheap rotation test (a canonical word starts at its own minimum) prunes
         # ~94% more before g_canon, which is the other expensive stage.
@@ -146,7 +190,9 @@ def iter_gs(L, glen, maxknots=MAXKNOTS):
         c=g_canon(g,L)
         if c in seen_canon: continue
         seen_canon.add(c)
-        key=pb4.braid_key(g,L,Bc)                     # authoritative knot dedup
+        sg=_trace_sig(c, L)                           # same trace => same knot
+        if sg in sig_key: key=sig_key[sg]
+        else: key=sig_key[sg]=pb4.braid_key(g,L,Bc)   # authoritative knot dedup
         if key is None or key in seen_key: continue
         seen_key.add(key)
         # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not one).
