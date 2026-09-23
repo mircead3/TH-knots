@@ -70,6 +70,13 @@ RESIDUAL CAVEATS, stated rather than buried:
   * The edge rules above are load-bearing: a missing edge under-constrains, a spurious
     one over-constrains and would make infeasibility claims wrong.  509 Gauss-verified
     diagrams support them in the realizability direction.
+  * The two knots that report verdict 'achieved' have been settled EXTERNALLY and are
+    also minimal:  g=[1,2,1,3,2,4,3,4] L=5 -> W=6  (construct_brute exhausted W<=4) and
+    g=[1,2,1,3,2,1,3,2,3] L=4 -> W=8  (exhausted W<=6).  In both, the smaller W is
+    feasible for the equations but only yields a SHORTER-period diagram (periods 4 and 3),
+    i.e. a different knot; the solver cannot rule the W out because the full-period
+    requirement is a post-check, not a constraint.  So all 509 library knots are at
+    minimal W; 'achieved' records what the solver proved, not what is true.
   * construct_brute (construct4.py) remains the independent oracle: exhaustive over run
     sequences, it separately proved no diagram exists at W<=8 for g=[2,1,3,2,1,1,1,4,4,4]
     and reproduced the W=10 zigzag, agreeing with tier 3.  Keep it for that purpose -- it
