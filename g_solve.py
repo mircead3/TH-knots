@@ -70,13 +70,13 @@ RESIDUAL CAVEATS, stated rather than buried:
   * The edge rules above are load-bearing: a missing edge under-constrains, a spurious
     one over-constrains and would make infeasibility claims wrong.  509 Gauss-verified
     diagrams support them in the realizability direction.
-  * The two knots that report verdict 'achieved' have been settled EXTERNALLY and are
-    also minimal:  g=[1,2,1,3,2,4,3,4] L=5 -> W=6  (construct_brute exhausted W<=4) and
-    g=[1,2,1,3,2,1,3,2,3] L=4 -> W=8  (exhausted W<=6).  In both, the smaller W is
-    feasible for the equations but only yields a SHORTER-period diagram (periods 4 and 3),
-    i.e. a different knot; the solver cannot rule the W out because the full-period
-    requirement is a post-check, not a constraint.  So all 509 library knots are at
-    minimal W; 'achieved' records what the solver proved, not what is true.
+  * Verdict 'achieved' no longer occurs on the library.  It used to, for the two knots
+    whose KNOT is a repetition h^k although their WORD is not -- there the equations stay
+    feasible at a smaller W but yield only a shorter-period diagram, and the solver cannot
+    rule that W out because the full-period rule is a post-check, not a constraint.
+    gcatalog.enumerate_gs now drops those (is_knot_power: walk g's rotation+commutation
+    class for a literal power), which is right independently -- g at B bights is h at k*B,
+    so they add no knot the library lacks.  Library: 507, all verdict 'minimal'.
   * construct_brute (construct4.py) remains the independent oracle: exhaustive over run
     sequences, it separately proved no diagram exists at W<=8 for g=[2,1,3,2,1,1,1,4,4,4]
     and reproduced the W=10 zigzag, agreeing with tier 3.  Keep it for that purpose -- it
