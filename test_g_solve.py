@@ -50,6 +50,11 @@ ok([1,2,1,3,2,1,3,2,3] not in GC.enumerate_gs(4,9), 'L=4 |g|=9 drops [1,2,1,3,2,
 ok(GC.is_knot_power([2,4,1,3,2,4,1,3]),             'literal power detected')
 ok(GC.is_knot_power([1,2,1,3,2,4,3,4]),             'knot-level power detected')
 ok(not GC.is_knot_power([2,1,3,2,1,1,1,4,4,4]),     'a genuine knot is not flagged')
+try:
+    GC.is_knot_power([1,2,3,4,5,6,1,2,3,4,5,6,2,1,4,3,6,5], cap=500)
+    ok(False, 'cap overflow must RAISE, not return False')
+except RuntimeError:
+    ok(True,  'cap overflow raises rather than silently keeping an h^k knot')
 
 print('5. minimal W is rotation-invariant (it is a property of the knot)')
 for g,L in [([2,1,3,2,1,1,1,4,4,4],5), ([2,3,1,1,1,2,4,4,4,3],5)]:

@@ -35,6 +35,19 @@ def is_knot_power(g, cap=200000):
     reachable at |h| with more bights.  Keeping them would also leave the only class
     whose minimal W the solver cannot certify internally (the full-period rule is a
     post-check, not a constraint), needing construct_brute to settle.
+
+    RAISES on cap overflow rather than guessing.  Returning False there would silently
+    KEEP an h^k knot, which resurfaces as a short-period diagram and a verdict of
+    'achieved' -- the failure is invisible.  Classes exceed 300k words by |g| ~ 15-18 for
+    L = 5-7 (L=3 never: nothing commutes, so the class is just the |g| rotations), which
+    is inside what the app permits, so this limit is reachable and must be visible.
+
+    A polynomial replacement was attempted -- "the trace is fixed by rotation by a proper
+    divisor", tested via the projection lemma -- and is WRONG: commutation acts on adjacent
+    positions and rotation changes which positions are adjacent, so linear trace
+    equivalence does not transfer to cyclic traces.  It returned False for both known
+    knot-powers.  A correct version needs cyclic trace equivalence, i.e. commutation across
+    the seam, which is what this search already does.
     """
     from collections import deque
     start=tuple(g); n=len(g)
@@ -51,7 +64,11 @@ def is_knot_power(g, cap=200000):
             if v in seen: continue
             if minperiod(list(v))!=list(v): return True
             seen.add(v); q.append(v)
-            if len(seen)>cap: return False              # give up: treat as non-power
+            if len(seen)>cap:
+                raise RuntimeError(
+                    'is_knot_power: rotation+commutation class of %r exceeds %d words; '
+                    'cannot decide whether this knot is an h^k. Raise the cap or use an '
+                    'exhaustive check -- do NOT assume False (see docstring).' % (g, cap))
     return False
 
 def g_canon(g, L):
