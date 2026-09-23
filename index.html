@@ -430,6 +430,12 @@ function setKnotFromRuns(runs, L) {
   D      = runs.length;
   LEADS  = L;
   MAX_Y  = Math.max(...pts.map(p => p[1]));
+  // The flip lives HERE, not in the callers.  gRebuild and setKnotFromUI both build
+  // from runs, and only the latter applied it -- so a knot rendered by gRebuild ignored
+  // knotFlipped, leaving the flag and the geometry disagreeing.  That is what made the
+  // first click of the flip button appear to do nothing: it set the flag back to match
+  // what was already on screen.
+  if (knotFlipped) for (const p of ZIGZAG) p[1] = MAX_Y - p[1];   // mirror vertically
 }
 
 let currentC = 2;
@@ -439,8 +445,7 @@ function setKnotFromUI(m) {
     LEADS = m;
     const bd = currentG ? gRunsCache.get(gRunsKey(m, currentG)) : null;
     if (bd) {
-      setKnotFromRuns(bd.runs, m);          // runs are B-independent; cached by gRebuild
-      if (knotFlipped) for (const p of ZIGZAG) p[1] = MAX_Y - p[1];   // mirror = reflect vertically
+      setKnotFromRuns(bd.runs, m);          // runs are B-independent; flip applied inside
     }
     return;
   }
@@ -909,7 +914,11 @@ let c3AltList = [];             // c3AltList[i] = distinct equivalent diagrams o
 let c3AltMirror = [];           // c3AltMirror[i][j] = valid mirror tuple of c3AltList[i][j]
 let c3FormIdx = 0;              // which form of the current knot is displayed
 let c3ListCacheM = -1;
-let knotFlipped = false;        // flip button: render the mirror image in place
+// The app opens in g-mode, and there the FLIPPED diagram is the better default: the
+// first knots at any |g| are 1-heavy (e.g. 1,1,1,1,1,2,3,4), whose long clasps land
+// crowded against the inner radius unless the diagram is reflected.
+const G_DEFAULT_FLIP = true;
+let knotFlipped = G_DEFAULT_FLIP;   // flip button: render the mirror image in place
 let mDisplayed = null;          // L stepper: the leads count we have actually built
 let mStepTimer = null;
 let componentMode = false;
@@ -1486,7 +1495,7 @@ function rebuildKnot() {
 
 // Build everything for a specific leads count m (no input reads/writes).
 function buildForM(m) {
-  knotFlipped = false;
+  knotFlipped = gMode ? G_DEFAULT_FLIP : false;
   if (gMode) { gRebuild({ reenum: true, resetView: true }); return; }
   if (currentC === 2 && !syncAB2List(m)) return;
   if (currentC === 3 && !syncC3List(m)) return;
@@ -1513,10 +1522,68 @@ const gRunsKey = (L, g) => L + '|' + g.join(',');
 
 function updateGDisplays() {
   const idxEl = document.getElementById('gIdx');
-  if (idxEl) idxEl.textContent = gErr ? gErr
-      : (gList.length ? `${gListIdx + 1} / ${gList.length}` : '— / —');
+  // |g| belongs on this line, big: it is the axis the up/down arrows move along, and
+  // buried mid-panel in the invariants block it was easy to lose track of.
+  // A truncated list shows '>N' -- N knots reached the cap, there are more.
+  if (idxEl) {
+    const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">|g| ${gLen}</span>`;
+    const rest = gErr ? gErr
+        : (gList.length
+             ? `${gListIdx + 1} / ${gList.length}${_enumPoll ? '\u2026' : ''}`
+             : '— / —');
+    idxEl.innerHTML = `${big}<span style="opacity:0.45;margin:0 8px">·</span>${rest}`;
+  }
   const cnt = document.getElementById('knotCountDisplay');
   if (cnt) cnt.textContent = '';   // count is in gIdx; |g| and g live in the invariants panel
+}
+
+// "Is it broken or just slow?" is the worst state to leave a user in.  Anything the
+// server answers from cache returns in ~1ms, so a delay means real work is happening:
+// show that after 300ms (not sooner, or every arrow press flashes).
+// A STATIC message still reads as a hang once the wait passes a few seconds, so tick
+// the elapsed time: |g|=12 at L=5 is ~113s of real enumeration, and the only way to
+// tell that apart from a freeze is to watch a number move.
+let _busyTimer = null, _busyTick = null;
+function showBusy(msg) {
+  clearBusy();
+  const t0 = Date.now();
+  const paint = () => {
+    gErr = `${msg} ${Math.round((Date.now() - t0) / 1000)}s`;   // e.g. "scanning 12s"
+    updateGDisplays();
+  };
+  _busyTimer = setTimeout(() => { paint(); _busyTick = setInterval(paint, 1000); }, 300);
+}
+function clearBusy() {
+  if (_busyTimer) { clearTimeout(_busyTimer); _busyTimer = null; }
+  if (_busyTick)  { clearInterval(_busyTick); _busyTick = null; }
+}
+
+// The server streams knots as it finds them, so we wait only for the FIRST one and let
+// the rest arrive while you browse.  Indices never shift (discovery order IS sorted
+// order), so extending the list under the selection is safe.
+// Keyed by LEVEL, deliberately not by rebuild generation: browsing knots with
+// left/right calls gRebuild (bumping gGen) and must NOT interrupt the scan of the level
+// you are browsing.  Only a change of L or |g| ends it.
+let _enumPoll = null, _enumPollKey = null;
+function stopEnumPoll() {
+  if (_enumPoll) { clearInterval(_enumPoll); _enumPoll = null; }
+  _enumPollKey = null;
+}
+function startEnumPoll(key, L, glen) {
+  if (_enumPoll && _enumPollKey === key) return;    // already streaming this level
+  stopEnumPoll();
+  _enumPollKey = key;
+  _enumPoll = setInterval(async () => {
+    if (_enumPollKey !== key) return;               // a different level took over
+    try {
+      const s = await gPost('/enumerate/poll', {});
+      if (_enumPollKey !== key) return;
+      if (s.L !== L || s.glen !== glen) { stopEnumPoll(); return; }
+      gList = s.gs; gList._key = key;
+      updateGDisplays();                            // count grows under the selection
+      if (s.done) stopEnumPoll();
+    } catch (e) { stopEnumPoll(); }
+  }, 500);
 }
 
 let gGen = 0;   // supersede stale in-flight rebuilds (rapid arrow presses)
@@ -1527,13 +1594,33 @@ async function gRebuild(opts) {
   const L = parseInt(document.getElementById('mInput').value);
   if (isNaN(L) || L < 3) return;
   LEADS = L;
-  gLen = clampGLen(L, gLen);
+  // Changing L restarts at that L's FIRST |g| (= L-1) rather than carrying over the old
+  // one: |g| means something different at each L, and the old value is usually deep into
+  // the new L's range, landing you mid-list in a big level instead of at its start.
+  if (gLenForL !== L) { gLen = L - 1; gListIdx = 0; gLenForL = L; }
+  else gLen = clampGLen(L, gLen);
   try {
     const key = L + '|' + gLen;
     if (opts.reenum || gList._key !== key) {
-      const r = await gEnumerate(L, gLen);
+      stopEnumPoll();              // switching level: abandon the previous scan
+      showBusy('scanning');     // |g| is already shown large on this line
+      let r = await gEnumerate(L, gLen);
+      // Wait for the first knot, not the last: a big level yields #1 in ~0.1s and its
+      // final count only minutes later, and changing L or |g| abandons the scan.
+      while (!r.done && !r.gs.length && !r.error) {
+        await new Promise(res => setTimeout(res, 250));
+        if (myGen !== gGen) { clearBusy(); return; }
+        r = await gPost('/enumerate/poll', {});
+        if (r.L !== L || r.glen !== gLen) { clearBusy(); return; }    // superseded
+      }
+      clearBusy();
       if (myGen !== gGen) return;              // a newer press superseded us
-      gList = r.gs; gList._key = key;
+      if (r.error) {
+        console.warn('enumeration failed:', r.error);
+        currentG = null; gErr = 'scan failed'; updateGDisplays(); return;
+      }
+      gList = r.gs; gList._key = key; gList._truncated = !!r.truncated;
+      if (!r.done) startEnumPoll(key, L, gLen);   // keeps filling in while you browse
     }
     if (!gList.length) { currentG = null; gErr = `none at |g|=${gLen}`; updateGDisplays(); return; }
     gListIdx = ((gListIdx % gList.length) + gList.length) % gList.length;
@@ -1542,7 +1629,9 @@ async function gRebuild(opts) {
     for (let tries = 0; tries < gList.length; tries++) {
       const g = gList[gListIdx];
       try {
+        showBusy('solving');      // which g it is, is on the line above
         const bd = await gConstruct(L, g);
+        clearBusy();
         if (myGen !== gGen) return;            // superseded while constructing
         currentG = g;
         setKnotFromRuns(bd.runs, L);
@@ -1560,7 +1649,13 @@ async function gRebuild(opts) {
     currentG = null; gErr = `no valid diagrams at |g|=${gLen}`; updateGDisplays();
   } catch (e) {
     if (myGen !== gGen) return;                // don't clobber a newer render with a stale error
-    gErr = 'server?'; console.warn('gRebuild failed:', e);
+    clearBusy();
+    // Prefer the server's own short reason (e.g. a level too large to enumerate).
+    // This panel is narrow, so show a SHORT reason and put the full text in the console.
+    gErr = e && e.short ? String(e.short).slice(0, 34)
+         : e && e.status ? `server error ${e.status}`
+         : 'no server?';
+    console.warn('gRebuild failed:', e);
     updateGDisplays();
   }
 }
@@ -1572,7 +1667,7 @@ function enterGMode() {
   document.getElementById('shapeSection').style.display = 'none';
   document.getElementById('c3Section').style.display = 'none';
   document.getElementById('gSection').style.display = '';
-  knotFlipped = false;   // flip button enabled/disabled per-knot by updateFlipButton() in gRebuild
+  knotFlipped = G_DEFAULT_FLIP;   // g-mode default; updateFlipButton() handles no-op knots
   const ab = document.getElementById('abParamDisplay'); if (ab) ab.style.display = 'none';
   const c3 = document.getElementById('c3ParamDisplay'); if (c3) c3.style.display = 'none';
   const mInput = document.getElementById('mInput');
@@ -1666,7 +1761,7 @@ document.addEventListener('keydown', e => {
   }
   if (gMode) {
     e.preventDefault();
-    knotFlipped = false;                                // new knot starts unflipped
+    knotFlipped = G_DEFAULT_FLIP;                       // new knot starts in the g-mode default
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const d = e.key === 'ArrowRight' ? 1 : -1;        // browse knots at this |g|
       gListIdx += d;
@@ -2121,7 +2216,7 @@ function enterDiagramMode() {
 // tensegrity keeps its own on the full range.  Each view restores its last
 // value on entry (no clamping of a shared value back and forth); both start
 // at the middle of their range.
-let thickKnotVal     = 0.15;   // knot & braid
+let thickKnotVal     = 0.12;   // knot & braid: midrange of 0.04..0.21
 let thickStraightVal = 0.24;   // tensegrity
 function setThickSlider(max, value) {
   const el = document.getElementById('thickInput');
@@ -2145,7 +2240,9 @@ function enterBraidMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = 'none';
   document.getElementById('knotSliders').style.display = '';
-  setThickSlider(0.28, thickKnotVal);   // knot & braid: shared thickness, capped range
+  setThickSlider(0.21, thickKnotVal);   // knot & braid: capped range (75% of the
+                                      // old 0.28 -- the top of that range was thicker
+                                      // than anything legible)
   document.getElementById('xStretchSection').style.display = '';
   document.getElementById('roundSection').style.display = 'none';
   document.getElementById('straightSection').style.display = 'none';
@@ -2824,7 +2921,9 @@ function enterKnotMode() {
   document.getElementById('diagRoundRow').style.display = 'none';
   document.getElementById('flatCylSection').style.display = '';
   document.getElementById('knotSliders').style.display = '';
-  setThickSlider(0.28, thickKnotVal);   // knot & braid: shared thickness, capped range
+  setThickSlider(0.21, thickKnotVal);   // knot & braid: capped range (75% of the
+                                      // old 0.28 -- the top of that range was thicker
+                                      // than anything legible)
   document.getElementById('xStretchSection').style.display = 'none';
   document.getElementById('roundSection').style.display = '';
   document.getElementById('outerRadiusSection').style.display = 'none';  // knot: fixed outer radius, only inner varies
@@ -3162,6 +3261,7 @@ const G_SERVER_BASE = 'http://127.0.0.1:8731';
 let gList = [];            // enumerate result: array of g's at (LEADS, gLen)
 let gListIdx = 0;          // which knot in gList is selected
 let gLen = 0;              // current |g| (step-word length)
+let gLenForL = null;       // the L that gLen was chosen for; see gRebuild
 const gRunsCache = new Map();   // key "L|g" -> runs (avoid refetching)
 
 async function gPost(path, body) {
@@ -3170,7 +3270,13 @@ async function gPost(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   });
-  if (!res.ok) throw new Error(`${path} ${res.status}: ${(await res.json()).error || res.statusText}`);
+  if (!res.ok) {
+    let detail = res.statusText, short = '';
+    try { const j = await res.json(); detail = j.error || detail; short = j.short || ''; } catch (_) {}
+    const err = new Error(`${path} ${res.status}: ${detail}`);
+    err.status = res.status; err.detail = detail; err.short = short;  // so the UI can say WHY
+    throw err;
+  }
   return res.json();
 }
 const gEnumerate = (L, glen)   => gPost('/enumerate', { L, glen });
