@@ -59,7 +59,8 @@ from relax import relax_general
 # g-based knot enumeration/construction lives in the repo root (one level up).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gcatalog
-_ENUM_CACHE = {}   # (L, glen) -> list of canonical g's
+_ENUM_CACHE = {}    # (L, glen) -> list of canonical g's
+_BUILD_CACHE = {}   # (L, g)    -> built diagram; see _handle_construct
 
 DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
@@ -198,7 +199,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('g must be non-empty over 1..L-1')
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'}); return
-        bd = gcatalog.build(L, g)
+        # Cache built diagrams: g_solve is ~0.05s for almost every knot, but proving a
+        # smaller W impossible costs ~12s on the rare one that needs tier 3, and the
+        # client-side cache does not survive a page reload.
+        ckey = (L, tuple(g))
+        bd = _BUILD_CACHE.get(ckey)
+        if bd is None:
+            bd = gcatalog.build(L, g)
+            if bd is not None: _BUILD_CACHE[ckey] = bd
         if bd is None:
             self._send_json(422, {'error': 'construction failed', 'g': g, 'L': L}); return
         self._send_json(200, bd)

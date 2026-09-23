@@ -83,10 +83,12 @@ def _combos(choice, succ, core, W, L, Bc, tgt, cap, deadline=None):
     return None
 
 
-def align(g, L, core, succ, tgt, Bc, xc, K=48, cap=1500, Wspan=12, deadline=None):
+def align(g, L, core, succ, tgt, Bc, xc, K=48, cap=1500, Wspan=12, deadline=None, Wcap=None):
     """W emergent. Per W: narrow window first, then wide (deep closures)."""
     Wstart = xc if xc % 2 == 0 else xc + 1
-    for W in range(Wstart, Wstart + 2 * Wspan, 2):
+    Wend = Wstart + 2 * Wspan
+    if Wcap is not None: Wend = min(Wend, Wcap)   # only look for a STRICTLY better W
+    for W in range(Wstart, Wend, 2):
         if deadline and time.time() > deadline: return None
         inter = []; ok = True
         for s in range(L):
@@ -109,7 +111,7 @@ def align(g, L, core, succ, tgt, Bc, xc, K=48, cap=1500, Wspan=12, deadline=None
     return None
 
 
-def build(g, L, x, Bc, tgt, K=48, cap=1500, deadline=None):
+def build(g, L, x, Bc, tgt, K=48, cap=1500, deadline=None, Wcap=None):
     inc, thru, relY, comp, comps = solve_components(g, L, x)
     y = {t: relY[t] for t in range(len(g))}
     core = {}
@@ -122,7 +124,18 @@ def build(g, L, x, Bc, tgt, K=48, cap=1500, deadline=None):
             for k, hh in enumerate(seg): mid[xa + 1 + k] = hh
         core[s] = dict(fx=fx, fy=y[ft], entry=thru(fr), lx=lx, ly=y[lt],
                        exit=thru(lr), mid=mid)
-    return align(g, L, core, perm_succ(g, L), tgt, Bc, max(x), K, cap, deadline=deadline)
+    return align(g, L, core, perm_succ(g, L), tgt, Bc, max(x), K, cap, deadline=deadline, Wcap=Wcap)
+
+
+def wlb(g):
+    """Lower bound on minimal W: 2 x the size of the largest band (all occurrences
+    of one generator).  A band of n crossings occupies n columns at dx=2, and the
+    period must exceed that span.  Empirically holds in 17/17 verified cases and is
+    TIGHT in 13 -- so hitting it means we can stop immediately.
+    (Empirical, not proven: if it were ever too high we would stop at a valid but
+    non-minimal W, never at an invalid diagram.)"""
+    from collections import Counter
+    return 2 * max(Counter(abs(v) for v in g).values())
 
 
 def construct(g, L, tl=30.0, maxshift=1):
@@ -130,6 +143,7 @@ def construct(g, L, tl=30.0, maxshift=1):
     Bc = b.smallest_coprime_b(L)
     tgt = pb4.braid_key([abs(z) for z in g], L, Bc)
     best = None; att = 0; t0 = time.time(); deadline = t0 + tl
+    LB = wlb(g)
     R = layouts(g)
     for w, gx in R:
         bands = {}
@@ -154,6 +168,12 @@ def construct(g, L, tl=30.0, maxshift=1):
                 x = base[:]
                 for j, t in enumerate(idxs): x[t] = cb[j]
                 att += 1
-                r = build(w, L, x, Bc, tgt, deadline=deadline)
-                if r and (best is None or r[0] < best[0]): best = r
+                if best is not None and max(x) >= best[0]: continue   # can't beat best
+                r = build(w, L, x, Bc, tgt, deadline=deadline,
+                          Wcap=(best[0] if best is not None else None))
+                if r and (best is None or r[0] < best[0]):
+                    best = r
+                    # hit the lower bound -> provably minimal, stop scanning
+                    if best[0] <= LB:
+                        return best, att, f'minimal(W={best[0]}=LB)', len(R)
     return best, att, 'done', len(R)
