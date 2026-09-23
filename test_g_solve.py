@@ -50,11 +50,38 @@ ok([1,2,1,3,2,1,3,2,3] not in GC.enumerate_gs(4,9), 'L=4 |g|=9 drops [1,2,1,3,2,
 ok(GC.is_knot_power([2,4,1,3,2,4,1,3]),             'literal power detected')
 ok(GC.is_knot_power([1,2,1,3,2,4,3,4]),             'knot-level power detected')
 ok(not GC.is_knot_power([2,1,3,2,1,1,1,4,4,4]),     'a genuine knot is not flagged')
-try:
-    GC.is_knot_power([1,2,3,4,5,6,1,2,3,4,5,6,2,1,4,3,6,5], cap=500)
-    ok(False, 'cap overflow must RAISE, not return False')
-except RuntimeError:
-    ok(True,  'cap overflow raises rather than silently keeping an h^k knot')
+# A class too large to explore is UNDECIDED (None), not False and not an exception.
+# It raised at one point, which was right while the enumeration also refused big levels;
+# once that stopped, raising refused them instead.  None means the caller keeps the knot:
+# at worst a family duplicate, never a wrong diagram.
+undec = GC.is_knot_power([1,2,3,4,5,6,1,2,3,4,5,6,2,1,4,3,6,5], cap=500)
+ok(undec is None, 'a class over the cap returns None (undecided), neither False nor raise')
+ok(GC.is_knot_power([1,2,1,3,2,4,3,4], cap=200) is True,
+   'and a small cap still decides the real knot-powers (found after 4 and 23 words)')
+
+print('4b. enumeration streams, runs to completion, and never silently truncates')
+gs,tr = GC.enumerate_gs_ex(5,10)
+ok(len(gs)==317 and tr is False, 'L=5 |g|=10 -> 317 knots, complete')
+ok(GC.MAXKNOTS is None,          'no knot cap (streaming + interruption removes the need)')
+import itertools as _it
+ok(list(_it.islice(GC.iter_gs(5,10),10))==gs[:10],
+   'iter_gs yields a PREFIX of the full list -- indices never shift as it streams')
+ok(gs==sorted(gs),               'knots arrive in sorted order (first class member IS canonical)')
+gs2,tr2 = GC.enumerate_gs_ex(5,8,maxknots=10)
+ok(len(gs2)==10 and tr2 is True, 'an explicit maxknots still works and reports truncated')
+# No level is refused any more, and the size of the candidate space says nothing about
+# how fast the first knots arrive -- that is what replaced the old backstop.  Bounded in
+# time on purpose: an unbounded call here is what turned this suite into a 2-billion-word
+# scan when the backstop went away.
+# The guarantee is about the FIRST knot: the scan walks words lexicographically from
+# (1,1,...,1) and canonical knots turn up at once, so no level needs refusing.  Later
+# knots CAN be far apart at extreme levels (L=9 |g|=16 needs ~44s to reach three), which
+# is why this asserts one knot, not three.
+for L,gl,space in ((5,20,4**20),(7,20,6**20),(9,16,8**16)):
+    t0=time.time(); first=next(GC.iter_gs(L,gl)); el=time.time()-t0
+    ok(len(first)==gl and el<5,
+       'L=%d |g|=%2d (%s words): first knot in %.2fs, not refused'
+       %(L,gl,format(space,','),el))
 
 print('5. minimal W is rotation-invariant (it is a property of the knot)')
 for g,L in [([2,1,3,2,1,1,1,4,4,4],5), ([2,3,1,1,1,2,4,4,4,3],5)]:

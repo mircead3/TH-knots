@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 elastic/*.log
+gcache.json
+~$*
+elastic/debug_last_relax.json

@@ -43,6 +43,7 @@ import json
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Optional single-threaded BLAS for reproducibility: multi-threaded reductions
@@ -59,8 +60,104 @@ from relax import relax_general
 # g-based knot enumeration/construction lives in the repo root (one level up).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gcatalog
+
+# ---- persistent g-catalog cache ------------------------------------------------
+# Enumeration and construction are both pure functions of (gcatalog, g_solve), and
+# both are slow the first time: enumerate is ~4s at L=5 |g|=10 and ~58s at |g|=12,
+# and one knot ([1,1,1,2,1,3,2,4,4,4], L=5) costs ~12s because tier 3 has to prove
+# W=8 impossible.  In-memory caching made each cost once per SERVER LIFETIME, which
+# still means paying it after every restart.  Persisting to disk makes it once ever.
+#
+# The file is keyed by a signature over the two source files, so any change to the
+# enumeration or the solver invalidates it rather than serving stale results.
 _ENUM_CACHE = {}    # (L, glen) -> list of canonical g's
 _BUILD_CACHE = {}   # (L, g)    -> built diagram; see _handle_construct
+_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           'gcache.json')
+_CACHE_DIRTY = False
+
+def _cache_signature():
+    import hashlib
+    h = hashlib.sha256()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ('gcatalog.py', 'g_solve.py'):
+        with open(os.path.join(root, name), 'rb') as f: h.update(f.read())
+    return h.hexdigest()[:16]
+
+def _cache_load():
+    try:
+        with open(_CACHE_FILE) as f: d = json.load(f)
+    except Exception:
+        return
+    if d.get('sig') != _cache_signature():
+        print('g-cache: signature changed (gcatalog/g_solve edited) -- ignoring stale cache')
+        return
+    for k, v in d.get('enum', {}).items():
+        L, glen = k.split('|'); _ENUM_CACHE[(int(L), int(glen))] = v
+    for k, v in d.get('build', {}).items():
+        L, gs = k.split('|'); _BUILD_CACHE[(int(L), tuple(int(x) for x in gs.split(',')))] = v
+    print('g-cache: loaded %d levels, %d diagrams from %s'
+          % (len(_ENUM_CACHE), len(_BUILD_CACHE), os.path.basename(_CACHE_FILE)))
+
+def _cache_save():
+    global _CACHE_DIRTY
+    if not _CACHE_DIRTY: return
+    tmp = _CACHE_FILE + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            json.dump({'sig': _cache_signature(),
+                       'enum': {'%d|%d' % k: v for k, v in _ENUM_CACHE.items()},
+                       'build': {'%d|%s' % (k[0], ','.join(map(str, k[1]))): v
+                                 for k, v in _BUILD_CACHE.items()}}, f)
+        os.replace(tmp, _CACHE_FILE)      # atomic: never leave a half-written cache
+        _CACHE_DIRTY = False
+    except Exception as e:
+        print('g-cache: save failed: %s' % e)
+
+# ---- streaming, interruptible enumeration --------------------------------------
+# The UI browses knots from index 1 upward, so it does not need the final count before
+# showing anything: the first knot of L=6 |g|=11 arrives in 0.07s where the full scan
+# takes 232s.  One job at a time, superseded by generation number, so changing L or |g|
+# abandons the previous scan instead of queueing behind it.
+_ENUM_JOB = {'gen': 0, 'L': None, 'glen': None, 'gs': [], 'done': True,
+             'truncated': False, 'error': None}
+_enum_lock = threading.RLock()   # RLock: _enum_start snapshots while holding it
+
+def _enum_worker(gen, L, glen):
+    try:
+        for g in gcatalog.iter_gs(L, glen):
+            with _enum_lock:
+                if _ENUM_JOB['gen'] != gen: return      # superseded: drop this scan
+                _ENUM_JOB['gs'].append(g)
+        with _enum_lock:
+            if _ENUM_JOB['gen'] != gen: return
+            _ENUM_JOB['done'] = True
+            _ENUM_JOB['truncated'] = False        # no knot cap: scans run to completion
+            _ENUM_CACHE[(L, glen)] = list(_ENUM_JOB['gs'])   # complete: worth caching
+        global _CACHE_DIRTY
+        _CACHE_DIRTY = True; _cache_save()
+    except Exception as ex:
+        with _enum_lock:
+            if _ENUM_JOB['gen'] == gen:
+                _ENUM_JOB['error'] = str(ex); _ENUM_JOB['done'] = True
+
+def _enum_start(L, glen):
+    """Begin (or join) the scan for this level.  -> snapshot dict."""
+    with _enum_lock:
+        if _ENUM_JOB['L'] == L and _ENUM_JOB['glen'] == glen and _ENUM_JOB['error'] is None:
+            return _enum_snapshot()                    # already scanning this level
+        _ENUM_JOB.update(gen=_ENUM_JOB['gen'] + 1, L=L, glen=glen, gs=[],
+                         done=False, truncated=False, error=None)
+        gen = _ENUM_JOB['gen']
+    threading.Thread(target=_enum_worker, args=(gen, L, glen), daemon=True).start()
+    return _enum_snapshot()
+
+def _enum_snapshot():
+    with _enum_lock:
+        return {'L': _ENUM_JOB['L'], 'glen': _ENUM_JOB['glen'],
+                'gs': list(_ENUM_JOB['gs']), 'count': len(_ENUM_JOB['gs']),
+                'done': _ENUM_JOB['done'], 'truncated': _ENUM_JOB['truncated'],
+                'error': _ENUM_JOB['error']}
 
 DEFAULT_PORT = 8731
 MAX_STEPS = 60000          # safety cap so a pathological request can't hang forever
@@ -168,6 +265,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_stop()
         elif self.path == '/enumerate':
             self._handle_enumerate()
+        elif self.path == '/enumerate/poll':
+            self._handle_enumerate_poll()
         elif self.path == '/construct':
             self._handle_construct()
         else:
@@ -185,10 +284,22 @@ class Handler(BaseHTTPRequestHandler):
         if glen % 2 != (L - 1) % 2:
             self._send_json(200, {'L': L, 'glen': glen, 'gs': [], 'count': 0}); return
         key = (L, glen)
-        if key not in _ENUM_CACHE:
-            _ENUM_CACHE[key] = gcatalog.enumerate_gs(L, glen)
-        gs = _ENUM_CACHE[key]
-        self._send_json(200, {'L': L, 'glen': glen, 'gs': gs, 'count': len(gs)})
+        if key in _ENUM_CACHE:                     # complete and cached: answer at once
+            gs = _ENUM_CACHE[key]
+            self._send_json(200, {'L': L, 'glen': glen, 'gs': gs, 'count': len(gs),
+                                  'done': True, 'truncated': False})
+            return
+        snap = _enum_start(L, glen)                # starts, or supersedes another level
+        # Give a fast level the chance to finish inside this request rather than making
+        # the client poll for something that takes 20ms.
+        for _ in range(12):
+            if snap['done'] or snap['count']: break
+            time.sleep(0.025); snap = _enum_snapshot()
+        self._send_json(200, snap)
+
+    def _handle_enumerate_poll(self):
+        """Current state of the running scan; the client extends its list from this."""
+        self._send_json(200, _enum_snapshot())
 
     def _handle_construct(self):
         try:
@@ -205,8 +316,10 @@ class Handler(BaseHTTPRequestHandler):
         ckey = (L, tuple(g))
         bd = _BUILD_CACHE.get(ckey)
         if bd is None:
+            global _CACHE_DIRTY
             bd = gcatalog.build(L, g)
-            if bd is not None: _BUILD_CACHE[ckey] = bd
+            if bd is not None:
+                _BUILD_CACHE[ckey] = bd; _CACHE_DIRTY = True; _cache_save()
         if bd is None:
             self._send_json(422, {'error': 'construction failed', 'g': g, 'L': L}); return
         self._send_json(200, bd)
@@ -263,6 +376,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {'ok': True})
 
 if __name__ == '__main__':
+    _cache_load()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     print(f'elastic relax server listening on http://127.0.0.1:{port}  (Ctrl-C to stop)', flush=True)

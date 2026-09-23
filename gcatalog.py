@@ -17,7 +17,10 @@ def minperiod(w):
         if n%p==0 and all(w[i]==w[(i+p)%n] for i in range(n)): return w[:p]
     return w
 
-def is_knot_power(g, cap=200000):
+CLASSCAP = 5000     # words of a rotation+commutation class to explore before
+                    # giving up; see is_knot_power
+
+def is_knot_power(g, cap=CLASSCAP):
     """Is g's KNOT a repetition h^k, whether or not the WORD is one?
 
     Literal periodicity (minperiod(g) != g) is not invariant under the moves that
@@ -36,11 +39,14 @@ def is_knot_power(g, cap=200000):
     whose minimal W the solver cannot certify internally (the full-period rule is a
     post-check, not a constraint), needing construct_brute to settle.
 
-    RAISES on cap overflow rather than guessing.  Returning False there would silently
-    KEEP an h^k knot, which resurfaces as a short-period diagram and a verdict of
-    'achieved' -- the failure is invisible.  Classes exceed 300k words by |g| ~ 15-18 for
-    L = 5-7 (L=3 never: nothing commutes, so the class is just the |g| rotations), which
-    is inside what the app permits, so this limit is reachable and must be visible.
+    Returns True / False / None, where None means UNDECIDED: the class exceeded cap.
+    It used to raise there, on the grounds that silently returning False would keep an
+    h^k knot.  But once the enumeration stopped refusing large levels, raising refused
+    them instead -- and the cost of keeping such a knot is mild: the full-period rule
+    still gives it a correct diagram, it is only a family duplicate that dedup missed.
+    So the caller keeps an undecided knot and the dedup is best-effort past the cap
+    (classes exceed it around |g| 15-18 for L = 5-7; L=3 never, since nothing commutes
+    there and the class is just the |g| rotations).
 
     A polynomial replacement was attempted -- "the trace is fixed by rotation by a proper
     divisor", tested via the projection lemma -- and is WRONG: commutation acts on adjacent
@@ -64,11 +70,7 @@ def is_knot_power(g, cap=200000):
             if v in seen: continue
             if minperiod(list(v))!=list(v): return True
             seen.add(v); q.append(v)
-            if len(seen)>cap:
-                raise RuntimeError(
-                    'is_knot_power: rotation+commutation class of %r exceeds %d words; '
-                    'cannot decide whether this knot is an h^k. Raise the cap or use an '
-                    'exhaustive check -- do NOT assume False (see docstring).' % (g, cap))
+            if len(seen)>cap: return None          # undecided: class too large
     return False
 
 def g_canon(g, L):
@@ -83,29 +85,81 @@ def g_canon(g, L):
             if best is None or rot<best: best=rot
     return best
 
-def enumerate_gs(L, glen, cap=4_000_000):
-    """Primitive 1-cycle step-words of length glen on L strands, one per knot.
-       Returns sorted list of canonical g's (each a list)."""
+MAXKNOTS = None     # no limit: the scan streams and is interruptible, so a long
+                    # level costs nothing -- you browse what has arrived and any
+                    # change of L or |g| abandons it.  A cap would only truncate
+                    # the answer to bound a time that is no longer a problem.
+
+def enumerate_gs_ex(L, glen, maxknots=MAXKNOTS):
+    """Distinct knots at (L, |g|=glen), one canonical g each.  -> (gs, truncated)
+
+    Runs to completion by default (maxknots=None).  maxknots remains for callers that
+    genuinely want a prefix; the UI does not, because the scan streams and is
+    interruptible, so there is no time to bound.
+
+    Any prefix is well defined and deterministic.  Scanning words lexicographically, the
+    first member of a commutation/rotation class you meet is its lex-smallest member,
+    which IS its canonical form -- so knots are emitted in sorted order and stopping
+    early yields exactly the maxknots lexicographically smallest ones.  (That is also
+    why the old out.sort() was a no-op.)  Indices therefore never shift, which is what
+    makes streaming to the UI safe.
+
+    History, so the reasoning is not relitigated: this began as a cap on (L-1)**glen that
+    REFUSED whole levels -- the wrong quantity, since knot counts are modest (L=6: 1, 7,
+    71, 778 at |g|=5,7,9,11) while the candidate space grows 25x per step, so levels with
+    a few hundred browsable knots were rejected for the brute force behind them.  Before
+    that it silently truncated mid-scan with no indication at all.  Streaming plus
+    interruption removes the need for any limit on the answer.
+
+    NO LIMIT on the level.  There used to be one on the candidate space ((L-1)**glen),
+    which was pointless: the scan walks words lexicographically from (1,1,...,1) and
+    canonical knots turn up immediately, so the size of the space says nothing about how
+    fast the first knots arrive.  Measured: L=5 |g|=14 has 268 million words yet yields
+    knot #1 in 0.02s and #20 in 1.1s.  A limit there refused levels whose first screenful
+    was instant.  Runaway CPU on a level nobody is watching is the server's problem to
+    solve (it stops an idle scan), not a reason to refuse the level.
+    """
+    out=[]
+    for g in iter_gs(L, glen, maxknots):
+        out.append(g)
+    return out, (maxknots is not None and len(out)>=maxknots)
+
+
+def iter_gs(L, glen, maxknots=MAXKNOTS):
+    """Yield the knots one at a time, in sorted order.
+
+    A generator so a caller can show the first knot immediately and abandon the scan
+    partway -- the UI only ever browses from index 1 upward, so waiting for the final
+    count before displaying anything is wasted time.  elastic/server.py drives this from
+    a worker thread and stops it when L or |g| changes.
+    """
     Bc=b.smallest_coprime_b(L)
-    seen_canon=set(); seen_key=set(); out=[]; n=0
+    seen_canon=set(); seen_key=set(); found=0
     for w in product(range(1,L), repeat=glen):
-        n+=1
-        if n>cap: break
         g=list(w)
-        if minperiod(g)!=g: continue                 # cheap: literal powers
-        if e.perm_cycles(g,L)!=1: continue           # all strands same (single cycle)
+        # ORDER MATTERS: perm_cycles is O(n) and discards ~75%, minperiod is O(n^2).
+        # The cheap rotation test (a canonical word starts at its own minimum) prunes
+        # ~94% more before g_canon, which is the other expensive stage.
+        if e.perm_cycles(g,L)!=1: continue
+        if g[0]!=min(g): continue
+        if minperiod(g)!=g: continue
         c=g_canon(g,L)
         if c in seen_canon: continue
         seen_canon.add(c)
         key=pb4.braid_key(g,L,Bc)                     # authoritative knot dedup
         if key is None or key in seen_key: continue
         seen_key.add(key)
-        # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not a
-        # power).  Runs on the few hundred survivors, not the ~L^glen candidates.
-        if is_knot_power(list(c)): continue
-        out.append(list(c))
-    out.sort()
-    return out
+        # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not one).
+        # None = undecided (class too large to decide): keep it.  Dropping would hide a
+        # real knot; keeping at worst duplicates a lower-|g| family at a different B.
+        if is_knot_power(list(c)) is True: continue
+        yield list(c)
+        found+=1
+        if maxknots is not None and found>=maxknots: return
+
+def enumerate_gs(L, glen, maxknots=MAXKNOTS):
+    """Just the list; see enumerate_gs_ex for the truncation flag."""
+    return enumerate_gs_ex(L, glen, maxknots)[0]
 
 def build(L, g):
     """Minimal-W zigzag for step-word g, by solving the diagram's linear system.
@@ -132,11 +186,13 @@ def build(L, g):
             'C':len(out['runs'])//2, 'rotation':g,
             'verdict':out['verdict'], 'tier':out['tier']}
 
-def enumerate_built(L, glen, cap=4_000_000):
+def enumerate_built(L, glen, maxknots=MAXKNOTS):
     """Enumeration with construction: each entry has g, W, C, runs.
-       (Symmetry is computed app-side from the rendered diagram.)"""
+       (Symmetry is computed app-side from the rendered diagram.)
+
+    Shares enumerate_gs's output bound so the two cannot disagree about a level."""
     out=[]
-    for g in enumerate_gs(L, glen, cap):
+    for g in enumerate_gs(L, glen, maxknots):
         bd=build(L, g)
         if bd is not None: out.append(bd)
     return out
