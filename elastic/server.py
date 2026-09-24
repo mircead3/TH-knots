@@ -321,7 +321,10 @@ class Handler(BaseHTTPRequestHandler):
             if bd is not None:
                 _BUILD_CACHE[ckey] = bd; _CACHE_DIRTY = True; _cache_save()
         if bd is None:
-            self._send_json(422, {'error': 'construction failed', 'g': g, 'L': L}); return
+            # A g whose permutation is not a single L-cycle has no diagram at any W;
+            # g_solve rejects it up front rather than scanning every W.
+            self._send_json(422, {'error': 'construction failed', 'g': g, 'L': L,
+                                  'short': 'no diagram for this g'}); return
         self._send_json(200, bd)
 
     def _handle_start(self):

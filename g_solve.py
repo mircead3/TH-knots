@@ -341,8 +341,9 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     """Smallest W with a VERIFIED diagram.  Deterministic -- no sampling.
 
     -> (solution, verdict) with verdict:
-       'minimal'  every smaller even W proven infeasible AND this W exhibited
-       'achieved' some smaller W stayed feasible with no diagram found (upper bound only)
+       'minimal'     every smaller even W proven infeasible AND this W exhibited
+       'achieved'    some smaller W stayed feasible with no diagram found (upper bound)
+       'not-a-knot'  perm(g) is not a single L-cycle, so there is nothing to draw
 
     max_tier caps the escalation, for experiments only -- DO NOT lower it in callers.
     Tier 3 does more than certify minimality: for some rotations of g, tiers 1-2 return
@@ -350,6 +351,14 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     (g=[2,1,3,2,1,1,1,4,4,4] gives W=14 at max_tier=2 versus 10 at 3).  The returned W is
     a property of the knot, so it must not depend on the rotation -- capping breaks that.
     """
+    # PRECONDITION: perm(g) must be a single L-cycle ("all strands the same"), or no
+    # diagram exists at any W and the scan below would grind through every W to Wmax
+    # doing full three-tier work at each before giving up.  2.4us to check against a
+    # ~1.5s solve, and it converts a slow indirect failure into an immediate one.
+    # The enumeration already filters on this; hand-built words (e.g. a POST to
+    # /construct) do not come through it.
+    if perm_cycles(list(g), L) != 1:
+        return None, 'not-a-knot'
     W = max(2, wlb(g)); W += W % 2
     proven = True
     while W <= Wmax:

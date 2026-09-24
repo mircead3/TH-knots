@@ -83,6 +83,13 @@ for L,gl,space in ((5,20,4**20),(7,20,6**20),(9,16,8**16)):
        'L=%d |g|=%2d (%s words): first knot in %.2fs, not refused'
        %(L,gl,format(space,','),el))
 
+print('4c. a g that is not a single L-cycle is rejected at once, not after scanning W')
+for g,L in (([1,1],3), ([2]*7,3), ([1,2,1,2],4)):
+    t0=time.time(); sol,verdict = GS.solve_min(g,L); el=time.time()-t0
+    ok(sol is None and verdict=='not-a-knot' and el<0.05,
+       'L=%d g=%s -> not-a-knot in %.3fs (no W scan)'%(L,g,el))
+ok(GS.solve([1,2,3,4],5)['W']==2, 'and a valid single-cycle g is unaffected')
+
 print('5. minimal W is rotation-invariant (it is a property of the knot)')
 for g,L in [([2,1,3,2,1,1,1,4,4,4],5), ([2,3,1,1,1,2,4,4,4,3],5)]:
     Ws = {GS.solve(g[r:]+g[:r], L)['W'] for r in range(len(g))}
