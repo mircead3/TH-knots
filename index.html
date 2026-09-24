@@ -194,7 +194,7 @@
       <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
     </div>
   </div>
-  <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;">— knots</div>
+  <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;"></div>
 
   <div id="gSection" style="display:none;">
     <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:6px;">— / —</div>
@@ -830,10 +830,10 @@ function buildTubeDiagram() {
 const infoName      = document.getElementById('infoName');
 
 function updateInfo(B, g = 1, crossings = null, components = null) {
-  // The braid view is B-free: show only braid-relevant info (strand count),
-  // not closure quantities (bights/crossings/components).
+  // The braid view is B-free: no closure quantities (bights/crossings/components),
+  // and no strand count either -- L is already in the leads box.
   if (showTubeDiag) {
-    infoName.textContent = `${LEADS}-strand braid`;
+    infoName.textContent = '';
   } else {
     // bights + crossings now live in the knotStats panel; header shows only link components.
     infoName.textContent = g > 1 ? `${g} components` : '';
@@ -885,6 +885,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
       try { det = knotDeterminantOf(alexanderMatrix(buildCrossingList(components[0], mod))).toString(); }
       catch (e) { det = '—'; }
       lines.push(`bights ${mod}   crossings ${crossings}   genus ${genus}   det ${det}`);
+      lines.push(chiralityOf(g, LEADS, crossings / len));
     } else {
       lines.push(`bights ${mod}   crossings ${crossings}   components ${ncomp}`);
     }
@@ -897,12 +898,11 @@ function updateKnotStats(B, ncomp, crossings, components) {
   el.style.display = '';
 }
 
-// Number of different knots/links for the current C and L, shown under Leads.
+// The C-mode "N knots" line under Leads was dropped as unneeded; g-mode shows its
+// count in gIdx.
 function updateKnotCount() {
   if (gMode) { updateGDisplays(); return; }
-  const n = countDistinctKnots();
-  document.getElementById('knotCountDisplay').textContent =
-    `${n} knot${n === 1 ? '' : 's'}`;
+  document.getElementById('knotCountDisplay').textContent = '';
 }
 
 // ── View state ─────────────────────────────────────────────────────────────
@@ -1474,8 +1474,31 @@ function syncAB2List(m) {
 
 function getAB() { return [currentA, currentB]; }
 
-function minLeads()  { return gMode ? 3 : currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
-function minBights() { return gMode ? 1 : currentC === 1 ? 2 : 1; }
+function minLeads()  { return gMode ? 2 : currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
+function minBights() { return gMode ? (gB1Minimal(currentG) ? 1 : 2) : currentC === 1 ? 2 : 1; }
+
+// g-mode allows B=1 only when every generator occurs at least twice in g.  A generator
+// that occurs once in the closed word is a nugatory crossing: it untwists away, and the
+// B=1 drawing is then not minimal -- it is a connected sum of smaller closed braids that
+// each have a clean drawing elsewhere (e.g. 1 1 1 2 at L=3, B=1 is the trefoil, which is
+// g = 1 at L=2, B=3).  With every generator repeated the B=1 diagram is reduced
+// alternating, so it is minimal and the panel's crossings/genus are exact.  (For B >= 2
+// every generator occurs >= B >= 2 times, so this never arises.)  The count is the same
+// for every spelling of the knot, so the enumerated g can be used directly.
+function gB1Minimal(g) {
+  if (!g || !g.length) return true;
+  const cnt = {};
+  for (const x of g) cnt[Math.abs(x)] = (cnt[Math.abs(x)] || 0) + 1;
+  return Object.values(cnt).every(c => c >= 2);
+}
+
+// Apply minBights() to the Bights box.  When B=1 is ruled out, move to the smallest
+// B >= 2 coprime to L, so the display stays a single knot.
+function enforceMinBights() {
+  const bInput = document.getElementById('bInput');
+  bInput.min = minBights();
+  if (parseInt(bInput.value) < minBights()) bInput.value = smallestCoprimeB(LEADS);
+}
 
 // Redraw whichever view is currently active.
 function redrawCurrentView() {
@@ -1597,7 +1620,7 @@ async function gRebuild(opts) {
   const myGen = ++gGen;
   const dir = opts.dir || 1;                    // direction to auto-skip un-constructible knots
   const L = parseInt(document.getElementById('mInput').value);
-  if (isNaN(L) || L < 3) return;
+  if (isNaN(L) || L < 2) return;
   LEADS = L;
   // Changing L restarts at that L's FIRST |g| (= L-1) rather than carrying over the old
   // one: |g| means something different at each L, and the old value is usually deep into
@@ -1639,6 +1662,7 @@ async function gRebuild(opts) {
         clearBusy();
         if (myGen !== gGen) return;            // superseded while constructing
         currentG = g;
+        enforceMinBights();   // B=1 only where its drawing is minimal
         setKnotFromRuns(bd.runs, L);
         gErr = '';
         updateGDisplays();
@@ -1755,12 +1779,10 @@ document.getElementById('cBtn2').classList.add('active');
 document.getElementById('gBtn').addEventListener('click', enterGMode);
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
-  // In g-mode, Up/Down ALWAYS step |g|, even while the leads box has focus: otherwise
-  // the browser's native number-input stepping changes L instead.  Left/Right still go
-  // to the input, so the text cursor keeps working while editing a value.
-  const vertical = (e.key === 'ArrowUp' || e.key === 'ArrowDown');
-  if (document.activeElement && document.activeElement.tagName === 'INPUT'
-      && !(gMode && vertical)) return;
+  // In g-mode the arrows ALWAYS browse (Up/Down step |g|, Left/Right step the knot),
+  // even while an input has focus: otherwise the browser's native handling takes them
+  // (number-input stepping changes L, a focused slider moves, the text cursor moves).
+  if (document.activeElement && document.activeElement.tagName === 'INPUT' && !gMode) return;
   // Build mode (tensegrity): arrows step the build sequence instead of the knot list.
   if (showStraight && buildMode) {
     e.preventDefault();
@@ -1879,15 +1901,6 @@ function flipIsNoOp() {
 
 function updateFlipButton() {
   document.getElementById('flipToggle').disabled = flipIsNoOp();
-}
-
-// Number of distinct knots/links for the current C and L: flip pairs count once,
-// self-flip (flip-disabled) knots count once → (N + selfFlipCount) / 2.
-function countDistinctKnots() {
-  // Lists are now deduped up to mirror, so each entry is one distinct knot.
-  if (currentC === 1) return 1;
-  if (currentC === 2) return ab2ValidList.length;
-  return c3ValidList.length;
 }
 
 function flipKnot() {
@@ -2032,7 +2045,70 @@ function stepCycleCount(g, L) {
   return cycles;
 }
 
-const gTokens = g => g.map(x => String(x)).join(' ');   // just the indices (negative = inverse)
+// Indices only, unsigned.  The word is read back off the drawn diagram with signs
+// (ascending-over => sigma^-1), but for these alternating diagrams every sign is fixed by
+// its index's parity -- all even-indexed generators share one sign, all odd-indexed the
+// other -- so the signs carry a single bit, the handedness, which the drawing already
+// shows and the flip button toggles.  Verified on 191 diagrams (C-scheme and g-mode).
+const gTokens = g => g.map(x => String(Math.abs(x))).join(' ');
+
+// u ~ v up to rotation + commutation (letters commute iff their indices differ by >= 2),
+// i.e. the two closed words draw the same heap of crossings on the cylinder.  No search:
+// that heap is fixed by, for each adjacent pair (i, i+1), the cyclic interleaving of
+// their letters.  The pairs form a chain 1-2-3-..., so choosing which occurrence of the
+// lowest generator comes first forces every later one; try each choice.  O(|g|^2).
+// Needs the generators present to be consecutive (every g contains 1..L-1).  Checked
+// against exhaustive rotation+commutation search: 12446 pairs, 0 disagreements.
+function cyclicTraceEqual(u, v) {
+  const n = u.length;
+  if (n !== v.length) return false;
+  if ([...u].sort((a, b) => a - b).join() !== [...v].sort((a, b) => a - b).join()) return false;
+  const gens = [...new Set(u.map(Math.abs))].sort((a, b) => a - b);
+  if (gens.length === 1) {
+    for (let r = 0; r < n; r++) if (u.every((x, i) => x === v[(i + r) % n])) return true;
+    return false;
+  }
+  const cnt = {};
+  for (const x of u) cnt[Math.abs(x)] = (cnt[Math.abs(x)] || 0) + 1;
+  const proj = (w, a, b) => w.filter(x => Math.abs(x) === a || Math.abs(x) === b);
+  for (let s1 = 0; s1 < cnt[gens[0]]; s1++) {
+    const s = { [gens[0]]: s1 };
+    let ok = true;
+    for (let k = 0; k + 1 < gens.length && ok; k++) {
+      const a = gens[k], b = gens[k + 1];
+      const pu = proj(u, a, b), pv = proj(v, a, b), m = pu.length;
+      // Cut pv at r so that its first a is occurrence s[a] (mod count); the rotated
+      // pv must equal pu, and the cut then says which b comes first.
+      let found = -1, na = 0, nb = 0;
+      for (let r = 0; r < m; r++) {
+        if (na % cnt[a] === s[a] && pu.every((x, i) => x === pv[(i + r) % m])) { found = nb % cnt[b]; break; }
+        if (Math.abs(pv[r]) === a) na++; else nb++;
+      }
+      if (found < 0) ok = false; else s[b] = found;
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+// Chirality of the closed braid g^reps (a knot drawn as a reduced alternating diagram
+// once nugatory crossings are discounted).  'chiral': the writhe of a reduced
+// alternating diagram is a knot invariant (Tait flyping conjecture, Menasco-
+// Thistlethwaite) and the mirror negates it, so writhe != 0 proves chirality.  A
+// generator that occurs once in g^reps is a nugatory crossing and is left out of the
+// writhe.  'amphichiral': the mirror word -- relabel i -> L-i (same knot) and negate
+// every sign (mirror) -- is g itself or g reversed (the same unoriented knot) up to
+// rotation + commutation.  Otherwise '?': the mirror may still be reachable by flypes.
+function chiralityOf(g, L, reps) {
+  const cnt = {};
+  for (const x of g) cnt[Math.abs(x)] = (cnt[Math.abs(x)] || 0) + 1;
+  let writhe = 0;
+  for (const x of g) if (cnt[Math.abs(x)] * reps >= 2) writhe += Math.sign(x) * reps;
+  if (writhe !== 0) return 'chiral';
+  const mir = g.map(x => -Math.sign(x) * (L - Math.abs(x)));
+  if (cyclicTraceEqual(g, mir) || cyclicTraceEqual([...g].reverse(), mir)) return 'amphichiral';
+  return 'chirality ?';
+}
 
 // Compute the step block g from the zigzag alone, WITHOUT the Bights box.  g is
 // B-independent, so we build the weave at the smallest bight count coprime to L

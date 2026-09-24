@@ -279,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             # The APP owns the usable cap (the leads input's max); this is only a sanity net
             # against a pathological request -- _candidate_words loops over L-1 values per
             # position, so an absurd L would hang rather than answer.
-            if not (3 <= L <= 64): raise ValueError('L out of range (3..64)')
+            if not (2 <= L <= 64): raise ValueError('L out of range (2..64)')
             # Same rule: the app decides what |g| is worth offering.  This is only a net
             # against an absurd request (recursion depth in _candidate_words is |g|).
             if not (1 <= glen <= 64): raise ValueError('|g| out of range (1..64)')
@@ -313,7 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             # The APP owns the usable cap (the leads input's max); this is only a sanity net
             # against a pathological request -- _candidate_words loops over L-1 values per
             # position, so an absurd L would hang rather than answer.
-            if not (3 <= L <= 64): raise ValueError('L out of range (3..64)')
+            if not (2 <= L <= 64): raise ValueError('L out of range (2..64)')
             if not g or any(not (1 <= x <= L-1) for x in g):
                 raise ValueError('g must be non-empty over 1..L-1')
         except Exception as e:
