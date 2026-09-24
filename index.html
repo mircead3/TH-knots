@@ -187,7 +187,7 @@
   <div style="display:flex;gap:18px;justify-content:center;">
     <div>
       <div class="label">Leads</div>
-      <input type="number" id="mInput" class="b-input" value="5" min="2" max="30">
+      <input type="number" id="mInput" class="b-input" value="5" min="2" max="20">
     </div>
     <div>
       <div class="label">Bights</div>
@@ -863,15 +863,19 @@ function updateKnotStats(B, ncomp, crossings, components) {
   if (cyc !== 1) console.warn(`sanity: perm(g) has ${cyc} cycles (not all-strands-same)`, g);
   const depth = (LEADS > 1 ? len / (LEADS - 1) : len).toFixed(2);   // crossings per step per pair
   const W     = PERIOD / LEADS;   // displacement (fundamental-domain width)
-  // Thread (zigzag) complexity: peaks+valleys of ONE strand per period, ÷2 (a
-  // turn at the period seam counts as ½, so it's independent of where you cut).
-  // ZIGZAG lists exactly those turning points, so it's just half their count.
-  const thread = ZIGZAG.length / 2;
+  // C: peaks+valleys of ONE strand per period, ÷2 (a turn at the period seam counts as
+  // ½, so it's independent of where you cut).  ZIGZAG lists exactly those turning
+  // points, so it's half their count.  This is the SAME C as the C/a/b/c/d scheme's --
+  // verified: for every C-scheme knot at L=6 that g_solve can draw, the minimal-W
+  // diagram preserves it exactly.  So a C=3 knot met while browsing g reads "C 3",
+  // which is how you spot the C-reachable ones in a g list (depth cannot do it: it is
+  // |g|/(L-1), the same for every knot at a level).  Named "thread" until now.
+  const C = ZIGZAG.length / 2;
 
   const lines = [];
   if (showTubeDiag) {
     // Braid view is B-free: just the step g and its per-step measures.
-    lines.push(`|g| ${len}   W ${W}   depth ${depth}   thread ${thread}`);
+    lines.push(`|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
   } else {
     // Knot/round view: closure invariants at the current B, then the step.
@@ -884,7 +888,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
     } else {
       lines.push(`bights ${mod}   crossings ${crossings}   components ${ncomp}`);
     }
-    lines.push(`|g| ${len}   W ${W}   depth ${depth}   thread ${thread}`);
+    lines.push(`|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
   }
   _knotStatsText = lines.join('\n');
@@ -1526,7 +1530,7 @@ function updateGDisplays() {
   // buried mid-panel in the invariants block it was easy to lose track of.
   // A truncated list shows '>N' -- N knots reached the cap, there are more.
   if (idxEl) {
-    const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">|g| ${gLen}</span>`;
+    const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">${gLen}</span>`;
     const rest = gErr ? gErr
         : (gList.length
              ? `${gListIdx + 1} / ${gList.length}${_enumPoll ? ' \u00b7 scanning ' + _scanSecs() + 's' : ''}`
@@ -1751,7 +1755,12 @@ document.getElementById('cBtn2').classList.add('active');
 document.getElementById('gBtn').addEventListener('click', enterGMode);
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  // In g-mode, Up/Down ALWAYS step |g|, even while the leads box has focus: otherwise
+  // the browser's native number-input stepping changes L instead.  Left/Right still go
+  // to the input, so the text cursor keeps working while editing a value.
+  const vertical = (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+  if (document.activeElement && document.activeElement.tagName === 'INPUT'
+      && !(gMode && vertical)) return;
   // Build mode (tensegrity): arrows step the build sequence instead of the knot list.
   if (showStraight && buildMode) {
     e.preventDefault();

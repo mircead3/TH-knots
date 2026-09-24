@@ -276,8 +276,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_body()
             L = int(body['L']); glen = int(body['glen'])
-            if not (3 <= L <= 9): raise ValueError('L must be 3..9')
-            if not (1 <= glen <= 24): raise ValueError('glen must be 1..24')
+            # The APP owns the usable cap (the leads input's max); this is only a sanity net
+            # against a pathological request -- _candidate_words loops over L-1 values per
+            # position, so an absurd L would hang rather than answer.
+            if not (3 <= L <= 64): raise ValueError('L out of range (3..64)')
+            # Same rule: the app decides what |g| is worth offering.  This is only a net
+            # against an absurd request (recursion depth in _candidate_words is |g|).
+            if not (1 <= glen <= 64): raise ValueError('|g| out of range (1..64)')
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'}); return
         # parity: a single L-cycle needs glen == (L-1) mod 2
@@ -305,7 +310,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_body()
             L = int(body['L']); g = [int(x) for x in body['g']]
-            if not (3 <= L <= 9): raise ValueError('L must be 3..9')
+            # The APP owns the usable cap (the leads input's max); this is only a sanity net
+            # against a pathological request -- _candidate_words loops over L-1 values per
+            # position, so an absurd L would hang rather than answer.
+            if not (3 <= L <= 64): raise ValueError('L out of range (3..64)')
             if not g or any(not (1 <= x <= L-1) for x in g):
                 raise ValueError('g must be non-empty over 1..L-1')
         except Exception as e:
