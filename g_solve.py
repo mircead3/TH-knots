@@ -32,12 +32,6 @@ post-check.  Ruling a W out is valid from any tier, since every constraint is ne
 for a valid diagram -- a weaker tier rules out fewer W's, never one wrongly.
 
   tier 1  the equations, k >= 1, x in [0,W), sum(m) = L, m <= 1
-
-On top of the tiers, solve_min requires the diagram's braid word to have period |g| (see
-full_period): "minimal W" means minimal among diagrams whose repeated tile really is g's,
-since a shorter-period tile repeated B times renders a DIFFERENT knot (h^k at B = h at
-kB).  Only knots whose minimal diagram is internally symmetric are affected -- one in the
-L<=5, |g|<=10 range, where W goes 4 -> 6.
   tier 2  + NO SAME-SLOPE OVERLAP.  Same-slope segments share a helix iff y - s*x agrees
           mod W, and on a helix y determines the point, so they overlap iff their
           y-intervals overlap in more than a point.  This subsumes coincident steps, a
@@ -56,20 +50,37 @@ L<=5, |g|<=10 range, where W goes 4 -> 6.
           pair of nodes *may* coincide, it need not, and skipping on that let a
           transversal crossing through.
 
-Measured on the full glen<=10 library (509 braid-key classes): 509/509 solved, every
-diagram post-verified AND independently confirmed by Gauss sequence, and W PROVEN MINIMAL
-for all 509 -- in 28s total.  505 knots are answered at tier 1 and 4 at tier 2; tier 3 is
-what rules out the last smaller W for the one knot that needs it
-(g=[1,1,1,2,1,3,2,4,4,4], where the equations alone stay feasible at W=8 but no diagram
-exists there).  17 knots come out STRICTLY BETTER than the previous rule-based hybrid
-(best: W=20 -> 4); none worse.
+On top of the tiers, solve_min requires perm(g) to be a single L-cycle (else there is no
+diagram at any W, and it returns 'not-a-knot' at once instead of scanning W), and requires
+the diagram's braid word to have period |g| (see full_period).  "Minimal W" means minimal
+among diagrams whose repeated tile really is g's: a shorter-period tile repeated B times
+renders a DIFFERENT knot (h^k at B = h at kB).  Only two words in the L<=5, |g|<=10 range
+were affected, and both are knot-level powers that gcatalog.enumerate_gs now drops, so
+the rule changes no library knot -- it still guards hand-built words.
+
+Measured on the glen<=10 library at L=3..5 (507 knots, after dropping knot-level
+powers): all 507 built through the app path, gcatalog.build, and all verdict 'minimal' --
+~36s total.  503 are answered at tier 1 and 4 at tier 2.  Tier 3 produces no returned
+diagram, but it is what rules out W=8 for g=[1,1,1,2,1,3,2,4,4,4], where the equations
+stay feasible yet no diagram exists (construct_brute agrees, exhaustively).
+
+Knot identity is certified by strict_ok -- the diagram closed at B is g's knot at the same
+B, at three coprime B -- NOT by the Gauss sequence: gauss_ok compares crossing order
+within the tile and passes a short-period diagram of a different knot.
+
+Against the app's previous constructor, construct4.construct_best: it built 76 of the
+then-509 knots and failed on the rest; g_solve matches its W on all 76.  There are NO W
+improvements -- the gain is coverage and provable minimality.  (An earlier "17 knots
+strictly better, best W=20 -> 4" claim here was wrong twice over: it compared against
+retired prototypes rather than the app, and the W=4 was a short-period diagram of a
+different knot.  Do not reinstate it.)
 
 RESIDUAL CAVEATS, stated rather than buried:
   * m <= 1 is an assumption.  Tested: no smaller W becomes feasible even at m <= 3.
   * |y| <= ymax is a window, not a proof.
   * The edge rules above are load-bearing: a missing edge under-constrains, a spurious
-    one over-constrains and would make infeasibility claims wrong.  509 Gauss-verified
-    diagrams support them in the realizability direction.
+    one over-constrains and would make infeasibility claims wrong.  507 library diagrams
+    passing strict_ok support them in the realizability direction.
   * Verdict 'achieved' no longer occurs on the library.  It used to, for the two knots
     whose KNOT is a repetition h^k although their WORD is not -- there the equations stay
     feasible at a smaller W but yield only a shorter-period diagram, and the solver cannot
@@ -90,9 +101,12 @@ RESIDUAL CAVEATS, stated rather than buried:
   * B must be COPRIME to L in any braid_key comparison, or the closure is a link rather
     than a knot and the comparison is meaningless (this once produced 145 phantom
     failures, exactly the L=3 and L=4 knots).
-  * L >= 6 and |g| > 10 are UNTESTED.  The app permits L up to 9 and |g| up to 24.
-    Nothing in the model is L-specific, so expect slow rather than wrong, but it has not
-    been measured.
+  * L >= 6 is EXERCISED, not swept.  Measured: at L=6 every C-scheme knot (34) solves
+    and its minimal-W diagram keeps the scheme's C exactly; L=6 |g|=11 (778 knots) and
+    L=7 |g|=10 (109) enumerate completely and contain every C knot at those levels; the
+    first knot of a level arrives in ~0.1s at every L up to 30.  NOT done: a full sweep
+    of any L>=6 level through gcatalog.build and strict_ok.  The app caps L at 20 (the
+    leads input's max); the server only nets absurd requests (L 3..64, |g| 1..64).
 """
 import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
@@ -357,7 +371,11 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     # ~1.5s solve, and it converts a slow indirect failure into an immediate one.
     # The enumeration already filters on this; hand-built words (e.g. a POST to
     # /construct) do not come through it.
-    if perm_cycles(list(g), L) != 1:
+    # abs(): g_solve accepts signed generators (edges() reads abs(g[t])), but
+    # enum_g.perm_cycles indexes a-1 directly, so a negative letter wraps around in
+    # Python and swaps the wrong strands -- a signed word that closes to ONE component
+    # was reported as three, and rejected here as not-a-knot.
+    if perm_cycles([abs(x) for x in g], L) != 1:
         return None, 'not-a-knot'
     W = max(2, wlb(g)); W += W % 2
     proven = True

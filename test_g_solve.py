@@ -89,6 +89,11 @@ for g,L in (([1,1],3), ([2]*7,3), ([1,2,1,2],4)):
     ok(sol is None and verdict=='not-a-knot' and el<0.05,
        'L=%d g=%s -> not-a-knot in %.3fs (no W scan)'%(L,g,el))
 ok(GS.solve([1,2,3,4],5)['W']==2, 'and a valid single-cycle g is unaffected')
+# Signed generators (over/under) must not trip the precondition: enum_g.perm_cycles
+# indexes a-1 directly, so a negative letter wrapped around and a one-component word
+# was read as three -- which once led to nine C-scheme KNOTS being reported as links.
+sg = GS.solve([1,-2,3,-4],5)
+ok(sg is not None and sg['W']==2, 'a SIGNED single-cycle word is not rejected (W=2)')
 
 print('5. minimal W is rotation-invariant (it is a property of the knot)')
 for g,L in [([2,1,3,2,1,1,1,4,4,4],5), ([2,3,1,1,1,2,4,4,4,3],5)]:
