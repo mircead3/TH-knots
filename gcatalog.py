@@ -7,7 +7,7 @@ replaces the old C/a/b/c/d parametrization. This module:
 Dedup is by the canonical Gauss code (braid_key); a cheap word-level canonical
 form (rotation + reversal + index-reflection) pre-filters obvious duplicates.
 """
-import braids as b, enum_g as e, pb4
+import braids as b, pb4
 import g_solve as GS
 from itertools import product
 
@@ -17,10 +17,33 @@ def minperiod(w):
         if n%p==0 and all(w[i]==w[(i+p)%n] for i in range(n)): return w[:p]
     return w
 
+def power_ks(g, L):
+    """The k > 1 for which g's knot COULD be a k-th power h^k.
+
+    If g's knot is h^k, every word in its rotation+commutation class is a rearrangement
+    of h^k, so k divides each generator's count; and perm(h)^k is a single L-cycle,
+    which needs gcd(k, L) = 1 (an L-cycle to the k-th power splits into gcd(k, L)
+    cycles).  Both hold for literal powers too.  Empty for almost every g, and then g is
+    neither a literal nor a knot-level power -- no search needed.  Same for every word
+    of g's class (and of its reversal/relabelling), so compute it once per class.
+    """
+    from math import gcd
+    counts={}
+    for x in g: counts[abs(x)]=counts.get(abs(x),0)+1
+    c=0
+    for v in counts.values(): c=gcd(c,v)
+    return [k for k in range(2,c+1) if c%k==0 and gcd(k,L)==1]
+
+def is_literal_power(w, ks):
+    """Is the word w, as written, h^k for some k in ks?  (Rotating by |w|/k gives w back.)
+    Only the admissible ks can occur (see power_ks), so this replaces a full minperiod."""
+    n=len(w)
+    return any(w[n//k:]+w[:n//k]==w for k in ks)
+
 CLASSCAP = 5000     # words of a rotation+commutation class to explore before
                     # giving up; see is_knot_power
 
-def is_knot_power(g, cap=CLASSCAP):
+def is_knot_power(g, cap=CLASSCAP, ks=None):
     """Is g's KNOT a repetition h^k, whether or not the WORD is one?
 
     Literal periodicity (minperiod(g) != g) is not invariant under the moves that
@@ -40,6 +63,7 @@ def is_knot_power(g, cap=CLASSCAP):
     post-check, not a constraint), needing construct_brute to settle.
 
     Returns True / False / None, where None means UNDECIDED: the class exceeded cap.
+    (Only once power_ks leaves some k open.)  ks: power_ks(g, L) if the caller has it.
     It used to raise there, on the grounds that silently returning False would keep an
     h^k knot.  But once the enumeration stopped refusing large levels, raising refused
     them instead -- and the cost of keeping such a knot is mild: the full-period rule
@@ -57,7 +81,13 @@ def is_knot_power(g, cap=CLASSCAP):
     """
     from collections import deque
     start=tuple(g); n=len(g)
-    if minperiod(list(start))!=list(start): return True
+    # Exact shortcut, no search: see power_ks.  With no admissible k, g is not a power.
+    # This decides almost every call at once (L=5 |g|=12: 2531 of 2714; L=4 |g|=11,
+    # L=6 |g|=11, L=7 |g|=10: all of them), including the classes over cap that used to
+    # come back undecided.  L is max(g)+1 because g contains every generator.
+    if ks is None: ks=power_ks(g, max(abs(x) for x in g)+1)
+    if not ks: return False
+    if is_literal_power(start, ks): return True
     seen={start}; q=deque([start])
     while q:
         w=list(q.popleft())
@@ -68,7 +98,7 @@ def is_knot_power(g, cap=CLASSCAP):
                 v=w[:]; v[i],v[j]=v[j],v[i]; cands.append(tuple(v))
         for v in cands:
             if v in seen: continue
-            if minperiod(list(v))!=list(v): return True
+            if is_literal_power(v, ks): return True
             seen.add(v); q.append(v)
             if len(seen)>cap: return None          # undecided: class too large
     return False
@@ -141,33 +171,47 @@ def _trace_sig(g, L):
 
 
 def _candidate_words(L, glen):
-    """Yield, in lex order, only the words that could possibly be a canonical g.
+    """Yield, in lex order, exactly the single-L-cycle words that start with 1.
 
     Two facts prune the space hard, and both are exact -- no knot is lost:
 
       * it starts with 1.  A single L-cycle word must contain every generator, so 1 is
         its minimum, and a rotation-minimal word starts at its minimum.  Fixing the
         first letter removes (L-2)/(L-1) of the space on its own.
-      * it contains EVERY generator 1..L-1.  So a prefix with more generators still
-        missing than positions remaining can never be completed: prune it rather than
-        enumerate its whole subtree.
+      * each letter is a transposition, which changes the permutation's cycle count by
+        exactly +-1: it merges two cycles if its two strands lie in different ones and
+        splits one if they share it.  So a prefix whose permutation has k cycles needs
+        at least k-1 more letters to reach one cycle; with fewer left, prune the whole
+        subtree.  (Parity is automatic: iter_gs is only asked for |g| = L-1 mod 2.)
+        This subsumes the older "every generator still missing must fit" rule -- m
+        missing generators cut the strands into at least m+1 blocks, so k-1 >= m.
 
-    Before this, iter_gs walked all (L-1)**glen words.  At L=7 |g|=10 that is 60.5M, of
-    which only the first 10.1M can hold a canonical form -- the other 50M were scanned
-    finding nothing, which is why the count sat unchanged for minutes at the end of a
-    level while the scan ground on.
+    Every leaf therefore IS a single cycle, and iter_gs no longer re-checks it.  Before
+    the cycle bound, 70-80% of the leaves were multi-cycle words discarded one by one
+    (L=7 |g|=10: 2.74M leaves -> 0.51M; L=5 |g|=12: 3.67M -> 1.14M).
     """
-    need0 = frozenset(range(1, L))
+    if glen < L - 1: return
+    perm = list(range(L))          # strand at each position after the prefix
     w = [0] * glen
-    def rec(i, missing):
-        if glen - i < len(missing): return          # cannot still fit the missing ones
+    def same_cycle(i, j):          # are positions i and j in one cycle of perm?
+        k = perm[i]
+        while k != i:
+            if k == j: return True
+            k = perm[k]
+        return False
+    def rec(i, cycles):
+        if glen - i < cycles - 1: return            # cannot merge down to one cycle
         if i == glen:
             yield list(w); return
         for v in range(1, L):                       # ascending keeps the output lex-ordered
             w[i] = v
-            yield from rec(i + 1, missing - {v} if v in missing else missing)
+            d = 1 if same_cycle(v - 1, v) else -1   # split or merge
+            perm[v - 1], perm[v] = perm[v], perm[v - 1]
+            yield from rec(i + 1, cycles + d)
+            perm[v - 1], perm[v] = perm[v], perm[v - 1]
     w[0] = 1
-    yield from rec(1, need0 - {1})
+    perm[0], perm[1] = perm[1], perm[0]
+    yield from rec(1, L - 1)
 
 
 def iter_gs(L, glen, maxknots=MAXKNOTS):
@@ -181,15 +225,14 @@ def iter_gs(L, glen, maxknots=MAXKNOTS):
     Bc=b.smallest_coprime_b(L)
     seen_canon=set(); seen_key=set(); sig_key={}; found=0
     for g in _candidate_words(L, glen):
-        # ORDER MATTERS: perm_cycles is O(n) and discards ~75%, minperiod is O(n^2).
-        # The cheap rotation test (a canonical word starts at its own minimum) prunes
-        # ~94% more before g_canon, which is the other expensive stage.
-        if e.perm_cycles(g,L)!=1: continue
-        if g[0]!=min(g): continue
-        if minperiod(g)!=g: continue
+        # Every candidate is already a single L-cycle starting at its minimum (see
+        # _candidate_words).  Everything below runs once per g_canon CLASS, not per word:
+        # periodicity and the power test are the same for every member of a class.
         c=g_canon(g,L)
         if c in seen_canon: continue
         seen_canon.add(c)
+        ks=power_ks(c, L)                             # usually empty: then no power tests
+        if ks and is_literal_power(c, ks): continue   # literal power h^k: h is listed at |g|/k
         sg=_trace_sig(c, L)                           # same trace => same knot
         if sg in sig_key: key=sig_key[sg]
         else: key=sig_key[sg]=pb4.braid_key(g,L,Bc)   # authoritative knot dedup
@@ -198,7 +241,7 @@ def iter_gs(L, glen, maxknots=MAXKNOTS):
         # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not one).
         # None = undecided (class too large to decide): keep it.  Dropping would hide a
         # real knot; keeping at worst duplicates a lower-|g| family at a different B.
-        if is_knot_power(list(c)) is True: continue
+        if ks and is_knot_power(list(c), ks=ks) is True: continue
         yield list(c)
         found+=1
         if maxknots is not None and found>=maxknots: return

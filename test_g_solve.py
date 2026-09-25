@@ -58,6 +58,15 @@ undec = GC.is_knot_power([1,2,3,4,5,6,1,2,3,4,5,6,2,1,4,3,6,5], cap=500)
 ok(undec is None, 'a class over the cap returns None (undecided), neither False nor raise')
 ok(GC.is_knot_power([1,2,1,3,2,4,3,4], cap=200) is True,
    'and a small cap still decides the real knot-powers (found after 4 and 23 words)')
+# Shortcut: h^k needs k | every generator count and gcd(k, L) = 1.  Here the counts
+# are coprime (1 occurs 3x, the rest 2x), so this is False with no search at all --
+# even under a cap that would otherwise leave it undecided.
+ok(GC.is_knot_power([1,1,1,2,3,2,4,3,4,5,6,5,6], cap=1) is False,
+   'coprime generator counts: not a power, decided without searching')
+# And coprimality: at L=4 every count is 2, but k=2 shares a factor with L, and an
+# L-cycle squared is not one cycle -- so no admissible k, False without searching.
+ok(GC.is_knot_power([1,1,2,2,3,3], cap=1) is False,
+   'counts share only factors of L: not a power, decided without searching')
 
 print('4b. enumeration streams, runs to completion, and never silently truncates')
 gs,tr = GC.enumerate_gs_ex(5,10)
