@@ -50,6 +50,21 @@ for a valid diagram -- a weaker tier rules out fewer W's, never one wrongly.
           pair of nodes *may* coincide, it need not, and skipping on that let a
           transversal crossing through.
 
+Tiers 2 and 3 are first tried LAZILY: solve with none of their pair constraints, add
+only the pairs the solution actually violates (overlap_violations, crossing_violations),
+re-solve, repeat.  The full systems carry a disjunction with its own integer variables
+for EVERY same-slope pair (tier 2) and every rising/falling pair (tier 3) -- hundreds --
+and the MILP then needs seconds, mostly to prove a W INFEASIBLE, which means exhausting a
+search tree that big-M disjunctions prune badly.  The lazy loop usually needs 2-3 rounds
+and a handful of pairs, and a small conflicting set is refuted at once:
+  L=5 g=1 1 1 1 1 1 1 2 3 4 3 4   tier 2         2.9s -> 0.09s
+  L=5 g=1 1 1 2 1 3 2 4 4 4       tier 3 (W=8)   12.9s -> 0.35s   (5 crossing pairs of 256)
+It stays sound: a subset of the pairs is a relaxation, so an infeasible round still
+rules W out, and only a solution passing the full post-check is accepted.  A lazy loop can
+end on a solution that its own pairs call clean yet the post-check rejects (the full tier
+may land on a different, passing solution), so the order is tier 1, lazy 2, lazy 3, then
+the full tiers 2 and 3 exactly as before.  Worst case: the old cost plus a few cheap rounds.
+
 On top of the tiers, solve_min requires perm(g) to be a single L-cycle (else there is no
 diagram at any W, and it returns 'not-a-knot' at once instead of scanning W), and requires
 the diagram's braid word to have period |g| (see full_period).  "Minimal W" means minimal
@@ -172,8 +187,43 @@ def wlb(g):
 
 # ---------------------------------------------------------------- the model
 
-def feasible(g, L, W, tier=1, ymax=60, mmax=1, seed=None):
-    """Feasibility of the tier-`tier` system at this fixed W.  -> solution dict or None."""
+def tier3_pairs(n, segs, bkind):
+    """Every (e, f, cl, ch): e rising, f falling, with cl/ch = 1 where a legal meeting
+    may sit at the low/high end of their y-overlap (see tier 3 in feasible)."""
+    # A meeting is LEGAL iff it sits at a node of BOTH segments -- either the same
+    # node (a designated crossing) or a peak/valley pair (a tangency).  Both are
+    # decidable statically, so the exclusion interval is closed or half-open per
+    # pair.  e rises A->Bn, f falls C->Dn, so y_A<y_Bn and y_Dn<y_C, hence
+    def compat(u, v):
+        if u == v: return True
+        if u < n or v < n: return False            # a crossing coincides with nothing
+        return bkind[u - n] != bkind[v - n]        # peak + valley = tangency
+    # NEVER skip a pair.  compat() says two nodes *could* coincide, not that they do
+    # -- skipping on it dropped a pair whose peak and valley ends sat 3 apart, which
+    # is how a transversal crossing slipped through.  Instead: e rises A->Bn and f
+    # falls C->Dn, so y_A <= lo and y_Bn >= hi; a legal meeting can therefore only
+    # sit at lo (if y_A is a compatible endpoint) or at hi (if y_Bn is).  Relax just
+    # those two boundaries.  (Lazy solving may OMIT pairs -- a relaxation, backed by
+    # the full system -- but the full system never does.)
+    opp = []
+    ns = len(segs)
+    for e in range(ns):
+        if segs[e][2] != 1: continue
+        for f in range(ns):
+            if segs[f][2] != -1: continue
+            A, Bn, _ = segs[e]; C, Dn, _ = segs[f]
+            cl = 1 if (compat(A, C) or compat(A, Dn)) else 0
+            ch = 1 if (compat(Bn, C) or compat(Bn, Dn)) else 0
+            opp.append((e, f, cl, ch))
+    return opp
+
+
+def feasible(g, L, W, tier=1, ymax=60, mmax=1, seed=None, pairs=None, opp_pairs=None):
+    """Feasibility of the tier-`tier` system at this fixed W.  -> solution dict or None.
+
+    pairs: restrict tier 2's no-overlap constraints to these (e, f) same-slope pairs;
+    opp_pairs: restrict tier 3's no-crossing constraints to these (e rising, f falling)
+    pairs.  None = all of them.  Relaxations, used by solve_min's lazy tiers."""
     n = len(g)
     nn, nb, segs, parent, bkind = segments(g, L)
     ns = len(segs)
@@ -216,6 +266,7 @@ def feasible(g, L, W, tier=1, ymax=60, mmax=1, seed=None):
     if tier >= 2:
         same = [(e, f) for e in range(ns) for f in range(e + 1, ns)
                 if segs[e][2] == segs[f][2]]
+        if pairs is not None: same = [p for p in same if p in pairs]
         NQ = grow(len(same) + 3 * len(same))
         NB = NQ + len(same)
         Q = (2 * ymax + 2 * W) // W + 2
@@ -242,29 +293,8 @@ def feasible(g, L, W, tier=1, ymax=60, mmax=1, seed=None):
 
     # --- tier 3: no transversal crossing
     if tier >= 3:
-        # A meeting is LEGAL iff it sits at a node of BOTH segments -- either the same
-        # node (a designated crossing) or a peak/valley pair (a tangency).  Both are
-        # decidable statically, so the exclusion interval is closed or half-open per
-        # pair.  e rises A->Bn, f falls C->Dn, so y_A<y_Bn and y_Dn<y_C, hence
-        def compat(u, v):
-            if u == v: return True
-            if u < n or v < n: return False            # a crossing coincides with nothing
-            return bkind[u - n] != bkind[v - n]        # peak + valley = tangency
-        # NEVER skip a pair.  compat() says two nodes *could* coincide, not that they do
-        # -- skipping on it dropped a pair whose peak and valley ends sat 3 apart, which
-        # is how a transversal crossing slipped through.  Instead: e rises A->Bn and f
-        # falls C->Dn, so y_A <= lo and y_Bn >= hi; a legal meeting can therefore only
-        # sit at lo (if y_A is a compatible endpoint) or at hi (if y_Bn is).  Relax just
-        # those two boundaries.
-        opp = []
-        for e in range(ns):
-            if segs[e][2] != 1: continue
-            for f in range(ns):
-                if segs[f][2] != -1: continue
-                A, Bn, _ = segs[e]; C, Dn, _ = segs[f]
-                cl = 1 if (compat(A, C) or compat(A, Dn)) else 0
-                ch = 1 if (compat(Bn, C) or compat(Bn, Dn)) else 0
-                opp.append((e, f, cl, ch))
+        opp = tier3_pairs(n, segs, bkind)
+        if opp_pairs is not None: opp = [t for t in opp if (t[0], t[1]) in opp_pairs]
         NT = grow(4 * len(opp))                # per pair: q, lo, hi, 2 binaries -> 5
         NT2 = grow(2 * len(opp))
         M = 6 * (ymax + W) + 20
@@ -351,6 +381,47 @@ def full_period(g, L, sol):
     return vr is not None and len(vr) == len(g)
 
 
+def overlap_violations(sol):
+    """The same-slope pairs (e, f) that OVERLAP in this solution -- exactly the pairs
+    whose tier-2 disjunction fails: their y-intervals overlap in more than a point AND
+    they share a helix (y - s*x agrees mod W)."""
+    segs, W = sol['segs'], sol['W']
+    X = list(sol['X']) + list(sol['BX']); Y = list(sol['Y']) + list(sol['BY'])
+    def span(k):
+        a, c, _ = segs[k]
+        return (a, c) if Y[a] <= Y[c] else (c, a)
+    out = []
+    for e in range(len(segs)):
+        for f in range(e + 1, len(segs)):
+            s = segs[e][2]
+            if segs[f][2] != s: continue
+            le, he = span(e); lf, hf = span(f)
+            if Y[he] <= Y[lf] or Y[hf] <= Y[le]: continue       # disjoint (or touching)
+            ae, af = segs[e][0], segs[f][0]
+            if ((Y[ae] - s * X[ae]) - (Y[af] - s * X[af])) % W: continue   # other helix
+            out.append((e, f))
+    return out
+
+
+def crossing_violations(sol):
+    """The (e rising, f falling) pairs whose tier-3 constraint this solution breaks:
+    evaluated as tier 3 states it, so it catches exactly what adding the pair would
+    forbid (including meetings between lattice points).  Meetings of e and f sit at
+    2Y = D + q*W; the pair is fine iff some q puts one meeting at or below the bottom of
+    their y-overlap and the next at or above its top, i.e. a multiple of W lies in
+    [2(hi-ch) + 2 - W - D, 2(lo+cl) - 2 - D]."""
+    segs, W, n = sol['segs'], sol['W'], len(sol['X'])
+    X = list(sol['X']) + list(sol['BX']); Y = list(sol['Y']) + list(sol['BY'])
+    out = []
+    for (e, f, cl, ch) in tier3_pairs(n, segs, sol['bkind']):
+        A, Bn, _ = segs[e]; C, Dn, _ = segs[f]
+        lo = max(Y[A], Y[Dn]); hi = min(Y[Bn], Y[C])
+        D = X[C] + Y[C] - X[A] + Y[A]
+        a = 2 * (hi - ch) + 2 - W - D; b_ = 2 * (lo + cl) - 2 - D
+        if (b_ // W) * W < a: out.append((e, f))
+    return out
+
+
 def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     """Smallest W with a VERIFIED diagram.  Deterministic -- no sampling.
 
@@ -381,12 +452,31 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     proven = True
     while W <= Wmax:
         got = None
-        for tier in range(1, max_tier + 1):
-            r = feasible(g, L, W, tier=tier)
+        ok = lambda r: not check(g, L, r) and not (require_full_period
+                                                   and not full_period(g, L, r))
+        # Order: tier 1, lazy 2, lazy 3, then the full tiers 2 and 3 as before.  Each
+        # lazy system is a relaxation of its full tier, so infeasible = W ruled out, and
+        # only a solution passing the full post-check is accepted; the full tiers run
+        # whenever a lazy loop ends on a solution that is clean by its own measure yet
+        # still fails the post-check.  See the module docstring.
+        plan = [(1, False)] + [(t, True) for t in (2, 3) if t <= max_tier] \
+             + [(t, False) for t in (2, 3) if t <= max_tier]
+        ov, cr = set(), set()                  # pairs collected by the lazy loops
+        for tier, lazy in plan:
+            if lazy:
+                while True:
+                    r = feasible(g, L, W, tier=tier, pairs=ov,
+                                 opp_pairs=cr if tier == 3 else None)
+                    if r is None: break
+                    a = set(overlap_violations(r)) - ov
+                    c = set(crossing_violations(r)) - cr if tier == 3 else set()
+                    if not a and not c: break
+                    ov |= a; cr |= c
+            else:
+                r = feasible(g, L, W, tier=tier)
             if r is None:
                 got = 'ruled-out'; break       # this W is impossible, at any tier
-            if not check(g, L, r) and not (require_full_period
-                                           and not full_period(g, L, r)):
+            if ok(r):
                 got = r; break
         if got is None:
             proven = False                     # feasible here, no diagram found
