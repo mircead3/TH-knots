@@ -1676,10 +1676,29 @@ async function gRebuild(opts) {
     }
     if (!gList.length) { currentG = null; gErr = `none at |g|=${gLen}`; updateGDisplays(); return; }
     gListIdx = ((gListIdx % gList.length) + gList.length) % gList.length;
-    // Try the selected knot; auto-skip ones that have no valid diagram so the UI
-    // never gets stuck on a failure. Give up only if the whole |g| level fails.
-    for (let tries = 0; tries < gList.length; tries++) {
-      const g = gList[gListIdx];
+    // Try the selected knot; auto-skip ones that have no valid diagram so the UI never
+    // gets stuck on a failure.  While the level is still STREAMING, running out of knots
+    // to try is not the end: wait for the scan to find more and carry on.  (It used to
+    // give up here, so a slow level whose first knot or two had no diagram was reported
+    // as having none at all.)  Only a finished scan with every knot failed is "none".
+    const failed = new Set();                   // this call's failures, by word
+    const streaming = () => _enumPoll && _enumPollKey === key;
+    for (;;) {
+      if (myGen !== gGen) return;
+      const n = gList.length;
+      let j = -1;                               // next untried knot, from gListIdx on
+      for (let t = 0; t < n; t++) {
+        const c = ((gListIdx + dir * t) % n + n) % n;
+        if (!failed.has(gList[c].join(','))) { j = c; break; }
+      }
+      if (j < 0) {
+        if (!streaming()) break;                // scan finished: really none
+        gErr = `no diagram for the ${n} found so far`; updateGDisplays();
+        await new Promise(res => setTimeout(res, 500));   // the poll grows gList
+        continue;
+      }
+      gListIdx = j;
+      const g = gList[j];
       try {
         showBusy('solving', () => showSolvingG(L, g));   // slow solve: show WHICH g
         const bd = await gConstruct(L, g);
@@ -1695,8 +1714,9 @@ async function gRebuild(opts) {
         else redrawCurrentView();
         return;
       } catch (e) {
+        clearBusy();          // or "solving" stays up, ticking, after the solve is over
         if (myGen !== gGen) return;
-        gListIdx = ((gListIdx + dir) % gList.length + gList.length) % gList.length;  // skip
+        failed.add(g.join(','));
       }
     }
     currentG = null; gErr = `no valid diagrams at |g|=${gLen}`; updateGDisplays();
