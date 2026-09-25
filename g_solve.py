@@ -92,7 +92,13 @@ different knot.  Do not reinstate it.)
 
 RESIDUAL CAVEATS, stated rather than buried:
   * m <= 1 is an assumption.  Tested: no smaller W becomes feasible even at m <= 3.
-  * |y| <= ymax is a window, not a proof.
+  * |y| <= ymax is NOT a restriction (it was, until 2026-09-24): ymax is at least W*L/2,
+    which no diagram can exceed.  The curve is closed and has exactly W*L unit steps (the
+    segments' k sum to W*sum(m) = W*L, since every node is entered as often as it is
+    left), so it climbs at most W*L/2 above any point, and node 0 is pinned at y = 0.
+    The old fixed ymax=60 was below that bound once W*L > 120 and then ruled W's out
+    wrongly: L=11 g=1^7 2 3 .. 10 needs y up to 64 at W=14, so every W failed and the
+    level's first knots showed "no valid diagrams".
   * The edge rules above are load-bearing: a missing edge under-constrains, a spurious
     one over-constrains and would make infeasibility claims wrong.  507 library diagrams
     passing strict_ok support them in the realizability direction.
@@ -218,13 +224,16 @@ def tier3_pairs(n, segs, bkind):
     return opp
 
 
-def feasible(g, L, W, tier=1, ymax=60, mmax=1, seed=None, pairs=None, opp_pairs=None):
+def feasible(g, L, W, tier=1, ymax=None, mmax=1, seed=None, pairs=None, opp_pairs=None):
     """Feasibility of the tier-`tier` system at this fixed W.  -> solution dict or None.
 
     pairs: restrict tier 2's no-overlap constraints to these (e, f) same-slope pairs;
     opp_pairs: restrict tier 3's no-crossing constraints to these (e rising, f falling)
     pairs.  None = all of them.  Relaxations, used by solve_min's lazy tiers."""
     n = len(g)
+    # Height window: W*L/2 bounds every diagram (see RESIDUAL CAVEATS), so this never
+    # excludes one.  The floor of 60 keeps small cases' big-M constants as they were.
+    if ymax is None: ymax = max(60, (W * L + 1) // 2)
     nn, nb, segs, parent, bkind = segments(g, L)
     ns = len(segs)
 
