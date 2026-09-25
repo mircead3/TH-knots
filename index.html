@@ -1555,10 +1555,14 @@ function updateGDisplays() {
   if (idxEl) {
     const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">${gLen}</span>`;
     const rest = gErr ? gErr
-        : (gList.length
-             ? `${gListIdx + 1} / ${gList.length}${_enumPoll ? ' \u00b7 scanning ' + _scanSecs() + 's' : ''}`
-             : '— / —');
-    idxEl.innerHTML = `${big}<span style="opacity:0.45;margin:0 8px">·</span>${rest}`;
+        : (gList.length && gList._key === LEADS + '|' + gLen   // not the previous level's list
+             ? `${gListIdx + 1} / ${gList.length}` : '— / —');
+    // Progress ("scanning Ns" / "solving Ns") goes on its own line below.  The line is
+    // always there (a blank one when idle) so the box does not jump in height each time
+    // a message comes and goes -- "solving" flashes up on many arrow presses.
+    const status = gBusy || (_enumPoll ? `scanning ${_scanSecs()}s` : '');
+    idxEl.innerHTML = `${big}<span style="opacity:0.45;margin:0 8px">·</span>${rest}`
+      + `<div style="font-size:11px;opacity:0.7;margin-top:2px">${status || '&nbsp;'}</div>`;
   }
   const cnt = document.getElementById('knotCountDisplay');
   if (cnt) cnt.textContent = '';   // count is in gIdx; |g| and g live in the invariants panel
@@ -1570,19 +1574,39 @@ function updateGDisplays() {
 // A STATIC message still reads as a hang once the wait passes a few seconds, so tick
 // the elapsed time: |g|=12 at L=5 is ~113s of real enumeration, and the only way to
 // tell that apart from a freeze is to watch a number move.
-let _busyTimer = null, _busyTick = null;
-function showBusy(msg) {
+let _busyTimer = null, _busyTick = null, gBusy = '';
+// onShow (optional) runs once, when the message first appears -- i.e. only for a wait
+// that has already passed 300ms, so fast (cached) steps do not flash anything.
+function showBusy(msg, onShow) {
   clearBusy();
   const t0 = Date.now();
   const paint = () => {
-    gErr = `${msg} ${Math.round((Date.now() - t0) / 1000)}s`;   // e.g. "scanning 12s"
+    gBusy = `${msg} ${Math.round((Date.now() - t0) / 1000)}s`;   // e.g. "scanning 12s"
     updateGDisplays();
   };
-  _busyTimer = setTimeout(() => { paint(); _busyTick = setInterval(paint, 1000); }, 300);
+  _busyTimer = setTimeout(() => {
+    if (onShow) onShow();
+    paint(); _busyTick = setInterval(paint, 1000);
+  }, 300);
+}
+
+// While a knot is being solved, the invariants panel would otherwise keep showing the
+// PREVIOUS knot, so a slow one could not be identified.  Show the g being solved -- the
+// browsed (canonical) spelling, exactly what was sent to the solver -- in its place.
+// Everything else in the panel needs the diagram, so it waits for the solve.  Once the
+// knot draws, the panel switches to the usual word read back off the diagram, a
+// different spelling of the same knot.
+function showSolvingG(L, g) {
+  const el = document.getElementById('knotStats');
+  if (!el || showStraight) return;
+  _knotStatsSig = null;                       // force a full recompute after the solve
+  el.textContent = `solving L ${L}   |g| ${g.length}\ng:  ${gTokens(g)}`;
+  el.style.display = '';
 }
 function clearBusy() {
   if (_busyTimer) { clearTimeout(_busyTimer); _busyTimer = null; }
   if (_busyTick)  { clearInterval(_busyTick); _busyTick = null; }
+  if (gBusy) { gBusy = ''; updateGDisplays(); }
 }
 
 // The server streams knots as it finds them, so we wait only for the FIRST one and let
@@ -1657,7 +1681,7 @@ async function gRebuild(opts) {
     for (let tries = 0; tries < gList.length; tries++) {
       const g = gList[gListIdx];
       try {
-        showBusy('solving');      // which g it is, is on the line above
+        showBusy('solving', () => showSolvingG(L, g));   // slow solve: show WHICH g
         const bd = await gConstruct(L, g);
         clearBusy();
         if (myGen !== gGen) return;            // superseded while constructing
@@ -4286,7 +4310,64 @@ document.getElementById('symmetryToggle').addEventListener('click', () => {
   redrawCurrentView();
 });
 
+// 'c' copies a one-line description of the current knot, to paste into a message.
+// g-mode names the BROWSED g (what the solver receives, so a slow or bad knot can be
+// reproduced from it), even while that knot is still solving.
+function knotDescription() {
+  const L = parseInt(document.getElementById('mInput').value);
+  const B = parseInt(document.getElementById('bInput').value);
+  const flip = knotFlipped ? ' flipped' : '';
+  if (gMode) {
+    const onLevel = gList.length && gList._key === L + '|' + gLen;
+    const g = onLevel ? gList[gListIdx] : null;
+    const idx = onLevel ? ` #${gListIdx + 1}/${gList.length}` : '';
+    return `L=${L} |g|=${gLen}${idx} g=${g ? g.join(' ') : '?'} B=${B}${flip}`;
+  }
+  if (currentC === 2) {
+    const idx = ab2ValidIdx >= 0 ? ` #${ab2ValidIdx + 1}/${ab2ValidList.length}` : '';
+    return `C=2 L=${L}${idx} a,b=${currentA},${currentB} B=${B}${flip}`;
+  }
+  if (currentC === 3) {
+    const idx = c3ValidIdx >= 0 ? ` #${c3ValidIdx + 1}/${c3ValidList.length}` : '';
+    const form = c3FormIdx ? ` form=${c3FormIdx}` : '';
+    return `C=3 L=${L}${idx} a,b,c,d=${c3A},${c3B},${c3C},${c3D} B=${B}${flip}${form}`;
+  }
+  return `C=${currentC} L=${L} B=${B}${flip}`;
+}
+
+// Clipboard API first; the textarea fallback covers pages where it is unavailable
+// (it needs a secure context, which a file:// page may not be).  The text is also
+// logged, so it is never lost.  The panel's header line confirms it for 1.5s.
+let _copiedTimer = null;
+function copyKnotDescription() {
+  const text = knotDescription();
+  console.log('copied:', text);
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (err) {}
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(fallback);
+  else fallback();
+  const el = document.getElementById('infoName');
+  if (_copiedTimer) clearTimeout(_copiedTimer); else el.dataset.prev = el.textContent;
+  el.textContent = 'copied: ' + text;
+  const shown = el.textContent;
+  _copiedTimer = setTimeout(() => {
+    if (el.textContent === shown) el.textContent = el.dataset.prev || '';   // unless redrawn meanwhile
+    _copiedTimer = null;
+  }, 1500);
+}
+
 document.addEventListener('keydown', (e) => {
+  if ((e.key === 'c' || e.key === 'C') && !e.metaKey && !e.ctrlKey && !e.altKey &&
+      !(document.activeElement && document.activeElement.tagName === 'INPUT' &&
+        document.activeElement.type === 'text')) {
+    copyKnotDescription();
+    return;
+  }
   if (e.key === 'Escape' && (showDiagram || showRoundDiag || showTubeDiag || showKnot || showStraight)) enterKnotMode();
   // 'r' resets the current view to its standard framing:
   //  - knot/straight: revert orbit (reset() restores the construction-time
