@@ -84,12 +84,18 @@ def _cache_signature():
         with open(os.path.join(root, name), 'rb') as f: h.update(f.read())
     return h.hexdigest()[:16]
 
+# Taken ONCE, at startup -- the source this process actually imported.  Computing it at
+# save time instead read whatever was on disk then, so editing gcatalog.py under a
+# running server saved the OLD code's results under the NEW code's signature, and the
+# next start trusted them.
+_CACHE_SIG = _cache_signature()
+
 def _cache_load():
     try:
         with open(_CACHE_FILE) as f: d = json.load(f)
     except Exception:
         return
-    if d.get('sig') != _cache_signature():
+    if d.get('sig') != _CACHE_SIG:
         print('g-cache: signature changed (gcatalog/g_solve edited) -- ignoring stale cache')
         return
     for k, v in d.get('enum', {}).items():
@@ -105,7 +111,7 @@ def _cache_save():
     tmp = _CACHE_FILE + '.tmp'
     try:
         with open(tmp, 'w') as f:
-            json.dump({'sig': _cache_signature(),
+            json.dump({'sig': _CACHE_SIG,
                        'enum': {'%d|%d' % k: v for k, v in _ENUM_CACHE.items()},
                        'build': {'%d|%s' % (k[0], ','.join(map(str, k[1]))): v
                                  for k, v in _BUILD_CACHE.items()}}, f)
