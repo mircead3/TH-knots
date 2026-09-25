@@ -76,6 +76,21 @@ import itertools as _it
 ok(list(_it.islice(GC.iter_gs(5,10),10))==gs[:10],
    'iter_gs yields a PREFIX of the full list -- indices never shift as it streams')
 ok(gs==sorted(gs),               'knots arrive in sorted order (first class member IS canonical)')
+# Big levels (above GC.SAMPLE_ABOVE) open with randomly SAMPLED knots for variety, then
+# the full scan.  Same set of knots, still a stable prefix, just not sorted.
+import pb4 as _pb4, braids as _b
+_key = lambda L, g: _pb4.braid_key(g, L, _b.smallest_coprime_b(L))
+smp = list(GC.iter_gs(5,10,sample=True))
+ok(sorted(map(tuple,smp))!=list(map(tuple,smp)) and
+   sorted(_key(5,g) for g in smp)==sorted(_key(5,g) for g in gs),
+   'sampling first: same %d knots as the sorted scan, in a different order'%len(gs))
+ok(list(_it.islice(GC.iter_gs(5,10,sample=True),10))==smp[:10],
+   'sampled order is reproducible (seeded by L, |g|): a prefix of the full list')
+ok(len({_key(5,g) for g in smp})==len(smp), 'and no knot appears twice')
+first20 = list(_it.islice(GC.iter_gs(5,12),20))
+ok(len({tuple(g[:4]) for g in first20})>=5,
+   'L=5 |g|=12 samples by default: its first 20 knots open with %d different 4-letter prefixes'
+   %len({tuple(g[:4]) for g in first20}))
 gs2,tr2 = GC.enumerate_gs_ex(5,8,maxknots=10)
 ok(len(gs2)==10 and tr2 is True, 'an explicit maxknots still works and reports truncated')
 # No level is refused any more, and the size of the candidate space says nothing about

@@ -214,35 +214,90 @@ def _candidate_words(L, glen):
     yield from rec(1, L - 1)
 
 
-def iter_gs(L, glen, maxknots=MAXKNOTS):
-    """Yield the knots one at a time, in sorted order.
+# Big levels are scanned in lexicographic order, so their first knots all open with long
+# runs of 1s and look alike -- and at a big level those first few are all anyone browses.
+# Above this size iter_gs first SAMPLES random words for variety, then runs the full scan
+# for completeness.  Size = (L-1)**(|g|-1), the unpruned candidate count; 10**6 puts the
+# switch at L=5 |g|=12, L=6 |g|=11, L=7 |g|=10, L=8 |g|=9, L=9 |g|=8 -- the levels whose
+# full scan takes ~10s or more.
+SAMPLE_ABOVE = 10**6
+SAMPLE_KNOTS = 200       # knots to take by sampling before switching to the full scan
+SAMPLE_STALL = 200       # ...or stop sampling after this many valid words in a row add nothing
+
+def _single_cycle(g, L):
+    perm = list(range(L))
+    for v in g: perm[v - 1], perm[v] = perm[v], perm[v - 1]
+    k = perm[0]; n = 1
+    while k != 0: k = perm[k]; n += 1
+    return n == L
+
+def _sampled_words(L, glen):
+    """Random single-L-cycle words, forever.  Seeded by (L, |g|), so a level's order --
+    and hence what "#9" means -- is the same on every run."""
+    import random
+    rng = random.Random(L * 100003 + glen)
+    while True:
+        g = [rng.randint(1, L - 1) for _ in range(glen)]
+        if _single_cycle(g, L): yield g
+
+def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
+    """Yield the knots one at a time.
 
     A generator so a caller can show the first knot immediately and abandon the scan
     partway -- the UI only ever browses from index 1 upward, so waiting for the final
     count before displaying anything is wasted time.  elastic/server.py drives this from
     a worker thread and stops it when L or |g| changes.
+
+    ORDER.  Small levels: sorted (lexicographic by canonical word).  Big levels (see
+    SAMPLE_ABOVE; sample=True/False forces it): first up to SAMPLE_KNOTS knots found by
+    random sampling, then the full lexicographic scan, which skips every knot already
+    yielded.  Either way the set of knots is the same and complete, and knots are only
+    ever APPENDED, so an index never changes meaning while the list grows.  One
+    difference: a knot found by sampling is shown in the canonical spelling of whichever
+    class was met first -- still a spelling of the same knot, not always the smallest.
     """
     Bc=b.smallest_coprime_b(L)
-    seen_canon=set(); seen_key=set(); sig_key={}; found=0
-    for g in _candidate_words(L, glen):
-        # Every candidate is already a single L-cycle starting at its minimum (see
-        # _candidate_words).  Everything below runs once per g_canon CLASS, not per word:
-        # periodicity and the power test are the same for every member of a class.
+    seen_canon=set(); seen_key=set(); sig_key={}
+    def admit(g):
+        """The canonical word if g is a NEW knot, else None.  g: a single-L-cycle word.
+        Everything here runs once per g_canon CLASS, not per word: periodicity and the
+        power test are the same for every member of a class."""
         c=g_canon(g,L)
-        if c in seen_canon: continue
+        if c in seen_canon: return None
         seen_canon.add(c)
         ks=power_ks(c, L)                             # usually empty: then no power tests
-        if ks and is_literal_power(c, ks): continue   # literal power h^k: h is listed at |g|/k
+        if ks and is_literal_power(c, ks): return None   # literal h^k: h is listed at |g|/k
         sg=_trace_sig(c, L)                           # same trace => same knot
         if sg in sig_key: key=sig_key[sg]
         else: key=sig_key[sg]=pb4.braid_key(g,L,Bc)   # authoritative knot dedup
-        if key is None or key in seen_key: continue
+        if key is None or key in seen_key: return None
         seen_key.add(key)
         # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not one).
         # None = undecided (class too large to decide): keep it.  Dropping would hide a
         # real knot; keeping at worst duplicates a lower-|g| family at a different B.
-        if ks and is_knot_power(list(c), ks=ks) is True: continue
-        yield list(c)
+        if ks and is_knot_power(list(c), ks=ks) is True: return None
+        return list(c)
+    found=0
+    if sample is None: sample = (L - 1) ** (glen - 1) > SAMPLE_ABOVE
+    if sample and glen >= L - 1 and (glen - (L - 1)) % 2 == 0:
+        stall=0
+        for g in _sampled_words(L, glen):
+            c=admit(g)
+            if c is None:
+                stall+=1
+                if stall>=SAMPLE_STALL: break
+                continue
+            stall=0
+            yield c
+            found+=1
+            if maxknots is not None and found>=maxknots: return
+            if found>=SAMPLE_KNOTS: break
+    # The full scan.  Every candidate is already a single L-cycle starting at its
+    # minimum (see _candidate_words); knots sampled above are skipped by admit().
+    for g in _candidate_words(L, glen):
+        c=admit(g)
+        if c is None: continue
+        yield c
         found+=1
         if maxknots is not None and found>=maxknots: return
 
