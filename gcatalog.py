@@ -2,12 +2,14 @@
 
 A knot's step-word g (a 1-cycle primitive braid word over sigma_1..sigma_{L-1})
 replaces the old C/a/b/c/d parametrization. This module:
-  - enumerate_gs(L, glen): distinct knots at (L, |g|=glen), deduped by knot
+  - enumerate_gs(L, glen): distinct knots at (L, |g|=glen), one per cylinder diagram
   - build(L, g): MINIMAL-W zigzag run-sequence for rendering (via g_solve)
-Dedup is by the canonical Gauss code (braid_key); a cheap word-level canonical
-form (rotation + reversal + index-reflection) pre-filters obvious duplicates.
+Dedup is by cylinder_key: two g's are the same entry iff they draw the same crossings on
+the cylinder, up to its symmetries (rotation with distant crossings sliding past each
+other, turning it over, reversing direction).  It is B-free.  Two different cylinder
+diagrams that are the same knot on the sphere are deliberately KEPT as separate entries.
+A cheap word-level canonical form (rotation + reversal + index-reflection) pre-filters.
 """
-import braids as b, pb4
 import g_solve as GS
 from itertools import product
 
@@ -115,6 +117,20 @@ def g_canon(g, L):
             if best is None or rot<best: best=rot
     return best
 
+def is_canonical(g, L):
+    """g == g_canon(g, L), decided without computing g_canon: stop at the first of the
+    4|g| rotated forms that beats g.  Only rotations that START WITH 1 can: g starts with
+    1 (it is a candidate), so a rotation starting higher is larger at once.  In g and
+    reversed g those start at a 1; in the relabelled forms (i -> L-i) at an L-1.  Most
+    words are rejected by the first or second rotation tried."""
+    if g[0] != 1: return False
+    n = len(g); t = list(g)
+    r = t[::-1]; rel = [L - x for x in t]; relr = rel[::-1]
+    for f, lead in ((t, 1), (r, 1), (rel, 1), (relr, 1)):
+        for i in range(n):
+            if f[i] == lead and f[i:] + f[:i] < t: return False
+    return True
+
 MAXKNOTS = None     # no limit: the scan streams and is interruptible, so a long
                     # level costs nothing -- you browse what has arrived and any
                     # change of L or |g| abandons it.  A cap would only truncate
@@ -159,15 +175,67 @@ def _trace_sig(g, L):
     """A complete invariant of g's COMMUTATION class (projection lemma): the letter
     counts, plus the subsequence on each non-commuting pair of generators.
 
-    Used to memoise braid_key.  g_canon folds rotation and reflection but not
+    Used to memoise cylinder_key.  g_canon folds rotation and reflection but not
     commutation, so a level ends up with far more canonical forms than knots -- L=7
     |g|=10 has 79,992 canonical forms and 109 knots.  Words with the same signature are
-    the same trace, hence the same closure, hence the same key: 16x fewer calls to the
-    most expensive step in the scan.
+    the same trace, hence the same closure, hence the same key: 16x fewer key
+    computations.
     """
     from collections import Counter
     return (tuple(sorted(Counter(g).items())),
             tuple(tuple(x for x in g if x == a or x == a + 1) for a in range(1, L - 1)))
+
+
+def _trace_key(w):
+    """Canonical form of the CYCLIC word w up to commutation of letters whose indices
+    differ by >= 2 -- i.e. of its crossings drawn on the cylinder, where they may slide
+    past each other and around the axis.  (w must use consecutive generators, as every g
+    does: 1..L-1.)
+
+    That cylinder picture is fixed by, for each adjacent pair (i, i+1), the cyclic order
+    in which their letters interleave, with the occurrences of each letter matched up
+    between the pairs (i-1, i) and (i, i+1).  Canonical form: choose which occurrence of
+    the lowest generator comes first (s); cut the (lo, lo+1) projection just before it;
+    the first lo+1 after that cut is where the (lo+1, lo+2) projection is cut; and so
+    on up the chain.  Take the smallest resulting tuple over all s.  O(n_lo * |w|).
+    Checked against brute force (the full rotation+commutation class): see gcatalog tests.
+    """
+    gens = sorted(set(w))
+    n = len(w)
+    if len(gens) == 1:                                   # one generator: just rotation
+        return min(tuple(w[r:] + w[:r]) for r in range(n))
+    projs = [[x for x in w if x == a or x == a + 1] for a in gens[:-1]]
+    first = [[j for j, x in enumerate(p) if x == a] for p, a in zip(projs, gens)]
+    best = None
+    for s in range(len(first[0])):
+        parts = []; occ = s                              # occurrence of letter a to cut at
+        for p, pos, a in zip(projs, first, gens):
+            cut = pos[occ]
+            rot = p[cut:] + p[:cut]
+            parts.append(tuple(rot))
+            # the first a+1 after the cut, as an occurrence index of a+1: the number of
+            # a+1's before the cut in p (mod their count)
+            before = sum(1 for x in p[:cut] if x == a + 1)
+            occ = before % sum(1 for x in p if x == a + 1)
+        t = tuple(parts)
+        if best is None or t < best: best = t
+    return best
+
+def cylinder_key(g, L):
+    """Identity of g's DIAGRAM ON THE CYLINDER: equal iff the two words draw the same
+    crossings on the cylinder up to its symmetries -- rotation around the axis with
+    distant crossings sliding past each other (_trace_key), turning it upside down
+    (relabel i -> L-i), and reversing direction (reversed word).  Mirror is implicit: an
+    unsigned word carries no handedness.
+
+    This is what the enumeration dedups by.  It is B-free (equal diagrams stay equal
+    repeated B times) and decides nothing about the knot beyond the cylinder: two
+    different cylinder diagrams that happen to be the same knot on the sphere (e.g. by a
+    flype) are deliberately kept as two entries.  It replaced braid_key (Gauss code of
+    g^Bc on the sphere), which merged exactly the same classes on every level checked.
+    """
+    r = [L - x for x in g]
+    return min(_trace_key(f) for f in (list(g), g[::-1], r, r[::-1]))
 
 
 def _candidate_words(L, glen):
@@ -186,6 +254,14 @@ def _candidate_words(L, glen):
         This subsumes the older "every generator still missing must fit" rule -- m
         missing generators cut the strands into at least m+1 blocks, so k-1 >= m.
 
+      * no letter directly follows one at least 2 larger ("3 1", "4 2", ...).  Such a
+        pair commutes, and swapping it gives a smaller word of the same cylinder class.
+        The word iter_gs lists for a class is the lexicographically smallest word of the
+        WHOLE class (rotations, commutations, reversal, relabelling) -- it is its own
+        canonical form and is met first -- and that word cannot contain such a pair.  So
+        every listed word is still generated, in the same order; only commutation
+        variants that would be discarded at the key are cut, at the prefix.
+
     Every leaf therefore IS a single cycle, and iter_gs no longer re-checks it.  Before
     the cycle bound, 70-80% of the leaves were multi-cycle words discarded one by one
     (L=7 |g|=10: 2.74M leaves -> 0.51M; L=5 |g|=12: 3.67M -> 1.14M).
@@ -203,7 +279,9 @@ def _candidate_words(L, glen):
         if glen - i < cycles - 1: return            # cannot merge down to one cycle
         if i == glen:
             yield list(w); return
-        for v in range(1, L):                       # ascending keeps the output lex-ordered
+        # v >= w[i-1] - 1: never a letter right after one at least 2 larger (see the
+        # docstring).  Ascending keeps the output lex-ordered.
+        for v in range(max(1, w[i - 1] - 1), L):
             w[i] = v
             d = 1 if same_cycle(v - 1, v) else -1   # split or merge
             perm[v - 1], perm[v] = perm[v], perm[v - 1]
@@ -218,8 +296,9 @@ def _candidate_words(L, glen):
 # runs of 1s and look alike -- and at a big level those first few are all anyone browses.
 # Above this size iter_gs first SAMPLES random words for variety, then runs the full scan
 # for completeness.  Size = (L-1)**(|g|-1), the unpruned candidate count; 10**6 puts the
-# switch at L=5 |g|=12, L=6 |g|=11, L=7 |g|=10, L=8 |g|=9, L=9 |g|=8 -- the levels whose
-# full scan takes ~10s or more.
+# switch at L=5 |g|=12, L=6 |g|=11, L=7 |g|=10, L=8 |g|=9, L=9 |g|=8 -- where lists run
+# to hundreds or thousands of knots.  (It was chosen when those scans took 10s+; they now
+# take a few seconds, but the point is variety in the first few, not speed.)
 SAMPLE_ABOVE = 10**6
 SAMPLE_KNOTS = 200       # knots to take by sampling before switching to the full scan
 SAMPLE_STALL = 200       # ...or stop sampling after this many valid words in a row add nothing
@@ -256,20 +335,25 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
     difference: a knot found by sampling is shown in the canonical spelling of whichever
     class was met first -- still a spelling of the same knot, not always the smallest.
     """
-    Bc=b.smallest_coprime_b(L)
     seen_canon=set(); seen_key=set(); sig_key={}
-    def admit(g):
-        """The canonical word if g is a NEW knot, else None.  g: a single-L-cycle word.
-        Everything here runs once per g_canon CLASS, not per word: periodicity and the
-        power test are the same for every member of a class."""
-        c=g_canon(g,L)
-        if c in seen_canon: return None
-        seen_canon.add(c)
+    def admit(g, canonical=False):
+        """The canonical word if g is a NEW knot, else None.  g: a single-L-cycle word;
+        canonical=True says g is already its own g_canon form (the full scan checks that
+        with is_canonical, far cheaper than computing g_canon).  Everything here runs
+        once per g_canon CLASS, not per word: periodicity and the power test are the same
+        for every member of a class."""
+        if canonical:
+            c=tuple(g)
+            if c in seen_canon: return None           # met while sampling
+        else:
+            c=g_canon(g,L)
+            if c in seen_canon: return None
+            seen_canon.add(c)
         ks=power_ks(c, L)                             # usually empty: then no power tests
         if ks and is_literal_power(c, ks): return None   # literal h^k: h is listed at |g|/k
-        sg=_trace_sig(c, L)                           # same trace => same knot
+        sg=_trace_sig(c, L)                           # same linear trace => same key
         if sg in sig_key: key=sig_key[sg]
-        else: key=sig_key[sg]=pb4.braid_key(g,L,Bc)   # authoritative knot dedup
+        else: key=sig_key[sg]=cylinder_key(c,L)       # the dedup: same cylinder diagram
         if key is None or key in seen_key: return None
         seen_key.add(key)
         # EXPENSIVE, so last: drop knot-level powers (h^k knots whose WORD is not one).
@@ -292,10 +376,13 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
             found+=1
             if maxknots is not None and found>=maxknots: return
             if found>=SAMPLE_KNOTS: break
-    # The full scan.  Every candidate is already a single L-cycle starting at its
-    # minimum (see _candidate_words); knots sampled above are skipped by admit().
+    # The full scan.  Candidates come in lex order and every class's canonical form is
+    # itself a candidate (it starts with 1 and is a single cycle), so a class is met
+    # exactly once as "g is its own canonical form" -- no g_canon, and no set of the
+    # hundreds of thousands of forms seen (only the sampled ones, to skip them).
     for g in _candidate_words(L, glen):
-        c=admit(g)
+        if not is_canonical(g, L): continue
+        c=admit(g, canonical=True)
         if c is None: continue
         yield c
         found+=1
