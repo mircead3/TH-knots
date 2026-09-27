@@ -5,3 +5,4 @@ elastic/*.log
 gcache.json
 ~$*
 elastic/debug_last_relax.json
+.venv/
