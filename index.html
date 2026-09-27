@@ -579,6 +579,30 @@ function filletRadii(segLen, segCross) {
   });
 }
 
+// Coincident bights -- a peak and a valley at the same point (a tangency) -- are nudged
+// apart vertically by NUDGE: the peak down, the valley up.  Returns
+// nudge(i, Ax, Bx) -> (x -> dy) for run i (from bight i at Ax to bight i+1 at Bx).
+// Each nudged bight contributes a cosine bump centred on it that fades to 0 within w
+// (at most the shorter adjacent run, and 1.5), with zero slope at both ends.  Both runs
+// meeting at a bight evaluate the SAME bump, so the curve is continuous and smooth
+// through the fillet.  (It used to be a linear taper along each whole run, whose slope
+// flipped at the bight: a kink of up to ~0.25 at every fillet start next to a tangency,
+// worst on runs of length 2-3.)
+function bightNudges(bights, dxOf) {
+  const NUDGE = 0.3, n = bights.length;
+  const count = new Map();
+  for (const [bx, by] of bights) count.set(`${bx},${by}`, (count.get(`${bx},${by}`) || 0) + 1);
+  const d = bights.map((b, i) =>
+    count.get(`${b[0]},${b[1]}`) > 1 ? Math.sign(bights[(i + 1) % n][1] - b[1]) * NUDGE : 0);
+  const w = bights.map((_, i) => Math.min(1.5, dxOf((i - 1 + n) % n), dxOf(i)));
+  const bump = u => (u >= 1 ? 0 : (1 + Math.cos(Math.PI * u)) / 2);
+  return (i, Ax, Bx) => {
+    const j = (i + 1) % n;
+    if (!d[i] && !d[j]) return () => 0;
+    return x => d[i] * bump(Math.abs(x - Ax) / w[i]) + d[j] * bump(Math.abs(Bx - x) / w[j]);
+  };
+}
+
 // Over/under z-profile along absolute x: keyframes hold ±delta at crossings
 // and 0 at bights, with COSINE easing between.  Every crossing reaches full
 // ±delta and the profile stays smooth through the fillets and across bights.
@@ -3032,13 +3056,16 @@ function drawRoundDiagram() {
 }
 
 // Re-center the inner-radius slider and rebuild — the knot view's frontal
-// (slider-driven, non-orbited) framing.  Shared by enterKnotMode and 'r'.
+// (slider-driven, non-orbited) framing.  Used by 'r' and by leads/bights changes.
+const KNOT_INNER_DEFAULT = 90;
+let knotInnerVal = KNOT_INNER_DEFAULT;   // the knot view's own inner radius: the slider
+                                         // is shared with the round diagram
 function resetKnotFrontalView() {
   const sl = document.getElementById('roundInnerSlider');
   // Fixed default framing (the slider's upper range is intentionally large so
   // it can reach a tight equal-radius coil for relax; don't derive the default
   // from max, which would shift it).
-  sl.value = 90;
+  sl.value = knotInnerVal = KNOT_INNER_DEFAULT;
   buildKnot();
 }
 
@@ -3063,7 +3090,10 @@ function enterKnotMode() {
   document.getElementById('bInput').disabled = false;
   document.getElementById('relaxRow').style.display = '';
   orthoOrbit.reset();
-  resetKnotFrontalView();   // frontal view on entry, same as pressing 'r'
+  // Frontal view on entry, but KEEP the knot's inner radius: switching to braid (or
+  // any other view) and back used to snap it to the default.
+  document.getElementById('roundInnerSlider').value = knotInnerVal;
+  buildKnot();
 }
 
 // Fixed outer radius of the knot's frustum, in the same px units as the inner-
@@ -3169,25 +3199,8 @@ function buildKnot() {
     const numSegs  = n;
     const closed   = true;
 
-    const bightSep = 0.3;  // radial nudge to separate coincident v/^ bights
-
-    // Bight points shared by more than one bight (a v-bight and a ^-bight at the
-    // same (x,y)) get pushed apart so they're visually distinguishable.
-    const ptCount = new Map();
-    for (const [bx, by] of bights) {
-      const key = `${bx},${by}`;
-      ptCount.set(key, (ptCount.get(key) || 0) + 1);
-    }
-    const sharedPts = new Set([...ptCount].filter(([, c]) => c > 1).map(([k]) => k));
-
     const pts = [];
     let rawX = bights[0][0];
-
-    // Per-bight radial displacement: coincident v/^ bights get nudged apart.
-    const bightDisp = bights.map((b, i) => {
-      const d = Math.sign(bights[(i + 1) % n][1] - b[1]);
-      return sharedPts.has(`${b[0]},${b[1]}`) ? d * bightSep : 0;
-    });
 
     // Fillet-rounded strand (shared helpers): runs sampled densely so
     // CatmullRom follows the nonlinear polar/helix map.
@@ -3195,6 +3208,7 @@ function buildKnot() {
     const segCross = [];
     for (let j = 0; j < n; j++) segCross[j] = (crossMap.get(j) || []).slice().sort((a, b) => a.t - b.t);
     const Rbight = filletRadii(bights.map((_, j) => dxOf(j)), segCross);
+    const nudge  = bightNudges(bights, dxOf);
 
     // z keyframes in absolute x (monotonic along the strand); run-0's are
     // repeated one period on so the closed-curve seam interpolates.
@@ -3215,8 +3229,7 @@ function buildKnot() {
       const By = bights[(i + 1) % n][1];
       const dx = Math.abs(By - Ay);
       const Ax = rawX, Bx = rawX + dx;
-      const dispA  = bightDisp[i], dispB = bightDisp[(i + 1) % n];
-      const dispAt = x => { const f = (x - Ax) / dx; return dispA * (1 - f) + dispB * f; };   // displacement taper
+      const dispAt = nudge(i, Ax, Bx);   // tangency nudge, smooth across bights
       const push   = (x, y) => pts.push(toR(x, y + dispAt(x), zAtG(x)));
       emitFilletRun(push, Ax, Ay, Bx, By, Rbight[i], Rbight[(i + 1) % n],
                     segCross[i].map(c => c.t),
@@ -3325,25 +3338,14 @@ function getKnotPointsForRelax(deltaOverride) {
     const crossMap = allCrossings[comp];
     const numSegs  = n;
 
-    const bightSep = 0.3;
-    const ptCount = new Map();
-    for (const [bx, by] of bights) {
-      const key = `${bx},${by}`;
-      ptCount.set(key, (ptCount.get(key) || 0) + 1);
-    }
-    const sharedPts = new Set([...ptCount].filter(([, c]) => c > 1).map(([k]) => k));
-
     const pts = [];
     let rawX = bights[0][0];
-    const bightDisp = bights.map((b, i) => {
-      const d = Math.sign(bights[(i + 1) % n][1] - b[1]);
-      return sharedPts.has(`${b[0]},${b[1]}`) ? d * bightSep : 0;
-    });
 
     const dxOf = j => Math.abs(bights[(j + 1) % n][1] - bights[j][1]);
     const segCross = [];
     for (let j = 0; j < n; j++) segCross[j] = (crossMap.get(j) || []).slice().sort((a, b) => a.t - b.t);
     const Rbight = filletRadii(bights.map((_, j) => dxOf(j)), segCross);
+    const nudge  = bightNudges(bights, dxOf);
 
     const keyf = [];
     { let rx = bights[0][0];
@@ -3362,8 +3364,7 @@ function getKnotPointsForRelax(deltaOverride) {
       const By = bights[(i + 1) % n][1];
       const dx = Math.abs(By - Ay);
       const Ax = rawX, Bx = rawX + dx;
-      const dispA  = bightDisp[i], dispB = bightDisp[(i + 1) % n];
-      const dispAt = x => { const f = (x - Ax) / dx; return dispA * (1 - f) + dispB * f; };
+      const dispAt = nudge(i, Ax, Bx);   // tangency nudge, smooth across bights
       const push   = (x, y) => pts.push(toR(x, y + dispAt(x), zAtG(x)));
       emitFilletRun(push, Ax, Ay, Bx, By, Rbight[i], Rbight[(i + 1) % n],
                     segCross[i].map(c => c.t),
@@ -4312,7 +4313,10 @@ function syncRoundOuterMax() {
   sl.max = roundOuterMax();
   if (parseFloat(sl.value) > parseFloat(sl.max)) sl.value = sl.max;
 }
-document.getElementById('roundInnerSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
+document.getElementById('roundInnerSlider').addEventListener('input', e => {
+  if (showRoundDiag) drawRoundDiagram();
+  else if (showKnot) { knotInnerVal = parseFloat(e.target.value); buildKnot(); }
+});
 document.getElementById('roundOuterSlider').addEventListener('input', () => { if (showRoundDiag) drawRoundDiagram(); else if (showKnot) buildKnot(); });
 document.getElementById('straightRadiusSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
 document.getElementById('straightHeightSlider').addEventListener('input', () => { if (showStraight) buildStraight(); });
@@ -4336,7 +4340,10 @@ document.getElementById('symmetryToggle').addEventListener('click', () => {
 function knotDescription() {
   const L = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
-  const flip = knotFlipped ? ' flipped' : '';
+  // "flipped" = flipped relative to the mode's default, i.e. the flip button was
+  // pressed.  g-mode opens every knot flipped (G_DEFAULT_FLIP), so reporting the raw
+  // state said "flipped" for knots nobody had touched.
+  const flip = knotFlipped !== (gMode && G_DEFAULT_FLIP) ? ' flipped' : '';
   if (gMode) {
     const onLevel = gList.length && gList._key === L + '|' + gLen;
     const g = onLevel ? gList[gListIdx] : null;
