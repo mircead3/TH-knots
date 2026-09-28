@@ -189,7 +189,7 @@ def solve_min(g, L, Wmax=60, no_idle_runs=True, workers=1, time_limit=None):
     W = max(2, GS.wlb(g)); W += W % 2
     proven = True
     while W <= Wmax:
-        r = feasible(g, L, W, no_idle_runs, workers, time_limit)
+        r = feasible_rank(g, L, W, no_idle_runs, workers, time_limit, redundant=False)
         if isinstance(r, dict):
             if verified(g, L, r['runs']):
                 return r, ('minimal' if proven else 'achieved')
@@ -198,3 +198,112 @@ def solve_min(g, L, Wmax=60, no_idle_runs=True, workers=1, time_limit=None):
             proven = False
         W += 2
     return None, 'none'
+
+
+# ---------------------------------------------------------------- rank formulation
+
+def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redundant=False):
+    """The same walk model with crossings read from RANKS instead of pairwise height tests.
+
+    r_t in 0..L-1 is step t's rank among the L steps on its half-column (bottom = 0),
+    tied to the heights by pairwise order (a permutation per half-column).  A visit at
+    column x sits between its two steps t-1 and t, and its rank changes exactly when it
+    crosses: r_t = r_{t-1} + 1 is the RISING pass of sigma_{r_t} (ranks r_t - 1 -> r_t,
+    i.e. generator i = r_t), -1 the falling pass, 0 no crossing (plain pass or tangency).
+    redundant: add constraints that follow from the rest but guide the search -- exactly
+    |g| rising crossings, and (with no_idle_runs) exactly g_solve's number of bights."""
+    n = len(g); N = W * L
+    Hm = N // 2 + 1
+    M = cp_model.CpModel()
+    y = [M.NewIntVar(-Hm, Hm, f'y{t}') for t in range(N)]
+    up = [M.NewBoolVar(f'u{t}') for t in range(N)]
+    for t in range(N):
+        nx = y[(t + 1) % N]
+        M.Add(nx == y[t] + 1).OnlyEnforceIf(up[t])
+        M.Add(nx == y[t] - 1).OnlyEnforceIf(up[t].Not())
+    M.Add(y[0] == 0)
+    s = []
+    for t in range(N):
+        v = M.NewIntVar(-2 * Hm - 1, 2 * Hm + 1, '')
+        M.Add(v == 2 * y[t] + 2 * up[t] - 1)
+        s.append(v)
+    r = [M.NewIntVar(0, L - 1, f'r{t}') for t in range(N)]
+    for x in range(W):
+        steps = list(range(x, N, W))
+        M.AddAllDifferent([s[t] for t in steps])
+        M.AddAllDifferent([r[t] for t in steps])          # ranks: a permutation
+        for i, a in enumerate(steps):
+            for c in steps[i + 1:]:
+                o = M.NewBoolVar('')                        # step a below step c
+                M.Add(s[a] < s[c]).OnlyEnforceIf(o); M.Add(s[a] > s[c]).OnlyEnforceIf(o.Not())
+                M.Add(r[a] < r[c]).OnlyEnforceIf(o); M.Add(r[a] > r[c]).OnlyEnforceIf(o.Not())
+
+    # visit t (between steps t-1 and t): rank change dr in {-1, 0, 1}
+    rise = {}; cross = []; bight = []
+    for t in range(N):
+        p = (t - 1) % N
+        M.Add(r[t] - r[p] <= 1); M.Add(r[t] - r[p] >= -1)
+        rs = M.NewBoolVar(''); fl = M.NewBoolVar('')
+        M.Add(r[t] == r[p] + 1).OnlyEnforceIf(rs); M.Add(r[t] != r[p] + 1).OnlyEnforceIf(rs.Not())
+        M.Add(r[t] == r[p] - 1).OnlyEnforceIf(fl); M.Add(r[t] != r[p] - 1).OnlyEnforceIf(fl.Not())
+        # a rising crossing is straight up, a falling one straight down
+        M.AddImplication(rs, up[p]); M.AddImplication(rs, up[t])
+        M.AddImplication(fl, up[p].Not()); M.AddImplication(fl, up[t].Not())
+        cr = M.NewBoolVar(''); M.AddBoolOr([rs, fl]).OnlyEnforceIf(cr)
+        M.AddImplication(rs, cr); M.AddImplication(fl, cr)
+        cross.append(cr)
+        bt = M.NewBoolVar('')                                   # direction changes here
+        M.Add(up[p] != up[t]).OnlyEnforceIf(bt); M.Add(up[p] == up[t]).OnlyEnforceIf(bt.Not())
+        bight.append(bt)
+        for i in range(1, L):                                   # rising pass of sigma_i
+            z = M.NewBoolVar('')
+            M.AddBoolAnd([rs]).OnlyEnforceIf(z); M.Add(r[t] == i).OnlyEnforceIf(z)
+            ri = M.NewBoolVar('')
+            M.Add(r[t] == i).OnlyEnforceIf(ri); M.Add(r[t] != i).OnlyEnforceIf(ri.Not())
+            M.AddBoolOr([rs.Not(), ri.Not(), z])
+            rise[(t, i)] = z
+
+    P = [[M.NewBoolVar(f'p{t}_{x}') for x in range(W)] for t in range(n)]
+    for t in range(n): M.AddExactlyOne(P[t])
+    col = [sum(x * P[t][x] for x in range(W)) for t in range(n)]
+    for x in range(W):
+        for i in range(1, L):
+            M.Add(sum(rise[(t, i)] for t in range(x, N, W))
+                  == sum(P[k][x] for k in range(n) if g[k] == i))
+    M.Add(P[0][0] == 1)
+    M.Add(rise[(0, g[0])] == 1)                                 # walk starts on letter 0
+    gens = list(range(1, L - 1)) if L > 2 else [None]
+    for a in gens:
+        seq = [k for k in range(n) if a is None or g[k] in (a, a + 1)]
+        wraps = []
+        for k in range(len(seq)):
+            t1, t2 = seq[k], seq[(k + 1) % len(seq)]
+            w = M.NewBoolVar('')
+            M.Add(col[t1] < col[t2]).OnlyEnforceIf(w.Not()); M.Add(col[t1] > col[t2]).OnlyEnforceIf(w)
+            wraps.append(w)
+        M.Add(sum(wraps) == 1)
+
+    if no_idle_runs:
+        seen = [M.NewBoolVar('') for _ in range(N)]
+        for t in range(N):
+            prev = seen[(t - 1) % N]
+            M.AddBoolOr([cross[t], prev, seen[t].Not()])
+            M.AddBoolOr([cross[t], bight[t].Not(), seen[t].Not()])
+            M.AddImplication(cross[t], seen[t])
+            M.AddBoolOr([prev.Not(), bight[t], seen[t]])
+            M.AddImplication(bight[t], prev)
+    if redundant:
+        M.Add(sum(rise.values()) == n)                          # exactly |g| crossings
+        M.Add(sum(cross) == 2 * n)
+        if no_idle_runs:
+            M.Add(sum(bight) == GS.segments(g, L)[1])           # g_solve's bight count
+
+    S = cp_model.CpSolver()
+    S.parameters.num_workers = workers
+    S.parameters.linearization_level = 2
+    if time_limit: S.parameters.max_time_in_seconds = time_limit
+    st = S.Solve(M)
+    if st == cp_model.INFEASIBLE: return None
+    if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE): return 'unknown'
+    ys = [S.Value(v) for v in y]
+    return dict(W=W, y=ys, runs=walk_runs(ys))
