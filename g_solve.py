@@ -102,6 +102,16 @@ RESIDUAL CAVEATS, stated rather than buried:
   * The edge rules above are load-bearing: a missing edge under-constrains, a spurious
     one over-constrains and would make infeasibility claims wrong.  507 library diagrams
     passing strict_ok support them in the realizability direction.
+  * "Minimal" means minimal among diagrams WITHOUT WIGGLES.  The bight rules put exactly
+    0 or 1 bight between consecutive crossings of a strand, so every run between bights
+    contains a crossing.  A zigzag may also wiggle -- extra peak/valley pairs with no
+    crossing between them -- and that is sometimes NARROWER.  Tested 2026-09-27 with the
+    lattice-walk model (g_walk.py, branch cpsat-experiment, rule off) on all 727 knots of
+    L=3..9 |g|<=10, every smaller W, no timeouts: 723 are minimal over ALL zigzags; 4
+    are not (L=5):  1 1 1 2 1 3 2 4 4 4  W 10 -> 8;  1 1 1 2 3 2 3 4 4 4  W 12 -> 8;
+    1 1 1 2 3 2 4 3 4 4  W 10 -> 8;  1 1 2 1 3 2 4 3 4 4  W 8 -> 6  (each strict_ok and
+    full-period verified).  The wiggles turn what would be unintended crossings into
+    peak/valley tangencies.  Infeasibility proofs here remain correct for THIS model.
   * Verdict 'achieved' no longer occurs on the library.  It used to, for the two knots
     whose KNOT is a repetition h^k although their WORD is not -- there the equations stay
     feasible at a smaller W but yield only a shorter-period diagram, and the solver cannot
