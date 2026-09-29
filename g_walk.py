@@ -202,7 +202,8 @@ def solve_min(g, L, Wmax=60, no_idle_runs=True, workers=1, time_limit=None):
 
 # ---------------------------------------------------------------- rank formulation
 
-def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redundant=False):
+def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redundant=False,
+                  min_heights=False):
     """The same walk model with crossings read from RANKS instead of pairwise height tests.
 
     r_t in 0..L-1 is step t's rank among the L steps on its half-column (bottom = 0),
@@ -298,6 +299,17 @@ def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redund
         if no_idle_runs:
             M.Add(sum(bight) == GS.segments(g, L)[1])           # g_solve's bight count
 
+    # min_heights: minimise the number of distinct heights at which bights sit -- the
+    # rows of pins on a cylindrical jig.  used[h] is forced on by any bight at height h.
+    if min_heights:
+        used = {h: M.NewBoolVar(f'h{h}') for h in range(-Hm, Hm + 1)}
+        for t in range(N):
+            for h in range(-Hm, Hm + 1):
+                at = M.NewBoolVar('')
+                M.Add(y[t] == h).OnlyEnforceIf(at); M.Add(y[t] != h).OnlyEnforceIf(at.Not())
+                M.AddBoolOr([at.Not(), bight[t].Not(), used[h]])
+        M.Minimize(sum(used.values()))
+
     S = cp_model.CpSolver()
     S.parameters.num_workers = workers
     S.parameters.linearization_level = 2
@@ -306,4 +318,23 @@ def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redund
     if st == cp_model.INFEASIBLE: return None
     if st not in (cp_model.OPTIMAL, cp_model.FEASIBLE): return 'unknown'
     ys = [S.Value(v) for v in y]
-    return dict(W=W, y=ys, runs=walk_runs(ys))
+    out = dict(W=W, y=ys, runs=walk_runs(ys))
+    if min_heights:
+        out['heights'] = bight_heights(ys); out['optimal'] = st == cp_model.OPTIMAL
+    return out
+
+
+def bight_heights(ys):
+    """Number of distinct heights of the walk's bights (direction changes)."""
+    N = len(ys)
+    d = [1 if ys[(t + 1) % N] > ys[t] else -1 for t in range(N)]
+    return len({ys[t] for t in range(N) if d[t] != d[t - 1]})
+
+
+def runs_heights(runs):
+    """The same count for a run-length drawing (e.g. g_solve's)."""
+    y = 0; hs = set()
+    for i, k in enumerate(runs):
+        y += k if i % 2 == 0 else -k
+        hs.add(y)
+    return len(hs)
