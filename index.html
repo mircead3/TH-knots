@@ -73,6 +73,13 @@
       margin-bottom: 18px;
     }
     .b-input:focus { border-color: rgba(100, 130, 255, 0.5); }
+    .f-in {
+      width: 44px; background: rgba(15, 15, 45, 0.9); color: #c0c8e8;
+      border: 1px solid rgba(100, 130, 255, 0.22); border-radius: 5px;
+      padding: 3px 4px; font-size: 12px; font-family: inherit; text-align: center; outline: none;
+    }
+    .f-in:focus { border-color: rgba(100, 130, 255, 0.5); }
+    select.f-in { width: auto; text-align: left; margin: 0; padding: 3px 6px; }   /* not the global select's margin */
     .c-btn {
       flex: 1;
       background: rgba(15, 15, 45, 0.9);
@@ -198,7 +205,19 @@
 
   <div id="gSection" style="display:none;">
     <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:6px;">— / —</div>
-    <div style="font-size:10px;color:rgba(140,170,255,0.5);text-align:center;margin-bottom:14px;">←→ browse · ↑↓ change |g|</div>
+    <div style="font-size:10px;color:rgba(140,170,255,0.5);text-align:center;margin-bottom:8px;">←→ browse</div>
+    <!-- Filters: blank = no limit.  Everything here is a property of the word, so the list
+         needs no solving; the knot on screen is drawn by g_solve as before. -->
+    <div id="gFilters" style="display:grid;grid-template-columns:auto 1fr;gap:5px 8px;align-items:center;font-size:11px;color:rgba(160,185,255,0.75);margin-bottom:14px;">
+      <span>C</span>
+      <span><input id="fCmin" type="number" min="1" value="1" class="f-in" placeholder="1"> – <input id="fCmax" type="number" min="1" value="1" class="f-in"></span>
+      <span>|g|</span>
+      <span><input id="fGmin" type="number" min="1" step="2" class="f-in" placeholder="L−1"> – <input id="fGmax" type="number" min="1" step="2" class="f-in" placeholder="="></span>
+      <span>chirality</span>
+      <span><select id="fChiral" class="f-in"><option value="">any</option><option value="1">chiral</option><option value="0">amphichiral</option></select></span>
+      <span>self-flip</span>
+      <span><select id="fFlip" class="f-in"><option value="">any</option><option value="1">yes</option><option value="0">no</option></select></span>
+    </div>
   </div>
 
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
@@ -1577,15 +1596,14 @@ function updateGDisplays() {
   // buried mid-panel in the invariants block it was easy to lose track of.
   // A truncated list shows '>N' -- N knots reached the cap, there are more.
   if (idxEl) {
-    const big = `<span style="font-size:19px;font-weight:600;color:rgba(190,210,255,0.95)">${gLen}</span>`;
     const rest = gErr ? gErr
-        : (gList.length && gList._key === LEADS + '|' + gLen   // not the previous level's list
+        : (gList.length && gList._key === gQueryKey(gQuery(LEADS))   // not a previous query's list
              ? `${gListIdx + 1} / ${gList.length}` : '— / —');
     // Progress ("scanning Ns" / "solving Ns") goes on its own line below.  The line is
     // always there (a blank one when idle) so the box does not jump in height each time
     // a message comes and goes -- "solving" flashes up on many arrow presses.
     const status = gBusy || (_enumPoll ? `scanning ${_scanSecs()}s` : '');
-    idxEl.innerHTML = `${big}<span style="opacity:0.45;margin:0 8px">·</span>${rest}`
+    idxEl.innerHTML = `${rest}`
       + `<div style="font-size:11px;opacity:0.7;margin-top:2px">${status || '&nbsp;'}</div>`;
   }
   const cnt = document.getElementById('knotCountDisplay');
@@ -1645,7 +1663,7 @@ function stopEnumPoll() {
   if (_enumPoll) { clearInterval(_enumPoll); _enumPoll = null; }
   _enumPollKey = null;
 }
-function startEnumPoll(key, L, glen) {
+function startEnumPoll(key) {
   if (_enumPoll && _enumPollKey === key) return;    // already streaming this level
   stopEnumPoll();
   _enumPollKey = key; _enumT0 = Date.now();
@@ -1654,7 +1672,7 @@ function startEnumPoll(key, L, glen) {
     try {
       const s = await gPost('/enumerate/poll', {});
       if (_enumPollKey !== key) return;
-      if (s.L !== L || s.glen !== glen) { stopEnumPoll(); return; }
+      if (s.q !== key) { stopEnumPoll(); return; }
       gList = s.gs; gList._key = key;
       if (s.done) stopEnumPoll();                   // clears the 'scanning' suffix
       updateGDisplays();                            // count grows under the selection
@@ -1670,24 +1688,32 @@ async function gRebuild(opts) {
   const L = parseInt(document.getElementById('mInput').value);
   if (isNaN(L) || L < 2) return;
   LEADS = L;
+  syncChiralFilter(L);             // chirality is tied to self-flip by L's parity
   // Changing L restarts at that L's FIRST |g| (= L-1) rather than carrying over the old
   // one: |g| means something different at each L, and the old value is usually deep into
   // the new L's range, landing you mid-list in a big level instead of at its start.
-  if (gLenForL !== L) { gLen = L - 1; gListIdx = 0; gLenForL = L; }
-  else gLen = clampGLen(L, gLen);
+  if (gLenForL !== L) {
+    for (const id of ['fGmin', 'fGmax']) {       // stepping visits only |g| = L-1 (mod 2)
+      const el = document.getElementById(id);
+      el.min = L - 1; el.value = L - 1;
+    }
+    gListIdx = 0; gLenForL = L;
+  }
+  gLen = gQuery(L).gmin;           // the range's first level (messages, the copy line)
   try {
-    const key = L + '|' + gLen;
+    const query = gQuery(L);
+    const key = gQueryKey(query);
     if (opts.reenum || gList._key !== key) {
       stopEnumPoll();              // switching level: abandon the previous scan
       showBusy('scanning');     // |g| is already shown large on this line
-      let r = await gEnumerate(L, gLen);
+      let r = await gEnumerate(query);
       // Wait for the first knot, not the last: a big level yields #1 in ~0.1s and its
       // final count only minutes later, and changing L or |g| abandons the scan.
       while (!r.done && !r.gs.length && !r.error) {
         await new Promise(res => setTimeout(res, 250));
         if (myGen !== gGen) { clearBusy(); return; }
         r = await gPost('/enumerate/poll', {});
-        if (r.L !== L || r.glen !== gLen) { clearBusy(); return; }    // superseded
+        if (r.q !== key) { clearBusy(); return; }    // superseded by another query
       }
       clearBusy();
       if (myGen !== gGen) return;              // a newer press superseded us
@@ -1696,9 +1722,14 @@ async function gRebuild(opts) {
         currentG = null; gErr = 'scan failed'; updateGDisplays(); return;
       }
       gList = r.gs; gList._key = key; gList._truncated = !!r.truncated;
-      if (!r.done) startEnumPoll(key, L, gLen);   // keeps filling in while you browse
+      if (!r.done) startEnumPoll(key);   // keeps filling in while you browse
     }
-    if (!gList.length) { currentG = null; gErr = `none at |g|=${gLen}`; updateGDisplays(); return; }
+    if (!gList.length) {
+      currentG = null;
+      const rng = query.gmax > query.gmin ? `${query.gmin}–${query.gmax}` : `${query.gmin}`;
+      gErr = gFiltered(query) ? 'none match the filters' : `none at |g| ${rng}`;
+      updateGDisplays(); return;
+    }
     gListIdx = ((gListIdx % gList.length) + gList.length) % gList.length;
     // Try the selected knot; auto-skip ones that have no valid diagram so the UI never
     // gets stuck on a failure.  While the level is still STREAMING, running out of knots
@@ -1743,7 +1774,7 @@ async function gRebuild(opts) {
         failed.add(g.join(','));
       }
     }
-    currentG = null; gErr = `no valid diagrams at |g|=${gLen}`; updateGDisplays();
+    currentG = null; gErr = 'no valid diagrams in this list'; updateGDisplays();
   } catch (e) {
     if (myGen !== gGen) return;                // don't clobber a newer render with a stale error
     clearBusy();
@@ -1845,12 +1876,67 @@ function setComplexity(c) {
 document.getElementById('cBtn2').classList.add('active');
 [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).addEventListener('click', () => setComplexity(n)));
 document.getElementById('gBtn').addEventListener('click', enterGMode);
+// Chirality and self-flip are tied (see gcatalog.braid_amphichiral): with the parity
+// signs of these diagrams the flip IS the mirror when L is odd, and never when L is even.
+//   odd L:  amphichiral <=> self-flip, chiral <=> not self-flip -- the two menus move together
+//   even L: every braid is chiral -- the chirality menu is disabled at "any"
+// changed: the menu the user just set (it wins); otherwise chirality follows self-flip.
+function syncChiralFilter(L, changed) {
+  const ch = document.getElementById('fChiral'), fl = document.getElementById('fFlip');
+  if (L % 2 === 0) {
+    ch.value = ''; ch.disabled = true;
+    ch.title = 'every braid is chiral at even L';
+    return;
+  }
+  ch.disabled = false;
+  ch.title = 'odd L: amphichiral = self-flip, chiral = not self-flip';
+  const other = v => (v === '' ? '' : v === '1' ? '0' : '1');   // chiral <-> not self-flip
+  if (changed === 'fChiral') fl.value = other(ch.value);
+  else ch.value = other(fl.value);
+}
+// A from/to pair keeps from <= to: moving one past the other drags the other along.
+function linkRange(loId, hiId, changed) {
+  const lo = document.getElementById(loId), hi = document.getElementById(hiId);
+  const a = parseInt(lo.value), b = parseInt(hi.value);
+  if (!isNaN(a)) hi.min = a;        // stepping an empty 'to' starts at 'from', not at 1
+  if (isNaN(a) || isNaN(b) || a <= b) return;
+  if (changed === loId) hi.value = a; else lo.value = b;
+}
+// |g| must have L-1's parity (a single L-cycle): a typed value of the other parity is
+// rounded up to the next valid one, never below L-1.
+function snapGParity(id) {
+  const el = document.getElementById(id), v = parseInt(el.value);
+  if (isNaN(v)) return;
+  let w = Math.max(v, LEADS - 1);
+  if (w % 2 !== (LEADS - 1) % 2) w += 1;
+  if (w !== v) el.value = w;
+}
+// Any filter change starts a new list from its first knot.
+['fGmin', 'fGmax', 'fCmin', 'fCmax', 'fChiral', 'fFlip'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => {
+    if (!gMode) return;
+    syncChiralFilter(LEADS, id);
+    if (id === 'fGmin' || id === 'fGmax') { snapGParity(id); linkRange('fGmin', 'fGmax', id); }
+    if (id === 'fCmin' || id === 'fCmax') {
+      // C is always an explicit range: a cleared box refills (min 1, max = min).
+      const lo = document.getElementById('fCmin'), hi = document.getElementById('fCmax');
+      if (isNaN(parseInt(lo.value)) || parseInt(lo.value) < 1) lo.value = 1;
+      if (isNaN(parseInt(hi.value))) hi.value = lo.value;
+      linkRange('fCmin', 'fCmax', id);
+    }
+    gListIdx = 0;
+    gRebuild({ reenum: true, dir: 1 });
+  }));
 document.addEventListener('keydown', e => {
   if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) return;
-  // In g-mode the arrows ALWAYS browse (Up/Down step |g|, Left/Right step the knot),
-  // even while an input has focus: otherwise the browser's native handling takes them
-  // (number-input stepping changes L, a focused slider moves, the text cursor moves).
-  if (document.activeElement && document.activeElement.tagName === 'INPUT' && !gMode) return;
+  // In g-mode Left/Right ALWAYS browse, even while an input has focus (otherwise the
+  // browser moves the text cursor or a focused slider).  Up/Down do nothing there -- the
+  // |g| range is set in the filter boxes -- so in a focused input or menu they keep their
+  // native job (stepping a number box, moving through a menu).
+  const vert = e.key === 'ArrowUp' || e.key === 'ArrowDown';
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' && (!gMode || vert)) return;
+  if (gMode && vert) return;
   // Build mode (tensegrity): arrows step the build sequence instead of the knot list.
   if (showStraight && buildMode) {
     e.preventDefault();
@@ -1862,15 +1948,9 @@ document.addEventListener('keydown', e => {
   if (gMode) {
     e.preventDefault();
     knotFlipped = G_DEFAULT_FLIP;                       // new knot starts in the g-mode default
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      const d = e.key === 'ArrowRight' ? 1 : -1;        // browse knots at this |g|
-      gListIdx += d;
-      gRebuild({ dir: d });
-    } else {
-      gLen = clampGLen(LEADS, gLen + (e.key === 'ArrowUp' ? 2 : -2));     // step |g|
-      gListIdx = 0;
-      gRebuild({ reenum: true, dir: 1 });
-    }
+    const d = e.key === 'ArrowRight' ? 1 : -1;          // browse the filtered list
+    gListIdx += d;
+    gRebuild({ dir: d });
     return;
   }
   knotFlipped = false;   // stepping to a new knot clears any flip
@@ -3424,7 +3504,26 @@ async function gPost(path, body) {
   }
   return res.json();
 }
-const gEnumerate = (L, glen)   => gPost('/enumerate', { L, glen });
+// The list query: L, the |g| range (the |g| from/to boxes), the C range, braid chirality and
+// word self-flip.  Keyed by the same string
+// the server uses (its _query_key), so a stale list or poll is recognised by its key.
+// For odd L, amphichiral = self-flip; for even L every braid is chiral (see gcatalog).
+function gQuery(L) {
+  const num = id => { const v = parseInt(document.getElementById(id).value); return isNaN(v) ? null : v; };
+  const tri = id => { const v = document.getElementById(id).value; return v === '' ? null : v === '1'; };
+  // |g| from..to: blank 'from' = L-1 (the first level), blank 'to' = 'from'.
+  const gmin = Math.max(L - 1, num('fGmin') ?? L - 1);
+  const gmax = Math.max(gmin, num('fGmax') ?? gmin);
+  return { L, gmin, gmax,
+           cmin: (num('fCmin') ?? 1) > 1 ? num('fCmin') : null,   // C >= 1 is no limit
+           cmax: num('fCmax'), chiral: tri('fChiral'), selfflip: tri('fFlip') };
+}
+function gQueryKey(q) {
+  return [q.L, q.gmin, q.gmax, q.cmin, q.cmax, q.chiral, q.selfflip]
+    .map(v => v === null ? '-' : v === true ? '1' : v === false ? '0' : String(v)).join('|');
+}
+const gFiltered = q => q.cmin !== null || q.cmax !== null || q.chiral !== null || q.selfflip !== null;
+const gEnumerate = q => gPost('/enumerate', q);
 const gConstruct = async (L, g) => {
   const key = L + '|' + g.join(',');
   if (gRunsCache.has(key)) {
@@ -4359,10 +4458,14 @@ function knotDescription() {
   // state said "flipped" for knots nobody had touched.
   const flip = knotFlipped !== (gMode && G_DEFAULT_FLIP) ? ' flipped' : '';
   if (gMode) {
-    const onLevel = gList.length && gList._key === L + '|' + gLen;
+    const onLevel = gList.length && gList._key === gQueryKey(gQuery(L));
     const g = onLevel ? gList[gListIdx] : null;
     const idx = onLevel ? ` #${gListIdx + 1}/${gList.length}` : '';
-    return `L=${L} |g|=${gLen}${idx} g=${g ? g.join(' ') : '?'} B=${B}${flip}`;
+    // |g| of the knot itself (a filtered list may span levels), and the filters, so the
+    // index can be found again.
+    const q = gQuery(L);
+    const f = gFiltered(q) || q.gmax > q.gmin ? ` [filter ${gQueryKey(q)}]` : '';
+    return `L=${L} |g|=${g ? g.length : gLen}${idx} g=${g ? g.join(' ') : '?'} B=${B}${flip}${f}`;
   }
   if (currentC === 2) {
     const idx = ab2ValidIdx >= 0 ? ` #${ab2ValidIdx + 1}/${ab2ValidList.length}` : '';
