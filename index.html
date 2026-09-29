@@ -74,12 +74,15 @@
     }
     .b-input:focus { border-color: rgba(100, 130, 255, 0.5); }
     .f-in {
-      width: 44px; background: rgba(15, 15, 45, 0.9); color: #c0c8e8;
+      width: 48px; box-sizing: border-box; background: rgba(15, 15, 45, 0.9); color: #c0c8e8;
       border: 1px solid rgba(100, 130, 255, 0.22); border-radius: 5px;
-      padding: 3px 4px; font-size: 12px; font-family: inherit; text-align: center; outline: none;
+      padding: 4px 4px; font-size: 14px; font-family: inherit; text-align: center; outline: none;
     }
     .f-in:focus { border-color: rgba(100, 130, 255, 0.5); }
     select.f-in { width: auto; text-align: left; margin: 0; padding: 3px 6px; }   /* not the global select's margin */
+    .f-val { color: rgba(200, 215, 255, 0.95); font-weight: 600; font-size: 15px; text-align: right; white-space: nowrap; }
+    .f-yes { color: #4cd964 !important; }   /* ✓ */
+    .f-no  { color: #ff5a5a !important; }   /* ✗ */
     .c-btn {
       flex: 1;
       background: rgba(15, 15, 45, 0.9);
@@ -204,19 +207,24 @@
   <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;"></div>
 
   <div id="gSection" style="display:none;">
-    <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:6px;">— / —</div>
+    <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:3px 0;line-height:1.3;margin-bottom:6px;">— / —</div>
     <div style="font-size:10px;color:rgba(140,170,255,0.5);text-align:center;margin-bottom:8px;">←→ browse</div>
     <!-- Filters: blank = no limit.  Everything here is a property of the word, so the list
          needs no solving; the knot on screen is drawn by g_solve as before. -->
-    <div id="gFilters" style="display:grid;grid-template-columns:auto 1fr;gap:5px 8px;align-items:center;font-size:11px;color:rgba(160,185,255,0.75);margin-bottom:14px;">
+    <!-- Third column: the CURRENT knot's value, from its word. -->
+    <div id="gFilters" style="display:grid;grid-template-columns:auto auto 22px;gap:6px 5px;align-items:center;font-size:11px;color:rgba(160,185,255,0.75);margin-bottom:14px;">
       <span>C</span>
-      <span><input id="fCmin" type="number" min="1" value="1" class="f-in" placeholder="1"> – <input id="fCmax" type="number" min="1" value="1" class="f-in"></span>
+      <span style="white-space:nowrap"><input id="fCmin" type="number" min="1" value="1" class="f-in" placeholder="1"> – <input id="fCmax" type="number" min="1" value="1" class="f-in"></span>
+      <span id="vC" class="f-val"></span>
       <span>|g|</span>
-      <span><input id="fGmin" type="number" min="1" step="2" class="f-in" placeholder="L−1"> – <input id="fGmax" type="number" min="1" step="2" class="f-in" placeholder="="></span>
-      <span>chirality</span>
-      <span><select id="fChiral" class="f-in"><option value="">any</option><option value="1">chiral</option><option value="0">amphichiral</option></select></span>
+      <span style="white-space:nowrap"><input id="fGmin" type="number" min="1" step="2" class="f-in" placeholder="L−1"> – <input id="fGmax" type="number" min="1" step="2" class="f-in" placeholder="="></span>
+      <span id="vG" class="f-val"></span>
+      <span>achiral</span>
+      <span><select id="fChiral" class="f-in"><option value="">any</option><option value="0">✓</option><option value="1">✗</option></select></span>
+      <span id="vChiral" class="f-val"></span>
       <span>self-flip</span>
-      <span><select id="fFlip" class="f-in"><option value="">any</option><option value="1">yes</option><option value="0">no</option></select></span>
+      <span><select id="fFlip" class="f-in"><option value="">any</option><option value="1">✓</option><option value="0">✗</option></select></span>
+      <span id="vFlip" class="f-val"></span>
     </div>
   </div>
 
@@ -918,9 +926,10 @@ function updateKnotStats(B, ncomp, crossings, components) {
   const lines = [];
   if (showTubeDiag) {
     // Braid view is B-free: just the step g and its per-step measures.
-    lines.push(`|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
+    // In g-mode |g|, C and chirality are shown on the filter lines instead.
+    lines.push(gMode ? `W ${W}   depth ${depth}` : `|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
-    lines.push(braidChirality(g, LEADS));       // a property of the braid, not of B
+    if (!gMode) lines.push(braidChirality(g, LEADS));   // a property of the braid, not of B
   } else {
     // Knot/round view: closure invariants at the current B, then the step.
     if (ncomp === 1) {
@@ -932,7 +941,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
     } else {
       lines.push(`bights ${mod}   crossings ${crossings}   components ${ncomp}`);
     }
-    lines.push(`|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
+    lines.push(gMode ? `W ${W}   depth ${depth}` : `|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
   }
   _knotStatsText = lines.join('\n');
@@ -1591,6 +1600,7 @@ function clampGLen(L, glen) {
 const gRunsKey = (L, g) => L + '|' + g.join(',');
 
 function updateGDisplays() {
+  updateFilterValues();
   const idxEl = document.getElementById('gIdx');
   // |g| belongs on this line, big: it is the axis the up/down arrows move along, and
   // buried mid-panel in the invariants block it was easy to lose track of.
@@ -1601,10 +1611,10 @@ function updateGDisplays() {
              ? `${gListIdx + 1} / ${gList.length}` : '— / —');
     // Progress ("scanning Ns" / "solving Ns") goes on its own line below.  The line is
     // always there (a blank one when idle) so the box does not jump in height each time
-    // a message comes and goes -- "solving" flashes up on many arrow presses.
+    // a message comes and goes.
     const status = gBusy || (_enumPoll ? `scanning ${_scanSecs()}s` : '');
     idxEl.innerHTML = `${rest}`
-      + `<div style="font-size:11px;opacity:0.7;margin-top:2px">${status || '&nbsp;'}</div>`;
+      + `<div style="font-size:10px;line-height:1.2;opacity:0.7">${status || '&nbsp;'}</div>`;
   }
   const cnt = document.getElementById('knotCountDisplay');
   if (cnt) cnt.textContent = '';   // count is in gIdx; |g| and g live in the invariants panel
@@ -1881,11 +1891,20 @@ document.getElementById('gBtn').addEventListener('click', enterGMode);
 //   odd L:  amphichiral <=> self-flip, chiral <=> not self-flip -- the two menus move together
 //   even L: every braid is chiral -- the chirality menu is disabled at "any"
 // changed: the menu the user just set (it wins); otherwise chirality follows self-flip.
+// Colour a ✓/✗ menu by its selection (green / red); 'any' keeps the default colour.
+function colourMarkMenus() {
+  for (const id of ['fChiral', 'fFlip']) {
+    const el = document.getElementById(id);
+    const mark = el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+    el.classList.toggle('f-yes', mark === '✓'); el.classList.toggle('f-no', mark === '✗');
+  }
+}
 function syncChiralFilter(L, changed) {
   const ch = document.getElementById('fChiral'), fl = document.getElementById('fFlip');
   if (L % 2 === 0) {
     ch.value = ''; ch.disabled = true;
     ch.title = 'every braid is chiral at even L';
+    colourMarkMenus();
     return;
   }
   ch.disabled = false;
@@ -1893,6 +1912,7 @@ function syncChiralFilter(L, changed) {
   const other = v => (v === '' ? '' : v === '1' ? '0' : '1');   // chiral <-> not self-flip
   if (changed === 'fChiral') fl.value = other(ch.value);
   else ch.value = other(fl.value);
+  colourMarkMenus();
 }
 // A from/to pair keeps from <= to: moving one past the other drags the other along.
 function linkRange(loId, hiId, changed) {
@@ -2247,6 +2267,39 @@ function cyclicTraceEqual(u, v) {
 // the braid: the knot may still be amphichiral through moves the cylinder does not see
 // (flypes on the sphere) -- deliberately ignored, as different cylinder diagrams are
 // different entries here.  (A knot with writhe != 0 is always 'chiral' either way.)
+// The current knot's values for the filter lines, from its WORD (as the list is built).
+// bightsOf follows gcatalog.bights_of; self-flip is gcatalog.word_self_flip; chirality
+// follows from them (odd L: amphichiral = self-flip; even L: always chiral).
+function bightsOf(g, L) {
+  let pos = 0; const seq = [];
+  for (let p = 0; p < L; p++)
+    for (const x of g) {
+      const v = Math.abs(x);
+      if (pos === v - 1) { seq.push(1); pos = v; }
+      else if (pos === v) { seq.push(-1); pos = v - 1; }
+    }
+  let c = 0;
+  for (let i = 0; i < seq.length; i++) if (seq[i] !== seq[(i - 1 + seq.length) % seq.length]) c++;
+  return c;
+}
+function wordSelfFlip(g, L) {
+  const u = g.map(Math.abs), r = u.map(x => L - x);
+  return cyclicTraceEqual(r, u) || cyclicTraceEqual(r, [...u].reverse());
+}
+function updateFilterValues() {
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.textContent = v;
+    el.classList.toggle('f-yes', v === '✓'); el.classList.toggle('f-no', v === '✗');
+  };
+  if (!gMode || !currentG) { ['vC', 'vG', 'vChiral', 'vFlip'].forEach(id => set(id, '')); return; }
+  const g = currentG, L = LEADS, sf = wordSelfFlip(g, L);
+  set('vC', String(bightsOf(g, L) / 2));
+  set('vG', String(g.length));
+  set('vFlip', sf ? '✓' : '✗');
+  set('vChiral', L % 2 === 1 && sf ? '✓' : '✗');            // the row asks "achiral?"
+}
+
 function braidChirality(g, L) {
   const mir = g.map(x => -Math.sign(x) * (L - Math.abs(x)));
   return cyclicTraceEqual(g, mir) || cyclicTraceEqual([...g].reverse(), mir)
