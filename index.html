@@ -186,13 +186,9 @@
 <div id="panel">
   <h1>Knot Visualizer</h1>
 
-  <div class="label">Complexity</div>
-  <div style="display:flex;gap:6px;margin-bottom:14px;">
-    <button class="c-btn" id="gBtn" title="Enumerate by step-word g">g</button>
-    <button class="c-btn" id="cBtn1">1</button>
-    <button class="c-btn" id="cBtn2">2</button>
-    <button class="c-btn" id="cBtn3">3</button>
-  </div>
+  <!-- C mode (the C/a/b/c/d parametrization) was retired 2026-09-29: g-mode's C filter
+       covers the same knots (same C=2/C=3 lists at every level tested) and draws them at
+       their true minimal W.  g-mode is the only mode. -->
 
   <div style="display:flex;gap:18px;justify-content:center;">
     <div>
@@ -204,7 +200,6 @@
       <input type="number" id="bInput" class="b-input" value="4" min="1" max="50">
     </div>
   </div>
-  <div id="knotCountDisplay" style="font-size:11px;color:rgba(140,170,255,0.7);text-align:center;margin:-6px 0 12px;"></div>
 
   <div id="gSection" style="display:none;">
     <div id="gIdx" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:3px 0;line-height:1.3;margin-bottom:6px;">— / —</div>
@@ -231,14 +226,6 @@
   <div id="infoName" style="font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;">16 bights total</div>
   <div id="infoRods" style="display:none;font-size:12px;color:rgba(140,170,255,0.7);text-align:center;margin-bottom:14px;"></div>
   <div id="knotStats" style="display:none;font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.5;color:rgba(150,180,255,0.75);background:rgba(60,80,160,0.10);border:1px solid rgba(100,130,255,0.18);border-radius:6px;padding:8px 10px;margin-bottom:14px;white-space:pre-wrap;word-break:break-word;"></div>
-
-  <div id="shapeSection">
-    <div id="ab2IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
-  </div>
-
-  <div id="c3Section" style="display:none;">
-<div id="c3IdxDisplay" style="font-size:13px;color:rgba(160,185,255,0.8);text-align:center;background:rgba(0,0,20,0.4);border:1px solid rgba(100,130,255,0.2);border-radius:6px;padding:8px 0;margin-bottom:14px;">↑↓ to browse</div>
-  </div>
 
   <div id="knotSliders">
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
@@ -319,15 +306,11 @@
   <div class="btn-row">
     <button id="componentToggle" class="view-btn">Solo</button>
     <button id="flipToggle"      class="view-btn">Flip</button>
-    <button id="formToggle"      class="view-btn" style="display:none;">Form ▸</button>
   </div>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
   <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
 </div>
 
-<div id="c3ErrorDisplay" style="position:fixed;display:none;top:14px;left:50%;transform:translateX(-50%);max-width:70%;font-size:12px;color:#fff;background:rgba(180,30,30,0.92);border:1px solid rgba(255,120,120,0.7);border-radius:6px;padding:9px 14px;font-family:'SF Mono','Fira Code','Consolas',monospace;z-index:20;text-align:center;"></div>
-<div id="abParamDisplay"  style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
-<div id="c3ParamDisplay" style="position:fixed;display:none;left:20px;bottom:22px;font-size:11px;color:rgba(160,185,255,0.55);font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:1px;pointer-events:none;z-index:8;"></div>
 <div id="buildInfo" style="position:fixed;display:none;left:50%;top:14px;transform:translateX(-50%);white-space:nowrap;max-width:96vw;font-size:14px;color:#fff;background:rgba(0,20,40,0.82);border:1px solid rgba(0,255,136,0.5);border-radius:6px;padding:8px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:0.5px;z-index:12;text-align:center;pointer-events:none;"></div>
 <canvas id="diagram"></canvas>
 
@@ -387,56 +370,10 @@ fillLight.position.set(0, -8, 5);
 scene.add(fillLight);
 
 // ── Zigzag knot definition ─────────────────────────────────────────────────
-// For leads m, parameters a≥0 b≥0 (see validPairs for the exact bounds):
-//   rows at y = 0, 2a, m+a-b, m+a+b
-//   zigzag bights: (0,0) → (m+a-b, m+a-b) → (2m-2b, 2a) → (3m-a-b, m+a+b)
-//   period = 4m,  d = 4  (always),  leads = m
-//
-// The four segments per period all run at 45° (slope ±1), so each one's length
-// in diagonal units equals |Δx| = |Δy|:
-//   P0→P1 (up)   : m + a − b
-//   P1→P2 (down) : m − a − b      ← always the shortest (a,b ≥ 0)
-//   P2→P3 (up)   : m − a + b
-//   P3→P0'(down) : m + a + b      ← always the longest
-// Σ = 4m = PERIOD; ascending total = descending total = 2m.
+// ZIGZAG: one period of the curve's turning points (bights), [x, y] with slope ±1
+// between them; PERIOD = its x-length (= W·L), D = number of bights, LEADS = L,
+// MAX_Y = height.  Set from the solver's run lengths by setKnotFromRuns.
 let ZIGZAG, PERIOD, D, LEADS, MAX_Y;
-
-function setKnotDef(m, a, b) {
-  ZIGZAG = [
-    [0,           0          ],
-    [m + a - b,   m + a - b  ],
-    [2*m - 2*b,   2*a        ],
-    [3*m - a - b, m + a + b  ],
-  ];
-  PERIOD = 4 * m;
-  D      = 4;
-  LEADS  = m;
-  MAX_Y  = m + a + b;
-}
-
-function setKnotDefC1(m) {
-  ZIGZAG = [[0, 0], [m, m]];
-  PERIOD = 2 * m;
-  D      = 2;
-  LEADS  = m;
-  MAX_Y  = m;
-}
-
-function setKnotDefC3(m, a, b, c, d) {
-  const L = m;
-  ZIGZAG = [
-    [0,                  0              ],
-    [3*L - c - d,        3*L - c - d    ],
-    [3*L + a - c - d,    3*L - a - c - d],
-    [3*L + a - c,        3*L - a - c    ],
-    [3*L + a + b - c,    3*L - a - b - c],
-    [3*L + a + b,        3*L - a - b    ],
-  ];
-  PERIOD = 6 * m;
-  D      = 6;
-  LEADS  = m;
-  MAX_Y  = Math.max(3*L - c - d, 3*L - a - c, 3*L - a - b);
-}
 
 // Set the knot from an explicit run-sequence (the g-based path). runs alternate
 // up,down,up,down…; ZIGZAG turning points, PERIOD, D, MAX_Y follow directly.
@@ -465,33 +402,14 @@ function setKnotFromRuns(runs, L) {
   if (knotFlipped) for (const p of ZIGZAG) p[1] = MAX_Y - p[1];   // mirror vertically
 }
 
-let currentC = 2;
-
 function setKnotFromUI(m) {
-  if (gMode) {
-    LEADS = m;
-    const bd = currentG ? gRunsCache.get(gRunsKey(m, currentG)) : null;
-    if (bd) {
-      setKnotFromRuns(bd.runs, m);          // runs are B-independent; flip applied inside
-    }
-    return;
-  }
-  if (currentC === 1) { setKnotDefC1(m); return; }
-  if (currentC === 2) {
-    let [a, b] = getAB();
-    if (knotFlipped) [a, b] = [b, a];      // flip = swap the two ascending segments
-    setKnotDef(m, a, b);
-  } else {
-    let t = [c3A, c3B, c3C, c3D];
-    if (knotFlipped) {
-      const mm = c3AltMirror[c3ValidIdx];
-      if (mm && mm[c3FormIdx]) t = mm[c3FormIdx];
-    }
-    setKnotDefC3(m, t[0], t[1], t[2], t[3]);
-  }
+  LEADS = m;
+  const bd = currentG ? gRunsCache.get(gRunsKey(m, currentG)) : null;
+  if (bd) setKnotFromRuns(bd.runs, m);      // runs are B-independent; flip applied inside
 }
 
-setKnotDef(5, 1, 1); // initial values match the original example
+// A placeholder until the first knot arrives from the server: the L=5 Turk's head.
+ZIGZAG = [[0, 0], [5, 5]]; PERIOD = 10; D = 2; LEADS = 5; MAX_Y = 5;
 
 function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
 
@@ -904,7 +822,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
   if (showStraight || crossings == null || components == null) { el.style.display = 'none'; return; }
   // Invariants depend only on the knot, not the display geometry — skip the
   // recompute (determinant, braid sweep) when dragging a pure-shape slider.
-  const sig = `${gMode ? 'g' + (currentG ? currentG.join(',') : '') : currentC}|${LEADS}|${B}|${currentA},${currentB}|${c3A},${c3B},${c3C},${c3D}|${showTubeDiag ? 'b' : 'k'}|${knotFlipped ? 'f' : ''}`;
+  const sig = `g${currentG ? currentG.join(',') : ''}|${LEADS}|${B}|${showTubeDiag ? 'b' : 'k'}|${knotFlipped ? 'f' : ''}`;
   if (sig === _knotStatsSig) { el.textContent = _knotStatsText; el.style.display = ''; return; }
   const mod = PERIOD * B / LEADS;
 
@@ -950,26 +868,9 @@ function updateKnotStats(B, ncomp, crossings, components) {
   el.style.display = '';
 }
 
-// The C-mode "N knots" line under Leads was dropped as unneeded; g-mode shows its
-// count in gIdx.
-function updateKnotCount() {
-  if (gMode) { updateGDisplays(); return; }
-  document.getElementById('knotCountDisplay').textContent = '';
-}
-
 // ── View state ─────────────────────────────────────────────────────────────
 
 // ── UI wiring ──────────────────────────────────────────────────────────────
-let currentA = 1, currentB = 1;
-let ab2ValidList = [], ab2ValidIdx = -1;
-let ab2ListCacheM = -1;
-let c3A = 2, c3B = 2, c3C = 2, c3D = 2;
-let c3ValidList = [], c3ValidIdx = -1;
-let c3MirrorList = [];          // c3MirrorList[i] = valid (a,b,c,d) for list[i]'s mirror
-let c3AltList = [];             // c3AltList[i] = distinct equivalent diagrams of knot i (forms); [0] = representative
-let c3AltMirror = [];           // c3AltMirror[i][j] = valid mirror tuple of c3AltList[i][j]
-let c3FormIdx = 0;              // which form of the current knot is displayed
-let c3ListCacheM = -1;
 // The app opens in g-mode, and there the FLIPPED diagram is the better default: the
 // first knots at any |g| are 1-heavy (e.g. 1,1,1,1,1,2,3,4), whose long clasps land
 // crowded against the inner radius unless the diagram is reflected.
@@ -978,82 +879,6 @@ let knotFlipped = G_DEFAULT_FLIP;   // flip button: render the mirror image in p
 let mDisplayed = null;          // L stepper: the leads count we have actually built
 let mStepTimer = null;
 let componentMode = false;
-
-function hasAllCrossings(components, mod) {
-  const nC = components.length;
-  const covered = components.map(comp => new Uint8Array(comp.length));
-  let remaining = components.reduce((s, c) => s + c.length, 0);
-  outer:
-  for (let ci = 0; ci < nC; ci++) {
-    const bP = components[ci], np = bP.length;
-    for (let p = 0; p < np; p++) {
-      const [ax, ay] = bP[p];
-      const dxp = bP[(p+1)%np][1] - ay;
-      if (dxp <= 0) continue;
-      for (let cj = 0; cj < nC; cj++) {
-        const bQ = components[cj], nq = bQ.length;
-        for (let q = 0; q < nq; q++) {
-          if (covered[ci][p] && covered[cj][q]) continue;
-          const [cx, cy] = bQ[q];
-          const dxq = cy - bQ[(q+1)%nq][1];
-          if (dxq <= 0) continue;
-          const diffY = cy - ay;
-          for (let t = 1; t < dxp; t++) {
-            const u = diffY - t;
-            if (u <= 0) break;
-            if (u >= dxq) continue;
-            if ((ax + t) % mod !== (cx + u) % mod) continue;
-            if (!covered[ci][p]) { covered[ci][p] = 1; remaining--; }
-            if (!covered[cj][q]) { covered[cj][q] = 1; remaining--; }
-            if (remaining === 0) break outer;
-            break;
-          }
-        }
-      }
-    }
-  }
-  return remaining === 0;
-}
-
-function computeValidC3(m) {
-  const L3 = 3 * m;
-  const list = [];
-  for (let a = 2; a <= L3 - 4; a++) {
-    if (a % 3 === 0) continue;
-    // b must have b%3 === a%3 to avoid b%3=0 and (a+b)%3=0; step by 3.
-    const bRem = a % 3;
-    // Only skip b where (a+b)%3=0: structurally impossible (needs d >= a+b, but d <= a+b-c with c>=2).
-    // b%3=0 is allowed when c+d <= b (ascending segs 2&4 have disjoint y-ranges then).
-    for (let b = 2; b <= L3 - a - 2; b++) {
-      if (b % 3 === (3 - bRem) % 3) continue;
-      for (let c = 2; c <= Math.min(L3 - a - b, a + b - 2); c++) {
-        if (c % 3 === 0) continue;
-        const dMax = Math.min(L3 - a - c, a + b - c);
-        // d%3=0 always bad (adjacent descending segs always overlap).
-        // b%3=0 or (c+d)%3=0 bad only when c+d > b; when c+d <= b y-ranges are disjoint.
-        for (let d = 2; d <= dMax; d++) {
-          if (d % 3 === 0) continue;
-          if ((b % 3 === 0 || (c + d) % 3 === 0) && c + d > b) continue;
-          if (a + b === c + d && b < d) continue;
-          // When a+c+d = 3m: require (a > d & b >= c) or (a = d & b > c & a = b).
-          if (a + c + d === L3 && !((a > d && b >= c) || (a === d && b > c && a === b))) continue;
-          // When a+b+c = 3m: require a >= d.
-          if (a + b + c === L3 && a < d) continue;
-          // Crossing test, O(1) (hasAllCrossings kept elsewhere as the reference
-          // impl): a segment is uncrossed iff its length is 2 and the inner
-          // ascending ranges are disjoint (c+d <= b).  Verified identical to the
-          // brute-force scan for m=3..18 (112k tuples, 0 diffs).  The former
-          // per-tuple bight-closure check is dropped too — it never fired
-          // (0 early-closures, m=3..18) and made stepping the leads count
-          // sluggish (which skipped values on key-repeat).
-          const seg = [L3 - c - d, a, d, b, c, L3 - a - b];
-          if (c + d > b || !seg.includes(2)) list.push([a, b, c, d]);
-        }
-      }
-    }
-  }
-  return list;
-}
 
 // ── Alexander polynomial (diagnostic) ───────────────────────────────────────
 // Wirtinger presentation + Fox calculus, for verifying a SUSPECTED dedup miss
@@ -1201,333 +1026,11 @@ window.knotDeterminant = function(B) {
   return det;
 };
 
-// ── Knot-identity dedup (C=3) ──────────────────────────────────────────────
-// computeValidC3 removes only *segment-sequence* duplicates; genuinely equal
-// knots still appear under different (a,b,c,d) — they differ by a flype, so the
-// diagrams differ but the knot is the same.  We dedup by the canonical
-// over/under Gauss code, which for these prime reduced *alternating* diagrams
-// is a knot invariant: equal code ⇒ same knot, so no distinct knot is ever
-// dropped (the only residual risk is a flype-related duplicate slipping
-// through — use window.knotDeterminant(B) on the two suspects to check before
-// assuming that's what happened; matching crossing counts alone is not proof).
-// Mirrors are folded in (policy: collapse mirrors, keep flip button).
-// Computed at the smallest bight count coprime to m — fewest crossings, and the
-// knot identity is bight-independent.
+// The smallest bight count coprime to m: fewest crossings with a single component.
 function smallestCoprimeB(m) { let B = 2; while (gcd(m, B) !== 1) B++; return B; }
 
-// Distinct bight rows of (a,b,c,d).  We keep the representative with the MOST
-// rows: the most generic diagram, giving the tensegrity optimizer the most
-// degrees of freedom and the least degeneracy.
-function c3RowCount(m, a, b, c, d) {
-  const L = m;
-  return new Set([0, 3*L-c-d, 3*L-a-c-d, 3*L-a-c, 3*L-a-b-c, 3*L-a-b]).size;
-}
-
-// Booth's algorithm: index of the lexicographically least rotation of S.
-function boothLeastRotation(S) {
-  const N = S.length;
-  const f = new Int32Array(2 * N).fill(-1);
-  let k = 0;
-  for (let j = 1; j < 2 * N; j++) {
-    const sj = S[j % N];
-    let i = f[j - k - 1];
-    while (i !== -1 && sj !== S[(k + i + 1) % N]) {
-      if (sj < S[(k + i + 1) % N]) k = j - i - 1;
-      i = f[i];
-    }
-    if (sj !== S[(k + i + 1) % N]) {
-      if (sj < S[k % N]) k = j;
-      f[j - k] = -1;
-    } else {
-      f[j - k] = i + 1;
-    }
-  }
-  return k;
-}
-
-// Canonical key of an over/under Gauss sequence (array of [label, overBit]),
-// folding rotation, reversal and mirror.  Uses a gap encoding — each position
-// carries the cyclic distance to its crossing's partner occurrence (rotation-
-// invariant, fixed alphabet) plus the over/under bit — so the minimal rotation
-// is O(n) via Booth's algorithm.  Verified to yield the identical partition to
-// the naive relabel-every-rotation canon for m = 3..18.
-function c3CanonGauss(seq) {
-  const N = seq.length;
-  const tokensOf = base => {
-    const partner = new Int32Array(N);
-    const posMap = new Map();
-    for (let i = 0; i < N; i++) {
-      const lab = base[i][0];
-      if (posMap.has(lab)) { const j = posMap.get(lab); partner[i] = j; partner[j] = i; }
-      else posMap.set(lab, i);
-    }
-    const t = new Int32Array(N);
-    for (let i = 0; i < N; i++) t[i] = ((((partner[i] - i) % N) + N) % N) * 2 + base[i][1];
-    return t;
-  };
-  const keyOf = t => {
-    const k = boothLeastRotation(t), out = new Array(N);
-    for (let i = 0; i < N; i++) out[i] = t[(k + i) % N];
-    return out.join(',');
-  };
-  const rev = seq.slice().reverse();
-  let best = null;
-  for (const base of [seq, rev]) {
-    const t0 = tokensOf(base);
-    const tm = tokensOf(base.map(([lab, o]) => [lab, o ^ 1]));
-    for (const t of [t0, tm]) { const kk = keyOf(t); if (best === null || kk < best) best = kk; }
-  }
-  return best;
-}
-
-// Canonical over/under Gauss code (string) for the C=3 knot (a,b,c,d).
-function c3GaussKey(m, a, b, c, d) {
-  const L = m, B = smallestCoprimeB(m), mod = 6 * B, half = mod >> 1, PER = 6 * m, D = 6;
-  const ZIG = [[0,0],[3*L-c-d,3*L-c-d],[3*L+a-c-d,3*L-a-c-d],
-               [3*L+a-c,3*L-a-c],[3*L+a+b-c,3*L-a-b-c],[3*L+a+b,3*L-a-b]];
-  const bP = []; const seenB = new Set();
-  outer:
-  for (let k = 0; k < B; k++)
-    for (let j = 0; j < D; j++) {
-      const x = ZIG[j][0], y = ZIG[j][1];
-      const bx = (((x + k*PER) % mod) + mod) % mod;
-      const dy = ZIG[(j+1)%D][1] - y, nd = dy > 0 ? 1 : dy < 0 ? -1 : 0;
-      const key = bx + ',' + y + ',' + nd;
-      if (seenB.has(key)) break outer;
-      seenB.add(key); bP.push([bx, y]);
-    }
-  const npt = bP.length;
-  const cr = new Map();
-  for (let p = 0; p < npt; p++) {
-    const ax = bP[p][0], ay = bP[p][1], dxp = bP[(p+1)%npt][1] - ay;
-    if (dxp <= 0) continue;
-    for (let q = 0; q < npt; q++) {
-      const cy = bP[q][1], cx = bP[q][0], dxq = cy - bP[(q+1)%npt][1];
-      if (dxq <= 0) continue;
-      const diffY = cy - ay;
-      // A crossing needs (ax+t) ≡ (cx+u) (mod mod) with u = diffY−t, i.e.
-      // 2t ≡ cx+diffY−ax (mod mod).  Solve directly instead of scanning t.
-      const K = (((cx + diffY - ax) % mod) + mod) % mod;
-      if (K % 2 !== 0) continue;
-      const t0 = (K >> 1) % half;
-      const tlo = Math.max(1, diffY - dxq + 1), thi = Math.min(dxp - 1, diffY - 1);
-      if (tlo > thi) continue;
-      for (let t = tlo + (((t0 - tlo) % half) + half) % half; t <= thi; t += half) {
-        const u = diffY - t;
-        const kk = ((((ax+t)%mod)+mod)%mod) + ',' + (ay+t);
-        if (!cr.has(kk)) cr.set(kk, {p, t, q, u});
-      }
-    }
-  }
-  const lst = [...cr.values()];
-  const cum = [0];
-  for (let i = 0; i < npt; i++) cum.push(cum[i] + Math.abs(bP[(i+1)%npt][1] - bP[i][1]));
-  const enc = [];
-  lst.forEach((c2, i) => { enc.push([cum[c2.p]+c2.t, i, true]); enc.push([cum[c2.q]+c2.u, i, false]); });
-  enc.sort((A, Bb) => A[0] - Bb[0]);
-  const rank = new Array(lst.length);
-  enc.forEach((e, r) => { if (e[2]) rank[e[1]] = r; });
-  let over = lst.map((_, i) => rank[i] % 2 === 0);
-  let bestSeg = Infinity, bestT = Infinity, fio = true;
-  lst.forEach((c2, i) => {
-    const laterSeg = Math.max(c2.p, c2.q);
-    const tOnLater = c2.p > c2.q ? c2.t : c2.u;
-    const isOverLater = c2.p > c2.q ? over[i] : !over[i];
-    if (laterSeg < bestSeg || (laterSeg === bestSeg && tOnLater < bestT)) {
-      bestSeg = laterSeg; bestT = tOnLater; fio = isOverLater;
-    }
-  });
-  if (!fio) over = over.map(o => !o);
-  const enc2 = [];
-  lst.forEach((c2, i) => { enc2.push([cum[c2.p]+c2.t, i, over[i]]); enc2.push([cum[c2.q]+c2.u, i, !over[i]]); });
-  enc2.sort((A, Bb) => A[0] - Bb[0]);
-  const seq = enc2.map(e => [e[1], e[2] ? 1 : 0]);
-  return c3CanonGauss(seq);
-}
-
-// Dedup a raw C=3 list to one representative per knot (mirrors folded in).
-// Returns { list, mirror }: mirror[i] is a valid (a,b,c,d) drawing of list[i]'s
-// mirror image (for the flip button), or list[i] itself when self-mirror.
-function dedupC3(m, raw) {
-  const ckey = t => c3CanonKey(c3Seq(t[0], t[1], t[2], t[3], m));
-  const cmp = (t, r) => t[0]<r[0] || (t[0]===r[0] && (t[1]<r[1] ||
-              (t[1]===r[1] && (t[2]<r[2] || (t[2]===r[2] && t[3]<r[3])))));
-  const groups = new Map();
-  for (const t of raw) {
-    const k = c3GaussKey(m, t[0], t[1], t[2], t[3]);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(t);
-  }
-  // Representative: prefer a flip-symmetric diagram (so Shift+arrow can reach the
-  // knot), then most bight rows, then lexicographically smallest.
-  const fkey = t => c3CanonKey(c3FlipSeq(t[0], t[1], t[2], t[3], m));
-  const isSym = t => ckey(t) === fkey(t);
-  const orbitOf = t => { const a = ckey(t), b = fkey(t); return a < b ? a + '|' + b : b + '|' + a; };
-  const list = [], mirror = [], alt = [], altMirror = [];
-  for (const members of groups.values()) {
-    const sym = members.filter(isSym);
-    const pool = sym.length ? sym : members;
-    let rep = pool[0], repRows = c3RowCount(m, rep[0], rep[1], rep[2], rep[3]);
-    for (const t of pool) {
-      const rows = c3RowCount(m, t[0], t[1], t[2], t[3]);
-      if (rows > repRows || (rows === repRows && cmp(t, rep))) { rep = t; repRows = rows; }
-    }
-    // Distinct equivalent diagrams (forms): one per flip-orbit — same-chirality
-    // only, since the Flip button reaches the mirror.  rep first, then the rest
-    // ordered symmetric-first, most rows, lexicographic.
-    const byKey = new Map();               // one lex-min tuple per diagram (ckey)
-    for (const t of members) { const k = ckey(t); const c = byKey.get(k); if (!c || cmp(t, c)) byKey.set(k, t); }
-    const used = new Set([orbitOf(rep)]);
-    const others = [];
-    for (const t of byKey.values()) { const o = orbitOf(t); if (used.has(o)) continue; used.add(o); others.push(t); }
-    others.sort((x, y) => {
-      const s = (isSym(x) ? 0 : 1) - (isSym(y) ? 0 : 1); if (s) return s;
-      const r = c3RowCount(m, y[0], y[1], y[2], y[3]) - c3RowCount(m, x[0], x[1], x[2], x[3]); if (r) return r;
-      return cmp(x, y) ? -1 : (cmp(y, x) ? 1 : 0);
-    });
-    const forms = [rep, ...others];
-    const formMir = forms.map(f => { const fk = fkey(f); return members.find(t => ckey(t) === fk) || f; });
-    list.push(rep);
-    mirror.push(formMir[0]);
-    alt.push(forms);
-    altMirror.push(formMir);
-  }
-  return { list, mirror, alt, altMirror };
-}
-
-function syncC3List(m) {
-  if (m !== c3ListCacheM) {
-    const dd = dedupC3(m, computeValidC3(m));
-    c3ValidList = dd.list; c3MirrorList = dd.mirror; c3AltList = dd.alt; c3AltMirror = dd.altMirror;
-    c3ListCacheM = m;
-    c3ValidIdx = 0; c3FormIdx = 0;
-    if (c3ValidList.length > 0) [c3A, c3B, c3C, c3D] = c3ValidList[0];
-  } else {
-    // Keep the current knot (and form) if the shown tuple is one of its forms;
-    // otherwise resolve the index from the tuple and reset to the base form.
-    const forms = c3AltList[c3ValidIdx];
-    const onForm = forms && forms.some(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
-    if (!onForm) {
-      c3ValidIdx = c3ValidList.findIndex(([a,b,c,d]) => a===c3A && b===c3B && c===c3C && d===c3D);
-      c3FormIdx = 0;
-      if (c3ValidIdx < 0 && c3ValidList.length > 0) {
-        c3ValidIdx = 0;
-        [c3A, c3B, c3C, c3D] = c3ValidList[0];
-      }
-    }
-  }
-  updateC3Display();
-  return c3ValidList.length > 0;
-}
-
-function updateC3Display() {
-  const cnt = c3ValidList.length;
-  document.getElementById('c3IdxDisplay').textContent =
-    c3ValidIdx >= 0 ? `${c3ValidIdx + 1} / ${cnt}` : `— / ${cnt}`;
-  const pd = document.getElementById('c3ParamDisplay');
-  pd.style.display = currentC === 3 ? '' : 'none';
-  pd.textContent = `a=${c3A}  b=${c3B}  c=${c3C}  d=${c3D}`;
-  updateFlipButton();
-  updateFormButton();
-  updateKnotCount();
-}
-
-// Form button: cycles the current knot through its distinct equivalent diagrams
-// (same chirality; the mirror stays on the Flip button).  Disabled/hidden when
-// the knot has only one form or we're not in C=3.
-function updateFormButton() {
-  const btn = document.getElementById('formToggle');
-  const forms = currentC === 3 ? c3AltList[c3ValidIdx] : null;
-  btn.style.display = currentC === 3 ? '' : 'none';
-  btn.disabled = !forms || forms.length < 2;
-  btn.textContent = forms && forms.length ? `Form ${c3FormIdx + 1}/${forms.length} ▸` : 'Form ▸';
-}
-
-function cycleForm() {
-  if (currentC !== 3) return;
-  const forms = c3AltList[c3ValidIdx];
-  if (!forms || forms.length < 2) return;
-  knotFlipped = false;
-  c3FormIdx = (c3FormIdx + 1) % forms.length;
-  [c3A, c3B, c3C, c3D] = forms[c3FormIdx];
-  updateC3Display();
-  rebuildKnot();
-}
-document.getElementById('formToggle').addEventListener('click', cycleForm);
-
-// Valid (a,b) for C=2.  The two restrictions together are exactly
-// "all four zigzag segments are odd and ≥ 3":
-//
-//  • Parity — all four segment lengths share the parity of (m+a+b), because
-//    m+a−b ≡ m−a−b ≡ m−a+b ≡ m+a+b  (mod 2)  (−b ≡ +b, −a ≡ +a).
-//    So requiring (m−a−b) odd makes ALL four lengths odd at once.
-//
-//  • a+b ≤ m−3 — the shortest segment is L1 = m−a−b (since a,b ≥ 0, it is ≤ the
-//    other three).  Hence "all segments ≥ 3" ⟺ L1 ≥ 3 ⟺ a+b ≤ m−3.  This is
-//    exactly the cap below; L0 = m+a−b ≥ 2a+3 and L2 = m−a+b ≥ 2b+3 then follow.
-//
-// Why ≥ 3 (and odd, so never 1 or 2): a segment of length 1 has no crossing
-// point between its two bights, collapsing the knot to an uninteresting C=1
-// knot.  Excluding (0,0) drops the trivial all-diagonal case.
-//
-// No duplicates — enforced by a,b ≥ 0 alone (no extra dedup conditions needed,
-// unlike C=3).  The picture-preserving symmetries of the 4-segment sequence
-// s(a,b) = [m+a−b, m−a−b, m−a+b, m+a+b] are rotate-by-2 and path reversal.
-// Requiring the image to again be a valid s(A,B) (A,B ≥ 0) forces:
-//   • rotate-by-2     → A+B = −(a+b)  ⟹  a=b=0
-//   • reversal        → A=a, B=−b     ⟹  b=0   (maps (a,0) to itself)
-//   • rotate+reversal → A=−a, B=b     ⟹  a=0   (maps (0,b) to itself)
-// i.e. a symmetry can only ever map a pair to ITSELF, so no two different (a,b)
-// produce the same knot.  (b=0 / a=0 just mean that knot is self-reverse.)
-//
-// Flip: flipping is (a,b) → (b,a), which swaps the two ascending segments
-// L0 ↔ L2 and leaves L1, L3 fixed.  A knot equals its own flip iff L0 = L2,
-// i.e. m+a−b = m−a+b ⟺ a = b (no other cases: L1 = m−a−b is the strict min and
-// L3 = m+a+b the strict max for (a,b) ≠ (0,0), so no symmetry can swap them).
-// Hence the distinct-knot count is (N + #{a==b}) / 2.
-function validPairs(m) {
-  const pairs = [];
-  // a ≤ b keeps one of each mirror pair (a,b)/(b,a) — the complete dedup for
-  // C=2 (its only same-knot symmetry is the transpose = flip).  The flip button
-  // still reaches the (b,a) mirror in place.
-  for (let a = 0; a <= m - 3; a++)
-    for (let b = a; a + b <= m - 3; b++)
-      if ((m - a - b) % 2 === 1 && !(a === 0 && b === 0)) pairs.push([a, b]);
-  return pairs;
-}
-
-function updateAB2Display() {
-  const cnt = ab2ValidList.length;
-  document.getElementById('ab2IdxDisplay').textContent =
-    ab2ValidIdx >= 0 ? `${ab2ValidIdx + 1} / ${cnt}` : `— / ${cnt}`;
-  const pd = document.getElementById('abParamDisplay');
-  pd.style.display = currentC === 2 ? '' : 'none';
-  pd.textContent = `a=${currentA}  b=${currentB}`;
-  updateFlipButton();
-  updateKnotCount();
-}
-
-function syncAB2List(m) {
-  if (m !== ab2ListCacheM) {
-    ab2ValidList = validPairs(m);
-    ab2ListCacheM = m;
-    ab2ValidIdx = 0;
-    if (ab2ValidList.length > 0) [currentA, currentB] = ab2ValidList[0];
-  } else {
-    ab2ValidIdx = ab2ValidList.findIndex(([a, b]) => a === currentA && b === currentB);
-    if (ab2ValidIdx < 0 && ab2ValidList.length > 0) {
-      ab2ValidIdx = 0;
-      [currentA, currentB] = ab2ValidList[0];
-    }
-  }
-  updateAB2Display();
-  return ab2ValidList.length > 0;
-}
-
-function getAB() { return [currentA, currentB]; }
-
-function minLeads()  { return gMode ? 2 : currentC === 2 ? 4 : currentC === 3 ? 3 : 2; }
-function minBights() { return gMode ? (gB1Minimal(currentG) ? 1 : 2) : currentC === 1 ? 2 : 1; }
+function minLeads()  { return 2; }
+function minBights() { return gB1Minimal(currentG) ? 1 : 2; }
 
 // g-mode allows B=1 only when every generator occurs at least twice in g.  A generator
 // that occurs once in the closed word is a nugatory crossing: it untwists away, and the
@@ -1565,29 +1068,12 @@ function rebuildKnot() {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
-  if (gMode) { setKnotFromUI(m); redrawCurrentView(); return; }
-  if (currentC === 2 && ab2ValidList.length === 0) return;
-  if (currentC === 3 && c3ValidList.length === 0) return;
   setKnotFromUI(m);
   redrawCurrentView();
 }
 
-// Build everything for a specific leads count m (no input reads/writes).
-function buildForM(m) {
-  knotFlipped = gMode ? G_DEFAULT_FLIP : false;
-  if (gMode) { gRebuild({ reenum: true, resetView: true }); return; }
-  if (currentC === 2 && !syncAB2List(m)) return;
-  if (currentC === 3 && !syncC3List(m)) return;
-  setKnotFromUI(m);
-  // Leads changed: drop back to the default frontal framing (same as
-  // pressing 'r') instead of keeping whatever orbit/flat-cylinder tilt was
-  // set for the previous knot.
-  if (showKnot) { orthoOrbit.reset(); resetKnotFrontalView(); }
-  else redrawCurrentView();
-}
-
 // ==== g-mode: enumerate/construct knots by step-word g (server-backed) ====
-let gMode = true;             // g is the primary parametrization ("g" button)
+let gMode = true;             // always true: g-mode is the only mode since C mode was retired
 let currentG = null;          // selected step-word (array)
 let gErr = '';                // gLen / gList / gListIdx / gRunsCache declared with the fetch helpers
 const gParity = L => (L - 1) % 2;
@@ -1616,8 +1102,6 @@ function updateGDisplays() {
     idxEl.innerHTML = `${rest}`
       + `<div style="font-size:10px;line-height:1.2;opacity:0.7">${status || '&nbsp;'}</div>`;
   }
-  const cnt = document.getElementById('knotCountDisplay');
-  if (cnt) cnt.textContent = '';   // count is in gIdx; |g| and g live in the invariants panel
 }
 
 // "Is it broken or just slow?" is the worst state to leave a user in.  Anything the
@@ -1667,7 +1151,7 @@ function clearBusy() {
 // Keyed by LEVEL, deliberately not by rebuild generation: browsing knots with
 // left/right calls gRebuild (bumping gGen) and must NOT interrupt the scan of the level
 // you are browsing.  Only a change of L or |g| ends it.
-let _enumPoll = null, _enumPollKey = null, _enumT0 = 0;
+let _enumPoll = null, _enumPollKey = null, _enumT0 = 0, _enumPollBusy = false;
 const _scanSecs = () => Math.round((Date.now() - _enumT0) / 1000);
 function stopEnumPoll() {
   if (_enumPoll) { clearInterval(_enumPoll); _enumPoll = null; }
@@ -1678,15 +1162,19 @@ function startEnumPoll(key) {
   stopEnumPoll();
   _enumPollKey = key; _enumT0 = Date.now();
   _enumPoll = setInterval(async () => {
-    if (_enumPollKey !== key) return;               // a different level took over
+    if (_enumPollKey !== key || _enumPollBusy) return;   // another query, or a poll in flight
+    _enumPollBusy = true;
     try {
-      const s = await gPost('/enumerate/poll', {});
+      // Ask only for the knots we lack: resending thousands every half second was slow
+      // enough for a poll to fail, which stopped polling with 'scanning' left on screen.
+      const s = await gPost('/enumerate/poll', { since: gList.length });
       if (_enumPollKey !== key) return;
-      if (s.q !== key) { stopEnumPoll(); return; }
-      gList = s.gs; gList._key = key;
-      if (s.done) stopEnumPoll();                   // clears the 'scanning' suffix
+      if (s.q !== key) { stopEnumPoll(); updateGDisplays(); return; }
+      if (s.from === gList.length && s.gs.length) gList.push(...s.gs);   // _key is kept
+      if (s.done && gList.length === s.count) stopEnumPoll();   // clears the 'scanning' line
       updateGDisplays();                            // count grows under the selection
-    } catch (e) { stopEnumPoll(); }
+    } catch (e) { stopEnumPoll(); updateGDisplays(); }
+    finally { _enumPollBusy = false; }
   }, 500);
 }
 
@@ -1800,14 +1288,8 @@ async function gRebuild(opts) {
 
 function enterGMode() {
   gMode = true;
-  document.getElementById('gBtn').classList.add('active');
-  [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.remove('active'));
-  document.getElementById('shapeSection').style.display = 'none';
-  document.getElementById('c3Section').style.display = 'none';
   document.getElementById('gSection').style.display = '';
   knotFlipped = G_DEFAULT_FLIP;   // g-mode default; updateFlipButton() handles no-op knots
-  const ab = document.getElementById('abParamDisplay'); if (ab) ab.style.display = 'none';
-  const c3 = document.getElementById('c3ParamDisplay'); if (c3) c3.style.display = 'none';
   const mInput = document.getElementById('mInput');
   mInput.min = minLeads();
   if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
@@ -1816,13 +1298,9 @@ function enterGMode() {
   gRebuild({ reenum: true, resetView: true });
 }
 
-// The per-L rebuild can take ~1s at large L.  The native number-input spinner
-// causes two problems: it fires input+change per click, and if we build (and
-// freeze the thread) mid-click the spinner auto-repeats and adds a spurious
-// extra step.  So we DEBOUNCE — wait ~250ms for the interaction to settle, then
-// walk L one step at a time toward the input's value, building every
-// intermediate and yielding between steps.  A click lands on exactly the next
-// value; nothing is skipped or doubled.
+// The native number-input spinner fires input+change per click and auto-repeats while
+// held, so changes to L are DEBOUNCED: wait ~250ms for the interaction to settle, then
+// rebuild once for the value it settled on.
 function scheduleMStep() {
   clearTimeout(mStepTimer);
   mStepTimer = setTimeout(mWalk, 250);
@@ -1834,12 +1312,8 @@ function mWalk() {
   if (isNaN(target)) { mInput.value = mDisplayed; return; }
   target = Math.max(minLeads(), Math.min(parseInt(mInput.max) || 30, target));
   if (String(target) !== mInput.value) mInput.value = target;   // clamp display
-  if (gMode) { mDisplayed = target; gRebuild({ reenum: true, resetView: true }); return; }
-  if (mDisplayed === null) mDisplayed = target;
-  if (mDisplayed === target) return;
-  mDisplayed += Math.sign(target - mDisplayed);                 // exactly one step
-  buildForM(mDisplayed);
-  if (mDisplayed !== target) mStepTimer = setTimeout(mWalk, 0); // settled → keep walking
+  mDisplayed = target;
+  gRebuild({ reenum: true, resetView: true });
 }
 
 document.getElementById('mInput').addEventListener('input', scheduleMStep);
@@ -1848,44 +1322,13 @@ document.getElementById('bInput').addEventListener('change', () => {
   const m = parseInt(document.getElementById('mInput').value);
   const B = parseInt(document.getElementById('bInput').value);
   if (isNaN(m) || isNaN(B) || m < minLeads() || B < minBights()) return;
-  if (!gMode && currentC === 3 && !syncC3List(m)) return;
   setKnotFromUI(m);
-  // Bights changed: same frontal-view reset as leads changes (buildForM) —
+  // Bights changed: same frontal-view reset as a change of leads --
   // matches pressing 'r' rather than keeping the previous orbit/tilt.
   if (showKnot) { orthoOrbit.reset(); resetKnotFrontalView(); }
   else redrawCurrentView();
 });
 
-function setComplexity(c) {
-  gMode = false;
-  document.getElementById('gBtn').classList.remove('active');
-  document.getElementById('gSection').style.display = 'none';
-  currentC = c;
-  knotFlipped = false;
-  [1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).classList.toggle('active', n === c));
-  document.getElementById('shapeSection').style.display  = c === 2 ? '' : 'none';
-  document.getElementById('c3Section').style.display     = c === 3 ? '' : 'none';
-  document.getElementById('abParamDisplay').style.display  = c === 2 ? '' : 'none';
-  document.getElementById('c3ParamDisplay').style.display = c === 3 ? '' : 'none';
-  document.getElementById('flipToggle').disabled = (c === 1);   // no parameters to flip
-  c3FormIdx = 0;
-  updateFormButton();
-  const mInput = document.getElementById('mInput');
-  mInput.min = minLeads();
-  if (parseInt(mInput.value) < minLeads()) mInput.value = minLeads();
-  const bInput = document.getElementById('bInput');
-  bInput.min = minBights();
-  if (parseInt(bInput.value) < minBights()) bInput.value = minBights();
-  if (c === 2) { ab2ListCacheM = -1; syncAB2List(parseInt(mInput.value)); }
-  if (c === 3) { c3ListCacheM  = -1; syncC3List(parseInt(mInput.value)); }
-  updateKnotCount();   // C=1 has no list sync above
-  document.getElementById('straightRow').style.display = '';   // Straight: all complexities
-  rebuildKnot();
-  mDisplayed = parseInt(document.getElementById('mInput').value);   // keep L stepper in sync
-}
-document.getElementById('cBtn2').classList.add('active');
-[1, 2, 3].forEach(n => document.getElementById(`cBtn${n}`).addEventListener('click', () => setComplexity(n)));
-document.getElementById('gBtn').addEventListener('click', enterGMode);
 // Chirality and self-flip are tied (see gcatalog.braid_amphichiral): with the parity
 // signs of these diagrams the flip IS the mirror when L is odd, and never when L is even.
 //   odd L:  amphichiral <=> self-flip, chiral <=> not self-flip -- the two menus move together
@@ -1965,76 +1408,17 @@ document.addEventListener('keydown', e => {
     buildStraight();
     return;
   }
-  if (gMode) {
-    e.preventDefault();
-    knotFlipped = G_DEFAULT_FLIP;                       // new knot starts in the g-mode default
-    const d = e.key === 'ArrowRight' ? 1 : -1;          // browse the filtered list
-    gListIdx += d;
-    gRebuild({ dir: d });
-    return;
-  }
-  knotFlipped = false;   // stepping to a new knot clears any flip
-  const dir = (e.key === 'ArrowUp' || e.key === 'ArrowRight') ? 1 : -1;
-  // Shift+arrow: step only through flip-symmetric (self-flip) entries.  Walk the
-  // list in `dir` until we land on a symmetric entry; if none exist, do nothing.
-  const nextIdx = (list, idx, isSym) => {
-    const n = list.length;
-    if (!e.shiftKey) return (idx + dir + n) % n;
-    for (let step = 1; step <= n; step++) {
-      const j = (idx + dir * step + n * step) % n;
-      if (isSym(list[j])) return j;
-    }
-    return -1;  // no symmetric entry found
-  };
-  if (currentC === 2 && ab2ValidList.length > 0) {
-    e.preventDefault();
-    const j = nextIdx(ab2ValidList, ab2ValidIdx, ([a, b]) => a === b);
-    if (j < 0) return;
-    ab2ValidIdx = j;
-    [currentA, currentB] = ab2ValidList[ab2ValidIdx];
-    updateAB2Display();
-    rebuildKnot();
-  } else if (currentC === 3 && c3ValidList.length > 0) {
-    e.preventDefault();
-    const m = parseInt(document.getElementById('mInput').value);
-    const j = nextIdx(c3ValidList, c3ValidIdx, ([a, b, c, d]) =>
-      c3CanonKey(c3Seq(a, b, c, d, m)) === c3CanonKey(c3FlipSeq(a, b, c, d, m)));
-    if (j < 0) return;
-    c3ValidIdx = j; c3FormIdx = 0;
-    [c3A, c3B, c3C, c3D] = c3ValidList[c3ValidIdx];
-    updateC3Display();
-    rebuildKnot();
-  }
+  e.preventDefault();
+  knotFlipped = G_DEFAULT_FLIP;                         // new knot starts in the default flip
+  const d = e.key === 'ArrowRight' ? 1 : -1;            // browse the filtered list
+  gListIdx += d;
+  gRebuild({ dir: d });
 });
 document.getElementById('thickInput').addEventListener('input', () => {
   const v = parseFloat(document.getElementById('thickInput').value);
   if (showStraight) thickStraightVal = v; else thickKnotVal = v;
   redrawCurrentView();
 });
-
-// ── Flip ───────────────────────────────────────────────────────────────────
-// Reflect the flat knot vertically (y → MAX_Y − y): upside-down in the flat
-// diagram/braid, inner/outer swapped in the round/knot views (the opposite end
-// of the flat↔cylinder slider).  The flipped knot is a different valid
-// combination; we recompute it and point the counter at the matching list entry
-// so a second press returns to the original.  Disabled for C=1 (no parameters).
-//
-// Canonical signature of a C=3 segment sequence under the same equivalence used
-// by findSameYSets: even rotations (preserve asc/desc) of the sequence and of
-// its reversal (the closed zigzag traversed backwards).
-function c3CanonKey(seq) {
-  const evenRots = a => [
-    [a[0],a[1],a[2],a[3],a[4],a[5]],
-    [a[2],a[3],a[4],a[5],a[0],a[1]],
-    [a[4],a[5],a[0],a[1],a[2],a[3]],
-  ];
-  const rev = [seq[5],seq[4],seq[3],seq[2],seq[1],seq[0]];
-  return [...evenRots(seq), ...evenRots(rev)].map(r => r.join(',')).sort()[0];
-}
-
-// C=3 segment sequences for an entry and its vertical flip (odd rotation).
-function c3Seq(a, b, c, d, m)      { const L3 = 3*m; return [L3-c-d, a, d, b, c, L3-a-b]; }
-function c3FlipSeq(a, b, c, d, m)  { const L3 = 3*m; return [a, d, b, c, L3-a-b, L3-c-d]; }
 
 // True when flipping leaves the knot unchanged (flip would be a no-op).
 // g-mode: the flip is the vertical flip = rotate the run sequence by one (odd),
@@ -2058,13 +1442,7 @@ function gShapeFlipNoOp() {
 }
 
 function flipIsNoOp() {
-  if (gMode) return gShapeFlipNoOp();
-  if (currentC === 1) return true;
-  const m = parseInt(document.getElementById('mInput').value);
-  if (currentC === 2) return ab2ValidList.length === 0 || currentA === currentB;
-  if (c3ValidList.length === 0) return true;
-  return c3CanonKey(c3Seq(c3A, c3B, c3C, c3D, m)) ===
-         c3CanonKey(c3FlipSeq(c3A, c3B, c3C, c3D, m));
+  return gShapeFlipNoOp();
 }
 
 function updateFlipButton() {
@@ -2072,12 +1450,9 @@ function updateFlipButton() {
 }
 
 function flipKnot() {
-  // Mirrors are deduped out of the list, so flip renders the mirror image in
-  // place (counter unchanged) via the knotFlipped flag; flipping twice returns
-  // to the representative.  setKnotFromUI applies it (swap a,b for C=2; the
-  // stored mirror tuple for C=3).
-  if (gMode) { if (flipIsNoOp()) return; knotFlipped = !knotFlipped; rebuildKnot(); return; }   // mirror the diagram
-  if (currentC === 1 || flipIsNoOp()) return;
+  // The flip renders the diagram upside down in place via the knotFlipped flag
+  // (setKnotFromRuns applies it); flipping twice returns to the drawing as solved.
+  if (flipIsNoOp()) return;
   knotFlipped = !knotFlipped;
   rebuildKnot();
 }
@@ -2393,7 +1768,7 @@ function findFriezeSymmetries(period, MAX_Y, bightList, crossList) {
 // Gathers findFriezeSymmetries' input from the SAME components+allCrossings
 // data a view has already computed (works for both the flat diagram, at any
 // B, and the braid — the braid's fundamental period is exactly the B=1
-// diagram, i.e. mod=2·currentC·1=D=PERIOD/LEADS: verified numerically to
+// diagram, i.e. mod=D=PERIOD/LEADS: verified numerically to
 // reproduce buildTubeDiagram's own crossing computation exactly).
 function symmetryDataFromComponents(components, allCrossings) {
   const bights = [], crossings = [];
@@ -2849,96 +2224,6 @@ function drawDiagram() {
         ctx.beginPath(); ctx.arc(cx0, cy0, 1.5, 0, Math.PI * 2); ctx.fillStyle = symColor; ctx.fill();
       }
     ctx.restore();
-  }
-
-  // C=3 parameter rulers — only in component (Period) mode.
-  // Endpoints are where adjacent same-slope segment lines cross the ruler's own y-level.
-  if (currentC === 3 && componentMode) {
-    const qtrY = py(MAX_Y * 0.25);
-    const rulers = [
-      { y: qtrY - 10, spans: [{ name: `2a=${2*c3A}`, color: 'rgba(255,140,60,0.9)',  s0: 0, s1: 2 },
-                               { name: `2b=${2*c3B}`, color: 'rgba(255,220,60,0.9)',  s0: 2, s1: 4 }] },
-      { y: qtrY + 10, spans: [{ name: `2d=${2*c3D}`, color: 'rgba(80,210,180,0.9)', s0: 1, s1: 3 },
-                               { name: `2c=${2*c3C}`, color: 'rgba(120,170,255,0.9)', s0: 3, s1: 5 }] },
-    ];
-    const tickH = 5;
-    const comp0 = components[0];
-    const n0    = comp0.length;
-    let cumX = comp0[0][0];
-    const xs = [cumX], ys = [comp0[0][1]];
-    for (let s = 0; s < D; s++) {
-      const [, ay] = comp0[s];
-      const [, by] = comp0[(s + 1) % n0];
-      cumX += Math.abs(by - ay);
-      xs.push(cumX);
-      ys.push(by);
-    }
-    // x where segment s's line crosses diagram y-level yDiag
-    const xAtLevel = (s, yDiag) => s % 2 === 0
-      ? xs[s] + (yDiag - ys[s])   // ascending slope +1
-      : xs[s] - (yDiag - ys[s]);  // descending slope -1
-
-    ctx.font = '15px monospace';
-    ctx.textAlign = 'center';
-    for (const { y: rulerY, spans } of rulers) {
-      const yDiag = (oy - rulerY) / scale;
-      for (const { name, color, s0, s1 } of spans) {
-        const rx0 = px(xAtLevel(s0, yDiag));
-        const rx1 = px(xAtLevel(s1, yDiag));
-        if (rx1 < ox || rx0 > ox + availDiagW) continue;
-        const crx0 = Math.max(rx0, ox);
-        const crx1 = Math.min(rx1, ox + availDiagW);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(crx0, rulerY); ctx.lineTo(crx1, rulerY); ctx.stroke();
-        if (rx0 >= ox)              { ctx.beginPath(); ctx.moveTo(rx0, rulerY - tickH); ctx.lineTo(rx0, rulerY + tickH); ctx.stroke(); }
-        if (rx1 <= ox + availDiagW) { ctx.beginPath(); ctx.moveTo(rx1, rulerY - tickH); ctx.lineTo(rx1, rulerY + tickH); ctx.stroke(); }
-        if (rx1 - rx0 > 20) {
-          ctx.fillStyle = color;
-          ctx.fillText(name, (crx0 + crx1) / 2, rulerY - tickH - 2);
-        }
-      }
-    }
-  }
-
-  // C=2 parameter rulers — vertical, only in component (Period) mode.
-  // 2a: from y=0 (first v bight) to y=2a (third v bight), at x midpoint of bights 0 and 2.
-  // 2b: from y=m+a-b (first ^ bight) to y=m+a+b (fourth ^ bight), at x midpoint of bights 1 and 3.
-  if (currentC === 2 && componentMode) {
-    const comp0 = components[0];
-    const n0    = comp0.length;
-    let cumX = comp0[0][0];
-    const xs = [cumX], ys = [comp0[0][1]];
-    for (let s = 0; s < D; s++) {
-      const [, ay] = comp0[s];
-      const [, by] = comp0[(s + 1) % n0];
-      cumX += Math.abs(by - ay);
-      xs.push(cumX);
-      ys.push(by);
-    }
-    const rulers2 = [
-      { x: (xs[0] + xs[2]) / 2, y0: ys[0], y1: ys[2], name: `2a=${2*currentA}`, color: 'rgba(255,140,60,0.9)',  skip: currentA === 0 },
-      { x: (xs[1] + xs[3]) / 2, y0: ys[1], y1: ys[3], name: `2b=${2*currentB}`, color: 'rgba(255,220,60,0.9)', skip: currentB === 0 },
-    ];
-    const tickW = 5;
-    ctx.font = '15px monospace';
-    ctx.textAlign = 'left';
-    for (const { x, y0, y1, name, color, skip } of rulers2) {
-      if (skip) continue;
-      const rx  = px(x);
-      const ry0 = py(y0);  // canvas y for lower diagram y (further down on screen)
-      const ry1 = py(y1);  // canvas y for higher diagram y (further up on screen)
-      if (rx < ox || rx > ox + availDiagW) continue;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(rx, ry0); ctx.lineTo(rx, ry1); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(rx - tickW, ry0); ctx.lineTo(rx + tickW, ry0); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(rx - tickW, ry1); ctx.lineTo(rx + tickW, ry1); ctx.stroke();
-      if (Math.abs(ry1 - ry0) > 16) {
-        ctx.fillStyle = color;
-        ctx.fillText(name, rx + tickW + 3, (ry0 + ry1) / 2 + 4);
-      }
-    }
   }
 
   // x-axis tick labels every 2 units below diagram, and above starting at first top-row bight
@@ -4509,8 +3794,8 @@ function knotDescription() {
   // "flipped" = flipped relative to the mode's default, i.e. the flip button was
   // pressed.  g-mode opens every knot flipped (G_DEFAULT_FLIP), so reporting the raw
   // state said "flipped" for knots nobody had touched.
-  const flip = knotFlipped !== (gMode && G_DEFAULT_FLIP) ? ' flipped' : '';
-  if (gMode) {
+  const flip = knotFlipped !== G_DEFAULT_FLIP ? ' flipped' : '';
+  {
     const onLevel = gList.length && gList._key === gQueryKey(gQuery(L));
     const g = onLevel ? gList[gListIdx] : null;
     const idx = onLevel ? ` #${gListIdx + 1}/${gList.length}` : '';
@@ -4520,16 +3805,6 @@ function knotDescription() {
     const f = gFiltered(q) || q.gmax > q.gmin ? ` [filter ${gQueryKey(q)}]` : '';
     return `L=${L} |g|=${g ? g.length : gLen}${idx} g=${g ? g.join(' ') : '?'} B=${B}${flip}${f}`;
   }
-  if (currentC === 2) {
-    const idx = ab2ValidIdx >= 0 ? ` #${ab2ValidIdx + 1}/${ab2ValidList.length}` : '';
-    return `C=2 L=${L}${idx} a,b=${currentA},${currentB} B=${B}${flip}`;
-  }
-  if (currentC === 3) {
-    const idx = c3ValidIdx >= 0 ? ` #${c3ValidIdx + 1}/${c3ValidList.length}` : '';
-    const form = c3FormIdx ? ` form=${c3FormIdx}` : '';
-    return `C=3 L=${L}${idx} a,b,c,d=${c3A},${c3B},${c3C},${c3D} B=${B}${flip}${form}`;
-  }
-  return `C=${currentC} L=${L} B=${B}${flip}`;
 }
 
 // Clipboard API first; the textarea fallback covers pages where it is unavailable
@@ -4584,41 +3859,6 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
-
-// Diagnostic: find C=3 pairs with identical bight y-coordinate sets.
-// Call from browser console: findSameYSets(m)
-window.findSameYSets = function(m) {
-  if (currentC !== 3) { console.log('Switch to C=3 first'); return; }
-  syncC3List(m);
-  const L3 = 3 * m;
-  const groups = new Map();
-  // Even rotations (0,2,4) preserve ascending/descending roles; odd ones swap
-  // them, so are not flat-equivalent.  Path reversal (reverse the sequence) is
-  // also a symmetry — the same closed zigzag traversed backwards — so include
-  // the even rotations of the reversed sequence too.
-  const evenRots = a => [
-    [a[0],a[1],a[2],a[3],a[4],a[5]],
-    [a[2],a[3],a[4],a[5],a[0],a[1]],
-    [a[4],a[5],a[0],a[1],a[2],a[3]],
-  ];
-  c3ValidList.forEach(([a, b, c, d], idx) => {
-    const s   = [L3-c-d, a, d, b, c, L3-a-b];
-    const rev = [s[5],s[4],s[3],s[2],s[1],s[0]];
-    const cands = [...evenRots(s), ...evenRots(rev)];
-    const key = cands.map(r => r.join(',')).sort().at(0);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ idx: idx + 1, a, b, c, d });
-  });
-  let found = 0;
-  for (const [key, entries] of groups) {
-    if (entries.length > 1) {
-      found++;
-      console.log(`seq=[${key}]: ` +
-        entries.map(e => `#${e.idx}(a=${e.a},b=${e.b},c=${e.c},d=${e.d})`).join('  '));
-    }
-  }
-  console.log(`${found} group(s) with rotationally equivalent segment sequence  (${c3ValidList.length} total)`);
-};
 
 document.getElementById('heightSlider').addEventListener('input', () => {
   if (showKnot) buildKnot();
@@ -4700,9 +3940,7 @@ function generateTyingSequence() {
   const m = parseInt(document.getElementById('mInput').value);
   const lines = [
     `# Turk's Head Knot tying sequence`,
-    `# ${m} leads × ${B} bights, complexity=${currentC}` +
-      (currentC === 2 ? `  (a=${currentA}, b=${currentB})` : '') +
-      (currentC === 3 ? `  (a=${c3A}, b=${c3B}, c=${c3C}, d=${c3D})` : ''),
+    `# ${m} leads × ${B} bights, g = ${currentG ? currentG.join(' ') : '?'}`,
     `# ${n} path bights, mod=${mod}, ${crossList.length} crossings`,
     ``
   ];
@@ -5027,11 +4265,9 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
 
   // Header line for the top of each page.
   const crossings = allCrossings.crossingCount;
-  const seq = currentC === 2 ? `${ab2ValidIdx + 1}/${ab2ValidList.length}`
-            : currentC === 3 ? `${c3ValidIdx + 1}/${c3ValidList.length}`
-            : '1/1';
-  const header = `Complexity ${currentC}  |  Leads ${m}  |  Bights ${B}  |  `
-               + `No. ${seq}  |  ${mod} bights  |  ${crossings} crossings`;
+  const seq = gList.length ? `${gListIdx + 1}/${gList.length}` : '1/1';
+  const header = `g ${currentG ? currentG.join(' ') : '?'}  |  Leads ${m}  |  Bights ${B}  |  `
+               + `No. ${seq}  |  ${crossings} crossings`;
 
   const pdf = new jsPDF({ unit: 'pt', format: [PAGE_W, PAGE_H] });
   const addHeader = () => { pdf.setFontSize(10); pdf.text(header, PAGE_W / 2, 28, { align: 'center' }); };
@@ -5044,12 +4280,9 @@ document.getElementById('pdfDownloadBtn').addEventListener('click', () => {
 });
 
 // ── Initial state ──────────────────────────────────────────────────────────
-syncAB2List(parseInt(document.getElementById('mInput').value));
-setKnotFromUI(parseInt(document.getElementById('mInput').value));   // rebuild ZIGZAG for the synced a,b
 syncRoundOuterMax();
-document.getElementById('abParamDisplay').style.display = '';
 enterKnotMode();
-if (gMode) enterGMode();   // g is the default parametrization; loads the first knot from the server
+enterGMode();              // loads the first knot from the server
 
 // ── Render loop ────────────────────────────────────────────────────────────
 (function animate() {
