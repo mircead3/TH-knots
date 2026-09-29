@@ -576,35 +576,39 @@ def braid_amphichiral(g, L):
 def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None):
     """Knots at L with gmin <= |g| <= gmax and cmin <= C <= cmax, optionally only chiral /
     amphichiral (chiral=True/False) and self-flip or not (selfflip=True/False).
-    Source: for cmax <= SMALL_C the drawing generator (iter_small_c), which reaches any
-    |g| -- its knots come out by width, not by |g|; otherwise the word search level by
-    level (C-pruned when cmax is set, and no level beyond cmax*(L-1), the proven bound).
-    Streams canonical words, each knot once."""
-    def keep(g):
+    The C range is SPLIT by source: C <= SMALL_C comes from the drawing generator
+    (iter_small_c), which reaches any |g| -- its knots come out by width, not by |g|; the
+    rest (C > SMALL_C) from the word search level by level, C-pruned when cmax is set and
+    never beyond cmax*(L-1), the proven bound.  Streams canonical words, each knot once
+    (the two parts cannot overlap: they have different C)."""
+    def keep(g, clo):
         if not gmin <= len(g) <= gmax: return False
-        if cmin is not None and bights_of(g, L) < 2 * cmin: return False
+        if clo is not None and bights_of(g, L) < 2 * clo: return False
         if chiral is not None and braid_amphichiral(g, L) == chiral: return False
         if selfflip is not None and word_self_flip(g, L) != selfflip: return False
         return True
-    if cmax is not None and cmax <= SMALL_C:
-        for C in range(max(1, cmin or 1), cmax + 1):
-            if C * (L - 1) < gmin: continue
-            done = _SMALL_C_DONE.get((L, C))
-            if done is not None:                     # every |g| of it is already known
-                for g in done:
-                    if keep(g): yield g
-                continue
+    lo = max(1, cmin or 1)
+    # 1. small C: the generator, one C at a time (memoised per (L, C): every |g| at once)
+    for C in range(lo, min(SMALL_C, cmax if cmax is not None else SMALL_C) + 1):
+        if C * (L - 1) < gmin: continue
+        done = _SMALL_C_DONE.get((L, C))
+        if done is None:
             found = []
             for g in iter_small_c(L, C):
                 found.append(g)
-                if keep(g): yield g
+                if keep(g, None): yield g
             _SMALL_C_DONE[(L, C)] = found            # only once complete (not abandoned)
-        return
+        else:
+            for g in done:
+                if keep(g, None): yield g
+    # 2. larger C: the word search, keeping only C > SMALL_C (and >= cmin)
+    if cmax is not None and cmax <= SMALL_C: return
+    clo = max(lo, SMALL_C + 1)
     top = gmax if cmax is None else min(gmax, cmax * (L - 1))
     for gl in range(max(gmin, L - 1), top + 1):
         if gl % 2 != (L - 1) % 2: continue
         for g in iter_gs(L, gl, cmax=cmax):
-            if keep(g): yield g
+            if keep(g, clo): yield g
 
 
 def enumerate_gs(L, glen, maxknots=MAXKNOTS, cmax=None):
