@@ -106,7 +106,7 @@ RESIDUAL CAVEATS, stated rather than buried:
     0 or 1 bight between consecutive crossings of a strand, so every run between bights
     contains a crossing.  A zigzag may also wiggle -- extra peak/valley pairs with no
     crossing between them -- and that is sometimes NARROWER.  Tested 2026-09-27 with the
-    lattice-walk model (g_walk.py, branch cpsat-experiment, rule off) on all 727 knots of
+    lattice-walk model (attic/solver_experiments/g_walk.py, rule off) on all 727 knots of
     L=3..9 |g|<=10, every smaller W, no timeouts: 723 are minimal over ALL zigzags; 4
     are not (L=5):  1 1 1 2 1 3 2 4 4 4  W 10 -> 8;  1 1 1 2 3 2 3 4 4 4  W 12 -> 8;
     1 1 1 2 3 2 4 3 4 4  W 10 -> 8;  1 1 2 1 3 2 4 3 4 4  W 8 -> 6  (each strict_ok and

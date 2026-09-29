@@ -19,7 +19,7 @@ see whether CP-SAT copes with the full model directly.  Accepted solutions must 
 pass g_solve's post-check and full-period rule; the model only proposes.
 
 Run with the experiment's venv (OR-Tools is not in the system Python):
-    PYTHONPATH=. .venv/bin/python -c "import g_cpsat as C; print(C.solve_min([1,2,3,4],5))"
+    PYTHONPATH=.:attic/solver_experiments .venv/bin/python -c "import g_cpsat as C; print(C.solve_min([1,2,3,4],5))"
 """
 from ortools.sat.python import cp_model
 

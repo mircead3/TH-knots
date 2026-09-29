@@ -22,7 +22,7 @@ exactly L times (the strands).  Unknowns: the heights y_0..y_{N-1}.  Constraints
 
 No segments, no pairs, no tiers, no lazy loop.  The result is checked by g_solve's
 run-based checks (strict_ok, full period).  Run with the experiment's venv:
-    PYTHONPATH=. .venv/bin/python -c "import g_walk as G; print(G.solve_min([1,2],3))"
+    PYTHONPATH=.:attic/solver_experiments .venv/bin/python -c "import g_walk as G; print(G.solve_min([1,2],3))"
 """
 from ortools.sat.python import cp_model
 
