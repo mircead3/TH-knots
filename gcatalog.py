@@ -467,6 +467,146 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
         found+=1
         if maxknots is not None and found>=maxknots: return
 
+# ---------------------------------------------------------------- small C, any |g|
+#
+# The word search cannot reach small-C knots at large |g| (C=3 at L=16 runs to |g|=43):
+# for small C almost every complete word fails the bight count only at the end.  So
+# for small C, generate DRAWINGS instead, the way C mode did, but at every width:
+# zigzags with exactly 2C runs, validated on the lattice, their words read off.
+#
+# COMPLETENESS rests on an observation, not a proof: every knot checked has a drawing
+# of width W <= 2C (727 library knots; and wherever the exhaustive word search finishes,
+# up to C=3 at L=10 |g|<=17, this generator finds exactly its knots; W up to 2C+2 finds
+# nothing more for C=2,3, L=4..11).  |g| <= C*(L-1) IS proven: along a run the curve's
+# rank moves one way, so a run passes at most L-1 crossings, and each crossing is passed
+# twice.
+
+def _compositions(n, k, lo=2):
+    """k-tuples of ints >= lo summing to n.  lo=2: a run of length 1 goes from bight to
+    bight with no interior lattice point, so it can hold no crossing -- an idle run, i.e.
+    a wiggle, which the bight count below would reject anyway."""
+    if k == 1:
+        if n >= lo: yield (n,)
+        return
+    for a in range(lo, n - lo * (k - 1) + 1):
+        for rest in _compositions(n - a, k - 1, lo): yield (a,) + rest
+
+
+def word_from_runs(runs, L, W):
+    """The tile word of the zigzag with these run lengths (up first) at width W, or None
+    if it is not a valid drawing.  The walk takes one column per step (column = t mod W).
+    VALID: on every half-column the L steps are at different heights (sums y_t+y_{t+1}),
+    which rules out overlapping steps and crossings between lattice points and leaves
+    only transversal crossings and peak/valley tangencies at columns.  WORD: each step's
+    rank on its half-column; at a column a rank rising by one is the rising pass of
+    sigma_(new rank).  Letters of one column commute, so their order is immaterial."""
+    N = W * L
+    y = [0]
+    for i, r in enumerate(runs):
+        d = 1 if i % 2 == 0 else -1
+        for _ in range(r): y.append(y[-1] + d)
+    if len(y) != N + 1 or y[-1] != 0: return None
+    y.pop()
+    rank = [0] * N
+    for x in range(W):
+        steps = range(x, N, W)
+        sums = [y[t] + y[(t + 1) % N] for t in steps]
+        if len(set(sums)) != L: return None
+        for r, t in enumerate(sorted(steps, key=lambda t: y[t] + y[(t + 1) % N])):
+            rank[t] = r
+    cols = [[] for _ in range(W)]
+    for t in range(N):
+        if rank[t] - rank[t - 1] == 1: cols[t % W].append(rank[t])
+    return [v for c in cols for v in sorted(c)]
+
+
+def iter_small_c(L, C, Wmax=None):
+    """Knots with exactly C bight pairs, any |g|, from drawings with 2C runs and width
+    W <= Wmax (default 2C; see the COMPLETENESS note above).  Yields canonical words,
+    each knot once (cylinder key), knot-level powers dropped as in iter_gs."""
+    Wmax = Wmax or 2 * C
+    seen = set()
+    for W in range(1, Wmax + 1):
+        if (W * L) % 2: continue
+        half = W * L // 2
+        parts = list(_compositions(half, C))
+        for ups in parts:
+            for downs in parts:
+                runs = [v for pair in zip(ups, downs) for v in pair]
+                # the same drawing starting at another valley: keep the largest rotation
+                if any(runs[2 * k:] + runs[:2 * k] > runs for k in range(1, C)): continue
+                g = word_from_runs(runs, L, W)
+                if not g or len(set(g)) < L - 1: continue      # must use every generator
+                if bights_of(g, L) != 2 * C: continue          # wiggles: a smaller C
+                key = cylinder_key(g, L)
+                if key in seen: continue
+                seen.add(key)
+                c = g_canon(g, L)
+                ks = power_ks(c, L)
+                if ks and (is_literal_power(c, ks) or is_knot_power(list(c), ks=ks) is True):
+                    continue
+                yield list(c)
+
+
+# ---------------------------------------------------------------- filtered browsing
+
+SMALL_C = 3        # up to this C, knots come from the drawing generator (any |g|)
+_SMALL_C_DONE = {}  # (L, C) -> iter_small_c's complete output: it yields every |g| at once,
+                    # so stepping |g| under a small-C filter must not regenerate it
+
+def word_self_flip(g, L):
+    """Is the braid symmetric under the flip (relabel i -> L-i: the drawing upside down),
+    up to rotation + commutation, allowing reversal?  A property of the WORD.  The flip
+    button tests g_solve's particular drawing instead; they disagree on 2 of the 727
+    library knots, whose words are symmetric though that drawing is not."""
+    r = [L - abs(x) for x in g]
+    k = _trace_key(r)
+    return k == _trace_key([abs(x) for x in g]) or k == _trace_key([abs(x) for x in g][::-1])
+
+
+def braid_amphichiral(g, L):
+    """Braid chirality, two-valued (as in the app's braid view).  With the parity signs
+    of these alternating diagrams, the mirror word (relabel i -> L-i, negate) follows the
+    same sign pattern only for ODD L, where it then IS the flip: amphichiral <=> self-flip.
+    For even L the mirror breaks the pattern, so every braid is chiral (odd writhe).
+    Library check: 54 amphichiral = the 54 odd-L self-flip knots."""
+    return L % 2 == 1 and word_self_flip(g, L)
+
+
+def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None):
+    """Knots at L with gmin <= |g| <= gmax and cmin <= C <= cmax, optionally only chiral /
+    amphichiral (chiral=True/False) and self-flip or not (selfflip=True/False).
+    Source: for cmax <= SMALL_C the drawing generator (iter_small_c), which reaches any
+    |g| -- its knots come out by width, not by |g|; otherwise the word search level by
+    level (C-pruned when cmax is set, and no level beyond cmax*(L-1), the proven bound).
+    Streams canonical words, each knot once."""
+    def keep(g):
+        if not gmin <= len(g) <= gmax: return False
+        if cmin is not None and bights_of(g, L) < 2 * cmin: return False
+        if chiral is not None and braid_amphichiral(g, L) == chiral: return False
+        if selfflip is not None and word_self_flip(g, L) != selfflip: return False
+        return True
+    if cmax is not None and cmax <= SMALL_C:
+        for C in range(max(1, cmin or 1), cmax + 1):
+            if C * (L - 1) < gmin: continue
+            done = _SMALL_C_DONE.get((L, C))
+            if done is not None:                     # every |g| of it is already known
+                for g in done:
+                    if keep(g): yield g
+                continue
+            found = []
+            for g in iter_small_c(L, C):
+                found.append(g)
+                if keep(g): yield g
+            _SMALL_C_DONE[(L, C)] = found            # only once complete (not abandoned)
+        return
+    top = gmax if cmax is None else min(gmax, cmax * (L - 1))
+    for gl in range(max(gmin, L - 1), top + 1):
+        if gl % 2 != (L - 1) % 2: continue
+        for g in iter_gs(L, gl, cmax=cmax):
+            if keep(g): yield g
+
+
 def enumerate_gs(L, glen, maxknots=MAXKNOTS, cmax=None):
     """Just the list; see enumerate_gs_ex for the truncation flag.  cmax: only knots
     with C <= cmax (C = bights_of / 2), pruned during the search, not filtered after."""
@@ -493,9 +633,24 @@ def build(L, g):
     if GS.check(g, L, sol): return None
     if not GS.gauss_ok(g, L, sol): return None
     if not GS.strict_ok(g, L, out['runs']): return None
-    return {'g':g, 'L':L, 'runs':out['runs'], 'W':out['W'],
-            'C':len(out['runs'])//2, 'rotation':g,
-            'verdict':out['verdict'], 'tier':out['tier']}
+    runs, W, verdict, tier = out['runs'], out['W'], out['verdict'], out['tier']
+    # A self-flip WORD gets a self-flip DRAWING, even at a larger W (the user's preference:
+    # symmetry over width).  g_solve returns one of possibly several minimal drawings and it
+    # need not be symmetric -- 2 of the 727 library knots -- so if not, ask for one with
+    # run-length symmetry constraints (g_solve.solve_symmetric), from W upward.  If none
+    # turns up within its range, keep the asymmetric drawing.
+    if word_self_flip(g, L) and not GS.flip_symmetric(runs):
+        found = GS.solve_symmetric(g, L, W)
+        if found is not None:
+            ssol, sverdict = found
+            sruns = GS.to_runs(g, L, ssol)
+            if (sruns and not GS.check(g, L, ssol) and GS.gauss_ok(g, L, ssol)
+                    and GS.strict_ok(g, L, sruns)):
+                runs, W, tier = sruns, ssol['W'], ssol['tier']
+                verdict = 'symmetric' if W > out['W'] else verdict
+    return {'g':g, 'L':L, 'runs':runs, 'W':W,
+            'C':len(runs)//2, 'rotation':g,
+            'verdict':verdict, 'tier':tier}
 
 def enumerate_built(L, glen, maxknots=MAXKNOTS):
     """Enumeration with construction: each entry has g, W, C, runs.

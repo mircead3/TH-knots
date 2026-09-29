@@ -234,7 +234,8 @@ def tier3_pairs(n, segs, bkind):
     return opp
 
 
-def feasible(g, L, W, tier=1, ymax=None, mmax=1, seed=None, pairs=None, opp_pairs=None):
+def feasible(g, L, W, tier=1, ymax=None, mmax=1, seed=None, pairs=None, opp_pairs=None,
+             run_eqs=None):
     """Feasibility of the tier-`tier` system at this fixed W.  -> solution dict or None.
 
     pairs: restrict tier 2's no-overlap constraints to these (e, f) same-slope pairs;
@@ -270,6 +271,16 @@ def feasible(g, L, W, tier=1, ymax=None, mmax=1, seed=None, pairs=None, opp_pair
     rows_eq.append(r); b_eq.append(float(L))
     r = np.zeros(nv); r[NX] = 1.0; rows_eq.append(r); b_eq.append(0.0)   # gauge
     r = np.zeros(nv); r[NY] = 1.0; rows_eq.append(r); b_eq.append(0.0)
+    # run_eqs: [(segments A, segments B)] -- the run made of A as long as the one made of
+    # B (a run's length is the sum of its segments' advances k).  Used to force a
+    # flip-symmetric drawing; see solve_symmetric.
+    for A, Bs in (run_eqs or ()):
+        r = np.zeros(nv)
+        for e, sg in ((e, 1) for e in A):
+            a, bn, _ = segs[e]; r[NX + bn] += sg; r[NX + a] -= sg; r[NM + e] += sg * W
+        for e in Bs:
+            a, bn, _ = segs[e]; r[NX + bn] -= 1; r[NX + a] += 1; r[NM + e] -= W
+        rows_eq.append(r); b_eq.append(0.0)
 
     extra_lo = []; extra_hi = []; extra_int = []
 
@@ -441,7 +452,7 @@ def crossing_violations(sol):
     return out
 
 
-def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
+def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True, Wstart=None, run_eqs=None):
     """Smallest W with a VERIFIED diagram.  Deterministic -- no sampling.
 
     -> (solution, verdict) with verdict:
@@ -467,7 +478,7 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
     # was reported as three, and rejected here as not-a-knot.
     if perm_cycles([abs(x) for x in g], L) != 1:
         return None, 'not-a-knot'
-    W = max(2, wlb(g)); W += W % 2
+    W = max(2, wlb(g), Wstart or 0); W += W % 2
     proven = True
     while W <= Wmax:
         got = None
@@ -485,14 +496,14 @@ def solve_min(g, L, Wmax=60, max_tier=3, require_full_period=True):
             if lazy:
                 while True:
                     r = feasible(g, L, W, tier=tier, pairs=ov,
-                                 opp_pairs=cr if tier == 3 else None)
+                                 opp_pairs=cr if tier == 3 else None, run_eqs=run_eqs)
                     if r is None: break
                     a = set(overlap_violations(r)) - ov
                     c = set(crossing_violations(r)) - cr if tier == 3 else set()
                     if not a and not c: break
                     ov |= a; cr |= c
             else:
-                r = feasible(g, L, W, tier=tier)
+                r = feasible(g, L, W, tier=tier, run_eqs=run_eqs)
             if r is None:
                 got = 'ruled-out'; break       # this W is impossible, at any tier
             if ok(r):
@@ -663,6 +674,53 @@ def library(glen=10, Ls=(3, 4, 5)):
                 if cur is None or (len(gg), gg) < (len(cur), cur):
                     classes[(L, k)] = gg
     return [(L, classes[(L, k)]) for (L, k) in classes]
+
+
+def flip_symmetric(runs):
+    """The app's flip test (gShapeFlipNoOp): is the drawing its own flip?  Flipping moves
+    every run to the neighbouring position (an odd rotation); allowed up to even rotations
+    and reversal."""
+    def canon(A):
+        return min(min(arr[s:] + arr[:s] for s in range(0, len(A), 2)) for arr in (A, A[::-1]))
+    return len(runs) < 2 or canon(list(runs)) == canon(list(runs[1:]) + list(runs[:1]))
+
+
+def run_segments(g, L):
+    """The segments of each run, runs in order along the curve starting at a bight.
+    A run ends at a bight node (index >= |g|); crossings do not end runs."""
+    n = len(g)
+    nn, nb, segs, parent, bkind = segments(g, L)
+    order = trace(g, L, {'segs': segs})
+    if order is None: return None
+    k = next(i for i, e in enumerate(order) if segs[order[i - 1]][1] >= n)   # starts at a bight
+    order = order[k:] + order[:k]
+    runs, cur = [], []
+    for e in order:
+        cur.append(e)
+        if segs[e][1] >= n: runs.append(cur); cur = []
+    if cur: runs[0] = cur + runs[0]
+    return runs
+
+
+def solve_symmetric(g, L, W0, extra=12, max_tier=3):
+    """A FLIP-SYMMETRIC drawing of g, the narrowest found from W0 up to W0+extra, or None.
+    Symmetric means the run list R satisfies R_i = R_(i+o) or R_i = R_(n-1-(i+o)) for some
+    odd o (indices mod n): exactly what flip_symmetric accepts.  Each candidate adds these
+    equalities between run lengths to the linear system; the tiers and checks are the
+    usual ones.  -> (solution, verdict) as solve_min, or None."""
+    rs = run_segments(g, L)
+    if not rs: return None
+    n = len(rs)
+    for W in range(W0 + W0 % 2, W0 + extra + 1, 2):
+        for typ in (0, 1):
+            for o in range(1, n, 2):
+                pi = [((i + o) % n) if typ == 0 else ((n - 1 - (i + o)) % n) for i in range(n)]
+                eqs = [(rs[i], rs[pi[i]]) for i in range(n) if pi[i] != i]
+                sol, verdict = solve_min(g, L, Wmax=W, max_tier=max_tier, Wstart=W,
+                                         run_eqs=eqs)
+                if sol is not None and flip_symmetric(to_runs(g, L, sol)):
+                    return sol, verdict
+    return None
 
 
 def solve(g, L, max_tier=3, require_full_period=True):
