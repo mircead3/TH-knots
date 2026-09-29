@@ -901,6 +901,7 @@ function updateKnotStats(B, ncomp, crossings, components) {
     // Braid view is B-free: just the step g and its per-step measures.
     lines.push(`|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
+    lines.push(braidChirality(g, LEADS));       // a property of the braid, not of B
   } else {
     // Knot/round view: closure invariants at the current B, then the step.
     if (ncomp === 1) {
@@ -909,7 +910,6 @@ function updateKnotStats(B, ncomp, crossings, components) {
       try { det = knotDeterminantOf(alexanderMatrix(buildCrossingList(components[0], mod))).toString(); }
       catch (e) { det = '—'; }
       lines.push(`bights ${mod}   crossings ${crossings}   genus ${genus}   det ${det}`);
-      lines.push(chiralityOf(g, LEADS, crossings / len));
     } else {
       lines.push(`bights ${mod}   crossings ${crossings}   components ${ncomp}`);
     }
@@ -2159,23 +2159,18 @@ function cyclicTraceEqual(u, v) {
   return false;
 }
 
-// Chirality of the closed braid g^reps (a knot drawn as a reduced alternating diagram
-// once nugatory crossings are discounted).  'chiral': the writhe of a reduced
-// alternating diagram is a knot invariant (Tait flyping conjecture, Menasco-
-// Thistlethwaite) and the mirror negates it, so writhe != 0 proves chirality.  A
-// generator that occurs once in g^reps is a nugatory crossing and is left out of the
-// writhe.  'amphichiral': the mirror word -- relabel i -> L-i (same knot) and negate
-// every sign (mirror) -- is g itself or g reversed (the same unoriented knot) up to
-// rotation + commutation.  Otherwise '?': the mirror may still be reachable by flypes.
-function chiralityOf(g, L, reps) {
-  const cnt = {};
-  for (const x of g) cnt[Math.abs(x)] = (cnt[Math.abs(x)] || 0) + 1;
-  let writhe = 0;
-  for (const x of g) if (cnt[Math.abs(x)] * reps >= 2) writhe += Math.sign(x) * reps;
-  if (writhe !== 0) return 'chiral';
+// Chirality of the BRAID: is its cylinder diagram carried to its mirror by the
+// cylinder's own symmetries?  The mirror word -- relabel i -> L-i (turning the cylinder
+// over) and negate every sign (mirror) -- is compared with g and with g reversed, up to
+// rotation + commutation (cyclicTraceEqual).  Exact, two-valued, B-independent.
+// 'amphichiral' implies the KNOT is amphichiral at every B.  'chiral' is chirality of
+// the braid: the knot may still be amphichiral through moves the cylinder does not see
+// (flypes on the sphere) -- deliberately ignored, as different cylinder diagrams are
+// different entries here.  (A knot with writhe != 0 is always 'chiral' either way.)
+function braidChirality(g, L) {
   const mir = g.map(x => -Math.sign(x) * (L - Math.abs(x)));
-  if (cyclicTraceEqual(g, mir) || cyclicTraceEqual([...g].reverse(), mir)) return 'amphichiral';
-  return 'chirality ?';
+  return cyclicTraceEqual(g, mir) || cyclicTraceEqual([...g].reverse(), mir)
+    ? 'amphichiral' : 'chiral';
 }
 
 // Compute the step block g from the zigzag alone, WITHOUT the Bights box.  g is
@@ -3394,6 +3389,25 @@ let gListIdx = 0;          // which knot in gList is selected
 let gLen = 0;              // current |g| (step-word length)
 let gLenForL = null;       // the L that gLen was chosen for; see gRebuild
 const gRunsCache = new Map();   // key "L|g" -> runs (avoid refetching)
+
+// Console hook: show arbitrary zigzag runs as g's diagram -- e.g. a drawing found by an
+// experimental solver (the lattice-walk model's narrower "wiggle" diagrams).  In g-mode:
+//   showRuns(5, [1,1,1,2,1,3,2,4,4,4], [5,2,2,1,1,2,2,2,1,4,2,2,3,1,1,1,1,3,2,2])
+// The runs go into the cache under (L, g), so every view and every B uses them.  They stay
+// there until the page is reloaded: browsing away and back to this g shows them again.
+window.showRuns = function(L, g, runs) {
+  if (!gMode) return 'switch to g-mode first';
+  const W = runs.reduce((a, b) => a + b, 0) / L;
+  if (!Number.isInteger(W) || runs.length % 2) return 'runs must be up/down pairs summing to a multiple of L';
+  document.getElementById('mInput').value = L; mDisplayed = L; LEADS = L;
+  currentG = g.slice();
+  gRunsCache.set(gRunsKey(L, currentG), { runs: runs.slice(), W });
+  gErr = '';
+  enforceMinBights();
+  setKnotFromRuns(runs, L);
+  updateGDisplays(); updateFlipButton(); redrawCurrentView();
+  return `L=${L} W=${W} bights=${runs.length}`;
+};
 
 async function gPost(path, body) {
   const res = await fetch(G_SERVER_BASE + path, {
