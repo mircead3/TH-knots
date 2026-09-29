@@ -169,11 +169,13 @@ def _enum_start(q):
     threading.Thread(target=_enum_worker, args=(gen, q), daemon=True).start()
     return _enum_snapshot()
 
-def _enum_snapshot():
+def _enum_snapshot(since=0):
+    """The scan's state; gs holds only the knots from index `since` on ('from' echoes it),
+    so a client polling a list of thousands is sent what it lacks, not all of it again."""
     with _enum_lock:
         q = _ENUM_JOB['q']
-        return {'q': None if q is None else _query_key(q),
-                'gs': list(_ENUM_JOB['gs']), 'count': len(_ENUM_JOB['gs']),
+        return {'q': None if q is None else _query_key(q), 'from': since,
+                'gs': list(_ENUM_JOB['gs'][since:]), 'count': len(_ENUM_JOB['gs']),
                 'done': _ENUM_JOB['done'], 'truncated': _ENUM_JOB['truncated'],
                 'error': _ENUM_JOB['error']}
 
@@ -304,7 +306,10 @@ class Handler(BaseHTTPRequestHandler):
             # The APP owns the usable caps (the leads input's max, the |g| offered); these
             # are only sanity nets against a pathological request.
             if not (2 <= L <= 64): raise ValueError('L out of range (2..64)')
-            if not (1 <= gmin <= gmax <= 64): raise ValueError('|g| range out of range (1..64)')
+            # |g| can be large: small-C knots reach C*(L-1) (C=3 at L=20: 57), and the app
+            # may ask for a generous range.  Only the word search recurses per letter, and
+            # the C bound caps what it actually scans.
+            if not (1 <= gmin <= gmax <= 400): raise ValueError('|g| range out of range (1..400)')
             if cmin is not None and cmax is not None and cmin > cmax: raise ValueError('cmin > cmax')
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'}); return
@@ -324,8 +329,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, snap)
 
     def _handle_enumerate_poll(self):
-        """Current state of the running scan; the client extends its list from this."""
-        self._send_json(200, _enum_snapshot())
+        """Current state of the running scan; the client extends its list from this.
+        Body {since: n}: send only the knots from index n on."""
+        try:
+            since = max(0, int(self._read_body().get('since', 0)))
+        except Exception:
+            since = 0
+        self._send_json(200, _enum_snapshot(since))
 
     def _handle_construct(self):
         try:
