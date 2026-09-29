@@ -136,7 +136,7 @@ MAXKNOTS = None     # no limit: the scan streams and is interruptible, so a long
                     # change of L or |g| abandons it.  A cap would only truncate
                     # the answer to bound a time that is no longer a problem.
 
-def enumerate_gs_ex(L, glen, maxknots=MAXKNOTS):
+def enumerate_gs_ex(L, glen, maxknots=MAXKNOTS, cmax=None):
     """Distinct knots at (L, |g|=glen), one canonical g each.  -> (gs, truncated)
 
     Runs to completion by default (maxknots=None).  maxknots remains for callers that
@@ -166,7 +166,7 @@ def enumerate_gs_ex(L, glen, maxknots=MAXKNOTS):
     solve (it stops an idle scan), not a reason to refuse the level.
     """
     out=[]
-    for g in iter_gs(L, glen, maxknots):
+    for g in iter_gs(L, glen, maxknots, cmax=cmax):
         out.append(g)
     return out, (maxknots is not None and len(out)>=maxknots)
 
@@ -238,7 +238,25 @@ def cylinder_key(g, L):
     return min(_trace_key(f) for f in (list(g), g[::-1], r, r[::-1]))
 
 
-def _candidate_words(L, glen):
+def bights_of(g, L):
+    """Number of bights of g's drawings (without wiggles), from the word alone.
+
+    A bight is where the curve switches between rising and falling, and without wiggles
+    that happens exactly between consecutive crossings of different direction.  Passing
+    sigma_v, the strand at position v-1 moves UP to v and the one at v moves DOWN.  Follow
+    the single curve from position 0 through g, L times (g is one L-cycle, so it returns),
+    record U/D at each crossing, and count direction changes cyclically.  C = bights/2.
+    Equals g_solve.segments(g, L)[1]; O(L*|g|)."""
+    pos = 0; seq = []
+    for _ in range(L):
+        for v in g:
+            v = abs(v)
+            if pos == v - 1: seq.append(1); pos = v
+            elif pos == v: seq.append(-1); pos = v - 1
+    return sum(1 for i in range(len(seq)) if seq[i] != seq[i - 1])
+
+
+def _candidate_words(L, glen, cmax=None):
     """Yield, in lex order, exactly the single-L-cycle words that start with 1.
 
     Two facts prune the space hard, and both are exact -- no knot is lost:
@@ -256,6 +274,9 @@ def _candidate_words(L, glen):
 
       * no letter directly follows one at least 2 larger ("3 1", "4 2", ...).  Such a
         pair commutes, and swapping it gives a smaller word of the same cylinder class.
+        (The full Anisimov-Knuth test -- no letter slides left past a larger one over
+        any run of letters it commutes with -- was tried 2026-09-28: exact, but it cut
+        no extra words at the levels measured and cost ~13%, so it is not used.)
         The word iter_gs lists for a class is the lexicographically smallest word of the
         WHOLE class (rotations, commutations, reversal, relabelling) -- it is its own
         canonical form and is met first -- and that word cannot contain such a pair.  So
@@ -269,27 +290,83 @@ def _candidate_words(L, glen):
     if glen < L - 1: return
     perm = list(range(L))          # strand at each position after the prefix
     w = [0] * glen
+    # C pruning (cmax): each strand's crossings within this one pass through g keep their
+    # directions whatever letters follow, so direction changes between them are bights
+    # of the final drawing -- a lower bound that only grows along the prefix.  Bights
+    # across the seam between passes need the whole word; bights_of settles them at the
+    # leaf.  lastdir[s] = direction of strand s's latest crossing in the prefix.
     def same_cycle(i, j):          # are positions i and j in one cycle of perm?
         k = perm[i]
         while k != i:
             if k == j: return True
             k = perm[k]
         return False
-    def rec(i, cycles):
-        if glen - i < cycles - 1: return            # cannot merge down to one cycle
-        if i == glen:
-            yield list(w); return
-        # v >= w[i-1] - 1: never a letter right after one at least 2 larger (see the
-        # docstring).  Ascending keeps the output lex-ordered.
-        for v in range(max(1, w[i - 1] - 1), L):
-            w[i] = v
-            d = 1 if same_cycle(v - 1, v) else -1   # split or merge
-            perm[v - 1], perm[v] = perm[v], perm[v - 1]
-            yield from rec(i + 1, cycles + d)
-            perm[v - 1], perm[v] = perm[v], perm[v - 1]
     w[0] = 1
     perm[0], perm[1] = perm[1], perm[0]
-    yield from rec(1, L - 1)
+
+    if cmax is None:
+        def rec(i, cycles):
+            if glen - i < cycles - 1: return            # cannot merge down to one cycle
+            if i == glen:
+                yield list(w); return
+            # v >= w[i-1] - 1: never a letter right after one at least 2 larger (see the
+            # docstring).  Ascending keeps the output lex-ordered.
+            for v in range(max(1, w[i - 1] - 1), L):
+                w[i] = v
+                d = 1 if same_cycle(v - 1, v) else -1   # split or merge
+                perm[v - 1], perm[v] = perm[v], perm[v - 1]
+                yield from rec(i + 1, cycles + d)
+                perm[v - 1], perm[v] = perm[v], perm[v - 1]
+        yield from rec(1, L - 1)
+        return
+
+    # C pruning.  Each strand's crossings within this one pass through g keep their
+    # directions whatever letters follow, so direction changes between them are bights
+    # of the final drawing.  The SEAM adds more: the curve is the L strand pieces of one
+    # pass, joined end to end in an order only the complete word fixes.  A piece is UU,
+    # DU, UD or DD by its (first, last) direction so far; wherever one piece's last
+    # direction differs from the next one's first, the rest of that strand or the seam
+    # must hold a bight.  In ANY cyclic order the directions must balance: at least
+    # |#UD - #DU| such joins, and at least 2 if all pieces are constant but both UU and DD
+    # occur.  Changes inside pieces + that minimum bounds the final count; bights_of
+    # settles it exactly at the leaf.  Kept cheap: plain ints, piece type index
+    # k = 2*(first up) + (last up), i.e. DD 0, DU 1, UD 2, UU 3.
+    bmax = 2 * cmax
+    lastdir = [0] * L; firstdir = [0] * L; cnt = [0, 0, 0, 0]
+    lastdir[0], lastdir[1] = 1, -1                  # sigma_1: strand 0 up, strand 1 down
+    firstdir[0], firstdir[1] = 1, -1
+    cnt[3] += 1; cnt[0] += 1
+    def rec(i, cycles, changes):
+        if i == glen:
+            if bights_of(w, L) <= bmax: yield list(w)
+            return
+        for v in range(max(1, w[i - 1] - 1), L):
+            d = 1 if same_cycle(v - 1, v) else -1
+            if glen - i - 1 < cycles + d - 1: continue  # cannot merge down to one cycle
+            lo, hi = perm[v - 1], perm[v]               # lo moves up, hi moves down
+            plo, phi = lastdir[lo], lastdir[hi]
+            flo, fhi = firstdir[lo], firstdir[hi]
+            ch = changes + (plo == -1) + (phi == 1)
+            nflo = flo or 1; nfhi = fhi or -1
+            if flo: cnt[2 * (flo > 0) + (plo > 0)] -= 1
+            if fhi: cnt[2 * (fhi > 0) + (phi > 0)] -= 1
+            klo = 2 * (nflo > 0) + 1; khi = 2 * (nfhi > 0)
+            cnt[klo] += 1; cnt[khi] += 1
+            ud, du = cnt[2], cnt[1]
+            seam = abs(ud - du) if (ud or du) else (2 if cnt[3] and cnt[0] else 0)
+            if ch + seam <= bmax:
+                w[i] = v
+                firstdir[lo], firstdir[hi] = nflo, nfhi
+                lastdir[lo], lastdir[hi] = 1, -1
+                perm[v - 1], perm[v] = hi, lo
+                yield from rec(i + 1, cycles + d, ch)
+                perm[v - 1], perm[v] = lo, hi
+                lastdir[lo], lastdir[hi] = plo, phi
+                firstdir[lo], firstdir[hi] = flo, fhi
+            cnt[klo] -= 1; cnt[khi] -= 1
+            if flo: cnt[2 * (flo > 0) + (plo > 0)] += 1
+            if fhi: cnt[2 * (fhi > 0) + (phi > 0)] += 1
+    yield from rec(1, L - 1, 0)
 
 
 # Big levels are scanned in lexicographic order, so their first knots all open with long
@@ -319,7 +396,7 @@ def _sampled_words(L, glen):
         g = [rng.randint(1, L - 1) for _ in range(glen)]
         if _single_cycle(g, L): yield g
 
-def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
+def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
     """Yield the knots one at a time.
 
     A generator so a caller can show the first knot immediately and abandon the scan
@@ -366,7 +443,9 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
     if sample and glen >= L - 1 and (glen - (L - 1)) % 2 == 0:
         stall=0
         for g in _sampled_words(L, glen):
-            c=admit(g)
+            # A word over the C limit counts as a miss: with a tight cmax almost every
+            # random word is one, and skipping them without counting never ended sampling.
+            c=None if cmax is not None and bights_of(g, L) > 2 * cmax else admit(g)
             if c is None:
                 stall+=1
                 if stall>=SAMPLE_STALL: break
@@ -380,7 +459,7 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
     # itself a candidate (it starts with 1 and is a single cycle), so a class is met
     # exactly once as "g is its own canonical form" -- no g_canon, and no set of the
     # hundreds of thousands of forms seen (only the sampled ones, to skip them).
-    for g in _candidate_words(L, glen):
+    for g in _candidate_words(L, glen, cmax):
         if not is_canonical(g, L): continue
         c=admit(g, canonical=True)
         if c is None: continue
@@ -388,9 +467,10 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None):
         found+=1
         if maxknots is not None and found>=maxknots: return
 
-def enumerate_gs(L, glen, maxknots=MAXKNOTS):
-    """Just the list; see enumerate_gs_ex for the truncation flag."""
-    return enumerate_gs_ex(L, glen, maxknots)[0]
+def enumerate_gs(L, glen, maxknots=MAXKNOTS, cmax=None):
+    """Just the list; see enumerate_gs_ex for the truncation flag.  cmax: only knots
+    with C <= cmax (C = bights_of / 2), pruned during the search, not filtered after."""
+    return enumerate_gs_ex(L, glen, maxknots, cmax)[0]
 
 def build(L, g):
     """Minimal-W zigzag for step-word g, by solving the diagram's linear system.
