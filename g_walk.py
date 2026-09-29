@@ -203,7 +203,7 @@ def solve_min(g, L, Wmax=60, no_idle_runs=True, workers=1, time_limit=None):
 # ---------------------------------------------------------------- rank formulation
 
 def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redundant=False,
-                  min_heights=False):
+                  min_heights=False, extra=None):
     """The same walk model with crossings read from RANKS instead of pairwise height tests.
 
     r_t in 0..L-1 is step t's rank among the L steps on its half-column (bottom = 0),
@@ -299,6 +299,7 @@ def feasible_rank(g, L, W, no_idle_runs=True, workers=1, time_limit=None, redund
         if no_idle_runs:
             M.Add(sum(bight) == GS.segments(g, L)[1])           # g_solve's bight count
 
+    if extra: extra(M, y, N)       # caller's additional constraints on the heights
     # min_heights: minimise the number of distinct heights at which bights sit -- the
     # rows of pins on a cylindrical jig.  used[h] is forced on by any bight at height h.
     if min_heights:
