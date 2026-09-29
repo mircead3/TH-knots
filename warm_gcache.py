@@ -20,7 +20,7 @@ LEVELS=[(L,gl) for L in (3,4,5) for gl in range(L-1,MAXGLEN+1) if gl%2==(L-1)%2]
 enum={}; build={}; t0=time.time()
 for L,gl in LEVELS:
     ts=time.time(); gs=GC.enumerate_gs(L,gl); e=time.time()-ts
-    enum['%d|%d'%(L,gl)]=gs
+    enum['%d|%d|%d|-|-|-|-'%(L,gl,gl)]=gs   # the server's query key for one unfiltered level
     bt=time.time(); slow=[]
     for g in gs:
         s0=time.time(); bd=GC.build(L,g); d=time.time()-s0

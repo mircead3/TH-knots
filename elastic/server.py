@@ -70,7 +70,7 @@ import gcatalog
 #
 # The file is keyed by a signature over the two source files, so any change to the
 # enumeration or the solver invalidates it rather than serving stale results.
-_ENUM_CACHE = {}    # (L, glen) -> list of canonical g's
+_ENUM_CACHE = {}    # query key (see _query_key) -> list of canonical g's
 _BUILD_CACHE = {}   # (L, g)    -> built diagram; see _handle_construct
 _CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            'gcache.json')
@@ -99,20 +99,26 @@ def _cache_load():
         print('g-cache: signature changed (gcatalog/g_solve edited) -- ignoring stale cache')
         return
     for k, v in d.get('enum', {}).items():
-        L, glen = k.split('|'); _ENUM_CACHE[(int(L), int(glen))] = v
+        _ENUM_CACHE[k] = v                     # key: the query string, see _query_key
     for k, v in d.get('build', {}).items():
         L, gs = k.split('|'); _BUILD_CACHE[(int(L), tuple(int(x) for x in gs.split(',')))] = v
     print('g-cache: loaded %d levels, %d diagrams from %s'
           % (len(_ENUM_CACHE), len(_BUILD_CACHE), os.path.basename(_CACHE_FILE)))
 
+_cache_save_lock = threading.Lock()   # two scans finishing together raced on the .tmp
+
 def _cache_save():
+    with _cache_save_lock:
+        _cache_save_locked()
+
+def _cache_save_locked():
     global _CACHE_DIRTY
     if not _CACHE_DIRTY: return
     tmp = _CACHE_FILE + '.tmp'
     try:
         with open(tmp, 'w') as f:
             json.dump({'sig': _CACHE_SIG,
-                       'enum': {'%d|%d' % k: v for k, v in _ENUM_CACHE.items()},
+                       'enum': dict(_ENUM_CACHE),
                        'build': {'%d|%s' % (k[0], ','.join(map(str, k[1]))): v
                                  for k, v in _BUILD_CACHE.items()}}, f)
         os.replace(tmp, _CACHE_FILE)      # atomic: never leave a half-written cache
@@ -125,13 +131,18 @@ def _cache_save():
 # showing anything: the first knot of L=6 |g|=11 arrives in 0.07s where the full scan
 # takes 232s.  One job at a time, superseded by generation number, so changing L or |g|
 # abandons the previous scan instead of queueing behind it.
-_ENUM_JOB = {'gen': 0, 'L': None, 'glen': None, 'gs': [], 'done': True,
-             'truncated': False, 'error': None}
+# A QUERY is (L, gmin, gmax, cmin, cmax, chiral, selfflip); None = no filter.  The old
+# single-level request is gmin = gmax with no filters.  Its string form is the key of the
+# job and of the persistent cache.
+def _query_key(q):
+    return '|'.join('-' if v is None else str(int(v)) for v in q)
+
+_ENUM_JOB = {'gen': 0, 'q': None, 'gs': [], 'done': True, 'truncated': False, 'error': None}
 _enum_lock = threading.RLock()   # RLock: _enum_start snapshots while holding it
 
-def _enum_worker(gen, L, glen):
+def _enum_worker(gen, q):
     try:
-        for g in gcatalog.iter_gs(L, glen):
+        for g in gcatalog.iter_filtered(*q):
             with _enum_lock:
                 if _ENUM_JOB['gen'] != gen: return      # superseded: drop this scan
                 _ENUM_JOB['gs'].append(g)
@@ -139,7 +150,7 @@ def _enum_worker(gen, L, glen):
             if _ENUM_JOB['gen'] != gen: return
             _ENUM_JOB['done'] = True
             _ENUM_JOB['truncated'] = False        # no knot cap: scans run to completion
-            _ENUM_CACHE[(L, glen)] = list(_ENUM_JOB['gs'])   # complete: worth caching
+            _ENUM_CACHE[_query_key(q)] = list(_ENUM_JOB['gs'])   # complete: worth caching
         global _CACHE_DIRTY
         _CACHE_DIRTY = True; _cache_save()
     except Exception as ex:
@@ -147,20 +158,21 @@ def _enum_worker(gen, L, glen):
             if _ENUM_JOB['gen'] == gen:
                 _ENUM_JOB['error'] = str(ex); _ENUM_JOB['done'] = True
 
-def _enum_start(L, glen):
-    """Begin (or join) the scan for this level.  -> snapshot dict."""
+def _enum_start(q):
+    """Begin (or join) the scan for this query.  -> snapshot dict."""
     with _enum_lock:
-        if _ENUM_JOB['L'] == L and _ENUM_JOB['glen'] == glen and _ENUM_JOB['error'] is None:
-            return _enum_snapshot()                    # already scanning this level
-        _ENUM_JOB.update(gen=_ENUM_JOB['gen'] + 1, L=L, glen=glen, gs=[],
+        if _ENUM_JOB['q'] == q and _ENUM_JOB['error'] is None:
+            return _enum_snapshot()                    # already scanning this query
+        _ENUM_JOB.update(gen=_ENUM_JOB['gen'] + 1, q=q, gs=[],
                          done=False, truncated=False, error=None)
         gen = _ENUM_JOB['gen']
-    threading.Thread(target=_enum_worker, args=(gen, L, glen), daemon=True).start()
+    threading.Thread(target=_enum_worker, args=(gen, q), daemon=True).start()
     return _enum_snapshot()
 
 def _enum_snapshot():
     with _enum_lock:
-        return {'L': _ENUM_JOB['L'], 'glen': _ENUM_JOB['glen'],
+        q = _ENUM_JOB['q']
+        return {'q': None if q is None else _query_key(q),
                 'gs': list(_ENUM_JOB['gs']), 'count': len(_ENUM_JOB['gs']),
                 'done': _ENUM_JOB['done'], 'truncated': _ENUM_JOB['truncated'],
                 'error': _ENUM_JOB['error']}
@@ -281,26 +293,29 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_enumerate(self):
         try:
             body = self._read_body()
-            L = int(body['L']); glen = int(body['glen'])
-            # The APP owns the usable cap (the leads input's max); this is only a sanity net
-            # against a pathological request -- _candidate_words loops over L-1 values per
-            # position, so an absurd L would hang rather than answer.
+            L = int(body['L'])
+            # |g| range (the old single-level request sends glen), C range, filters.
+            gmin = int(body.get('gmin', body.get('glen')))
+            gmax = int(body.get('gmax', gmin))
+            opt = lambda k: None if body.get(k) is None else int(body[k])
+            cmin, cmax = opt('cmin'), opt('cmax')
+            tri = lambda k: None if body.get(k) is None else bool(body[k])
+            chiral, selfflip = tri('chiral'), tri('selfflip')
+            # The APP owns the usable caps (the leads input's max, the |g| offered); these
+            # are only sanity nets against a pathological request.
             if not (2 <= L <= 64): raise ValueError('L out of range (2..64)')
-            # Same rule: the app decides what |g| is worth offering.  This is only a net
-            # against an absurd request (recursion depth in _candidate_words is |g|).
-            if not (1 <= glen <= 64): raise ValueError('|g| out of range (1..64)')
+            if not (1 <= gmin <= gmax <= 64): raise ValueError('|g| range out of range (1..64)')
+            if cmin is not None and cmax is not None and cmin > cmax: raise ValueError('cmin > cmax')
         except Exception as e:
             self._send_json(400, {'error': f'invalid request: {e}'}); return
-        # parity: a single L-cycle needs glen == (L-1) mod 2
-        if glen % 2 != (L - 1) % 2:
-            self._send_json(200, {'L': L, 'glen': glen, 'gs': [], 'count': 0}); return
-        key = (L, glen)
+        q = (L, gmin, gmax, cmin, cmax, chiral, selfflip)
+        key = _query_key(q)
         if key in _ENUM_CACHE:                     # complete and cached: answer at once
             gs = _ENUM_CACHE[key]
-            self._send_json(200, {'L': L, 'glen': glen, 'gs': gs, 'count': len(gs),
+            self._send_json(200, {'q': key, 'gs': gs, 'count': len(gs),
                                   'done': True, 'truncated': False})
             return
-        snap = _enum_start(L, glen)                # starts, or supersedes another level
+        snap = _enum_start(q)                      # starts, or supersedes another query
         # Give a fast level the chance to finish inside this request rather than making
         # the client poll for something that takes 20ms.
         for _ in range(12):
