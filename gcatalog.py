@@ -475,9 +475,9 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
 # zigzags with exactly 2C runs, validated on the lattice, their words read off.
 #
 # COMPLETENESS rests on an observation, not a proof: every knot checked has a drawing
-# of width W <= 2C (727 library knots; and wherever the exhaustive word search finishes,
-# up to C=3 at L=10 |g|<=17, this generator finds exactly its knots; W up to 2C+2 finds
-# nothing more for C=2,3, L=4..11).  |g| <= C*(L-1) IS proven: along a run the curve's
+# of width W <= 2C (727 library knots; wherever the exhaustive word search finishes --
+# C<=3 up to L=10 |g|<=17, C=4 up to L=8 |g|<=13 -- this generator finds exactly its
+# knots; W up to 2C+2 finds nothing more for C=2,3 at L=4..11 and C=4 at L=4..8).  |g| <= C*(L-1) IS proven: along a run the curve's
 # rank moves one way, so a run passes at most L-1 crossings, and each crossing is passed
 # twice.
 
@@ -520,37 +520,72 @@ def word_from_runs(runs, L, W):
     return [v for c in cols for v in sorted(c)]
 
 
+def _valid_walks(L, C, W):
+    """Run sequences (u1,d1,...,uC,dC) of VALID drawings at width W, generated
+    incrementally: the walk is laid down one step at a time, keeping the half-column
+    heights (sums y_t + y_{t+1}) already in use, and a run stops growing at its first
+    collision -- every longer run collides at the same step, so the whole branch goes.
+    Runs are >= 2 (a length-1 run holds no crossing), up- and down-runs each total W*L/2,
+    and u1 is the largest up-run (a necessary condition for the canonical rotation; the
+    caller applies the full test)."""
+    N = W * L
+    if N % 2: return
+    half = N // 2
+    used = [set() for _ in range(W)]
+    runs = [0] * (2 * C)
+    def rec(r, t, y, up_left, dn_left):
+        if r == 2 * C:
+            if t == N and y == 0: yield list(runs)
+            return
+        up = r % 2 == 0
+        n_same = (2 * C - r + 1) // 2                  # runs of this kind left, incl. this
+        budget = up_left if up else dn_left
+        if n_same == 1: kmin = kmax = budget           # the last one takes what is left
+        else: kmin, kmax = 2, budget - 2 * (n_same - 1)
+        if up and r > 0: kmax = min(kmax, runs[0])
+        if kmin > kmax: return
+        d = 1 if up else -1
+        added = []; tt, yy = t, y
+        for k in range(1, kmax + 1):
+            x = tt % W; s = 2 * yy + d
+            if s in used[x]: break                     # collision: no longer run can work
+            used[x].add(s); added.append((x, s))
+            tt += 1; yy += d
+            if k >= kmin:
+                runs[r] = k
+                if up: yield from rec(r + 1, tt, yy, up_left - k, dn_left)
+                else: yield from rec(r + 1, tt, yy, up_left, dn_left - k)
+        for x, s in added: used[x].discard(s)
+    yield from rec(0, 0, 0, half, half)
+
+
 def iter_small_c(L, C, Wmax=None):
     """Knots with exactly C bight pairs, any |g|, from drawings with 2C runs and width
     W <= Wmax (default 2C; see the COMPLETENESS note above).  Yields canonical words,
-    each knot once (cylinder key), knot-level powers dropped as in iter_gs."""
+    each knot once (cylinder key), knot-level powers dropped as in iter_gs.
+    C=4 at L=11: 16133 knots in ~3 min (the word search could not finish |g| <= 22)."""
     Wmax = Wmax or 2 * C
     seen = set()
     for W in range(1, Wmax + 1):
-        if (W * L) % 2: continue
-        half = W * L // 2
-        parts = list(_compositions(half, C))
-        for ups in parts:
-            for downs in parts:
-                runs = [v for pair in zip(ups, downs) for v in pair]
-                # the same drawing starting at another valley: keep the largest rotation
-                if any(runs[2 * k:] + runs[:2 * k] > runs for k in range(1, C)): continue
-                g = word_from_runs(runs, L, W)
-                if not g or len(set(g)) < L - 1: continue      # must use every generator
-                if bights_of(g, L) != 2 * C: continue          # wiggles: a smaller C
-                key = cylinder_key(g, L)
-                if key in seen: continue
-                seen.add(key)
-                c = g_canon(g, L)
-                ks = power_ks(c, L)
-                if ks and (is_literal_power(c, ks) or is_knot_power(list(c), ks=ks) is True):
-                    continue
-                yield list(c)
+        for runs in _valid_walks(L, C, W):
+            # the same drawing starting at another valley: keep the largest rotation
+            if any(runs[2 * k:] + runs[:2 * k] > runs for k in range(1, C)): continue
+            g = word_from_runs(runs, L, W)
+            if not g or len(set(g)) < L - 1: continue      # must use every generator
+            if bights_of(g, L) != 2 * C: continue          # wiggles: a smaller C
+            key = cylinder_key(g, L)
+            if key in seen: continue
+            seen.add(key)
+            c = g_canon(g, L)
+            ks = power_ks(c, L)
+            if ks and (is_literal_power(c, ks) or is_knot_power(list(c), ks=ks) is True):
+                continue
+            yield list(c)
 
 
 # ---------------------------------------------------------------- filtered browsing
 
-SMALL_C = 3        # up to this C, knots come from the drawing generator (any |g|)
+SMALL_C = 4        # up to this C, knots come from the drawing generator (any |g|)
 _SMALL_C_DONE = {}  # (L, C) -> iter_small_c's complete output: it yields every |g| at once,
                     # so stepping |g| under a small-C filter must not regenerate it
 
