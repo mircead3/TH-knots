@@ -256,7 +256,24 @@ def bights_of(g, L):
     return sum(1 for i in range(len(seq)) if seq[i] != seq[i - 1])
 
 
-def _candidate_words(L, glen, cmax=None):
+class Cancelled(Exception):
+    """Raised inside a search when its stop() says it has been superseded."""
+
+def _stopper(stop, every=4096):
+    """A cheap check for the search loops: calls stop() only every `every` steps and
+    raises Cancelled once it is true.  A superseded scan used to run on until it next
+    found a knot -- at a big level, a long time -- holding the interpreter meanwhile."""
+    if stop is None: return lambda: None
+    n = [0]
+    def tick():
+        n[0] += 1
+        if n[0] >= every:
+            n[0] = 0
+            if stop(): raise Cancelled()
+    return tick
+
+
+def _candidate_words(L, glen, cmax=None, stop=None):
     """Yield, in lex order, exactly the single-L-cycle words that start with 1.
 
     Two facts prune the space hard, and both are exact -- no knot is lost:
@@ -303,9 +320,11 @@ def _candidate_words(L, glen, cmax=None):
         return False
     w[0] = 1
     perm[0], perm[1] = perm[1], perm[0]
+    tick = _stopper(stop)
 
     if cmax is None:
         def rec(i, cycles):
+            tick()
             if glen - i < cycles - 1: return            # cannot merge down to one cycle
             if i == glen:
                 yield list(w); return
@@ -337,6 +356,7 @@ def _candidate_words(L, glen, cmax=None):
     firstdir[0], firstdir[1] = 1, -1
     cnt[3] += 1; cnt[0] += 1
     def rec(i, cycles, changes):
+        tick()
         if i == glen:
             if bights_of(w, L) <= bmax: yield list(w)
             return
@@ -396,7 +416,7 @@ def _sampled_words(L, glen):
         g = [rng.randint(1, L - 1) for _ in range(glen)]
         if _single_cycle(g, L): yield g
 
-def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
+def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None, stop=None):
     """Yield the knots one at a time.
 
     A generator so a caller can show the first knot immediately and abandon the scan
@@ -442,7 +462,9 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
     if sample is None: sample = (L - 1) ** (glen - 1) > SAMPLE_ABOVE
     if sample and glen >= L - 1 and (glen - (L - 1)) % 2 == 0:
         stall=0
+        tick = _stopper(stop, 256)
         for g in _sampled_words(L, glen):
+            tick()
             # A word over the C limit counts as a miss: with a tight cmax almost every
             # random word is one, and skipping them without counting never ended sampling.
             c=None if cmax is not None and bights_of(g, L) > 2 * cmax else admit(g)
@@ -459,7 +481,7 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None):
     # itself a candidate (it starts with 1 and is a single cycle), so a class is met
     # exactly once as "g is its own canonical form" -- no g_canon, and no set of the
     # hundreds of thousands of forms seen (only the sampled ones, to skip them).
-    for g in _candidate_words(L, glen, cmax):
+    for g in _candidate_words(L, glen, cmax, stop):
         if not is_canonical(g, L): continue
         c=admit(g, canonical=True)
         if c is None: continue
@@ -520,7 +542,7 @@ def word_from_runs(runs, L, W):
     return [v for c in cols for v in sorted(c)]
 
 
-def _valid_walks(L, C, W):
+def _valid_walks(L, C, W, stop=None):
     """Run sequences (u1,d1,...,uC,dC) of VALID drawings at width W, generated
     incrementally: the walk is laid down one step at a time, keeping the half-column
     heights (sums y_t + y_{t+1}) already in use, and a run stops growing at its first
@@ -533,7 +555,9 @@ def _valid_walks(L, C, W):
     half = N // 2
     used = [set() for _ in range(W)]
     runs = [0] * (2 * C)
+    tick = _stopper(stop)
     def rec(r, t, y, up_left, dn_left):
+        tick()
         if r == 2 * C:
             if t == N and y == 0: yield list(runs)
             return
@@ -559,7 +583,7 @@ def _valid_walks(L, C, W):
     yield from rec(0, 0, 0, half, half)
 
 
-def iter_small_c(L, C, Wmax=None):
+def iter_small_c(L, C, Wmax=None, stop=None):
     """Knots with exactly C bight pairs, any |g|, from drawings with 2C runs and width
     W <= Wmax (default 2C; see the COMPLETENESS note above).  Yields canonical words,
     each knot once (cylinder key), knot-level powers dropped as in iter_gs.
@@ -567,7 +591,7 @@ def iter_small_c(L, C, Wmax=None):
     Wmax = Wmax or 2 * C
     seen = set()
     for W in range(1, Wmax + 1):
-        for runs in _valid_walks(L, C, W):
+        for runs in _valid_walks(L, C, W, stop):
             # the same drawing starting at another valley: keep the largest rotation
             if any(runs[2 * k:] + runs[:2 * k] > runs for k in range(1, C)): continue
             g = word_from_runs(runs, L, W)
@@ -608,14 +632,15 @@ def braid_amphichiral(g, L):
     return L % 2 == 1 and word_self_flip(g, L)
 
 
-def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None):
+def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None, stop=None):
     """Knots at L with gmin <= |g| <= gmax and cmin <= C <= cmax, optionally only chiral /
     amphichiral (chiral=True/False) and self-flip or not (selfflip=True/False).
     The C range is SPLIT by source: C <= SMALL_C comes from the drawing generator
     (iter_small_c), which reaches any |g| -- its knots come out by width, not by |g|; the
     rest (C > SMALL_C) from the word search level by level, C-pruned when cmax is set and
     never beyond cmax*(L-1), the proven bound.  Streams canonical words, each knot once
-    (the two parts cannot overlap: they have different C)."""
+    (the two parts cannot overlap: they have different C).  stop: a callable; once it
+    returns True the search raises Cancelled within a few thousand steps."""
     def keep(g, clo):
         if not gmin <= len(g) <= gmax: return False
         if clo is not None and bights_of(g, L) < 2 * clo: return False
@@ -629,7 +654,7 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
         done = _SMALL_C_DONE.get((L, C))
         if done is None:
             found = []
-            for g in iter_small_c(L, C):
+            for g in iter_small_c(L, C, stop=stop):
                 found.append(g)
                 if keep(g, None): yield g
             _SMALL_C_DONE[(L, C)] = found            # only once complete (not abandoned)
@@ -642,7 +667,7 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
     top = gmax if cmax is None else min(gmax, cmax * (L - 1))
     for gl in range(max(gmin, L - 1), top + 1):
         if gl % 2 != (L - 1) % 2: continue
-        for g in iter_gs(L, gl, cmax=cmax):
+        for g in iter_gs(L, gl, cmax=cmax, stop=stop):
             if keep(g, clo): yield g
 
 

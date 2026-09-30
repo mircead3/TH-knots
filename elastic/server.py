@@ -142,7 +142,11 @@ _enum_lock = threading.RLock()   # RLock: _enum_start snapshots while holding it
 
 def _enum_worker(gen, q):
     try:
-        for g in gcatalog.iter_filtered(*q):
+        # stop: superseded by a newer query.  The search checks it every few thousand
+        # steps, so an abandoned scan quits promptly instead of running on (and holding
+        # the interpreter) until it happens to find its next knot.
+        stop = lambda: _ENUM_JOB['gen'] != gen
+        for g in gcatalog.iter_filtered(*q, stop=stop):
             with _enum_lock:
                 if _ENUM_JOB['gen'] != gen: return      # superseded: drop this scan
                 _ENUM_JOB['gs'].append(g)
@@ -153,6 +157,8 @@ def _enum_worker(gen, q):
             _ENUM_CACHE[_query_key(q)] = list(_ENUM_JOB['gs'])   # complete: worth caching
         global _CACHE_DIRTY
         _CACHE_DIRTY = True; _cache_save()
+    except gcatalog.Cancelled:
+        return                                  # superseded: a newer scan owns the job
     except Exception as ex:
         with _enum_lock:
             if _ENUM_JOB['gen'] == gen:
