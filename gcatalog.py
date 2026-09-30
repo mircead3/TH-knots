@@ -502,71 +502,39 @@ def iter_gs(L, glen, maxknots=MAXKNOTS, sample=None, cmax=None, stop=None):
 # knots; W up to 2C+2 finds nothing more for C=2,3 at L=4..11 and C=4 at L=4..8).  |g| <= C*(L-1) IS proven: along a run the curve's
 # rank moves one way, so a run passes at most L-1 crossings, and each crossing is passed
 # twice.
-
-def _compositions(n, k, lo=2):
-    """k-tuples of ints >= lo summing to n.  lo=2: a run of length 1 goes from bight to
-    bight with no interior lattice point, so it can hold no crossing -- an idle run, i.e.
-    a wiggle, which the bight count below would reject anyway."""
-    if k == 1:
-        if n >= lo: yield (n,)
-        return
-    for a in range(lo, n - lo * (k - 1) + 1):
-        for rest in _compositions(n - a, k - 1, lo): yield (a,) + rest
-
-
-def word_from_runs(runs, L, W):
-    """The tile word of the zigzag with these run lengths (up first) at width W, or None
-    if it is not a valid drawing.  The walk takes one column per step (column = t mod W).
-    VALID: on every half-column the L steps are at different heights (sums y_t+y_{t+1}),
-    which rules out overlapping steps and crossings between lattice points and leaves
-    only transversal crossings and peak/valley tangencies at columns.  WORD: each step's
-    rank on its half-column; at a column a rank rising by one is the rising pass of
-    sigma_(new rank).  Letters of one column commute, so their order is immaterial."""
-    N = W * L
-    y = [0]
-    for i, r in enumerate(runs):
-        d = 1 if i % 2 == 0 else -1
-        for _ in range(r): y.append(y[-1] + d)
-    if len(y) != N + 1 or y[-1] != 0: return None
-    y.pop()
-    rank = [0] * N
-    for x in range(W):
-        steps = range(x, N, W)
-        sums = [y[t] + y[(t + 1) % N] for t in steps]
-        if len(set(sums)) != L: return None
-        for r, t in enumerate(sorted(steps, key=lambda t: y[t] + y[(t + 1) % N])):
-            rank[t] = r
-    cols = [[] for _ in range(W)]
-    for t in range(N):
-        if rank[t] - rank[t - 1] == 1: cols[t % W].append(rank[t])
-    return [v for c in cols for v in sorted(c)]
-
+#
+# Pruning, all exact (same knots as the plain generator for C<=3 at L<=12, C=4 at L<=9,
+# C=5 at L<=7):
+# words are read from the walk's own heights; a drawing with an idle run is dropped
+# directly (instead of counting its bights); and only one run sequence per orbit under
+# rotation, reversal and vertical flip is kept.  Speed-up ~4x at C=4, ~4x at C=5.
 
 def _valid_walks(L, C, W, stop=None):
-    """Run sequences (u1,d1,...,uC,dC) of VALID drawings at width W, generated
+    """(runs, heights) of every VALID drawing at width W with 2C runs, generated
     incrementally: the walk is laid down one step at a time, keeping the half-column
     heights (sums y_t + y_{t+1}) already in use, and a run stops growing at its first
     collision -- every longer run collides at the same step, so the whole branch goes.
     Runs are >= 2 (a length-1 run holds no crossing), up- and down-runs each total W*L/2,
-    and u1 is the largest up-run (a necessary condition for the canonical rotation; the
-    caller applies the full test)."""
+    and the first run is the longest of ALL runs (necessary for the canonical form under
+    rotation, reversal and vertical flip; the caller applies the full test).  `heights` is
+    a shared buffer, valid until the next item is requested."""
     N = W * L
     if N % 2: return
     half = N // 2
     used = [set() for _ in range(W)]
-    runs = [0] * (2 * C)
+    runs = [0] * (2 * C); ys = [0] * N
     tick = _stopper(stop)
     def rec(r, t, y, up_left, dn_left):
         tick()
         if r == 2 * C:
-            if t == N and y == 0: yield list(runs)
+            if t == N and y == 0: yield runs, ys
             return
         up = r % 2 == 0
         n_same = (2 * C - r + 1) // 2                  # runs of this kind left, incl. this
         budget = up_left if up else dn_left
         if n_same == 1: kmin = kmax = budget           # the last one takes what is left
         else: kmin, kmax = 2, budget - 2 * (n_same - 1)
-        if up and r > 0: kmax = min(kmax, runs[0])
+        if r > 0: kmax = min(kmax, runs[0])            # u1 is the longest run
         if kmin > kmax: return
         d = 1 if up else -1
         added = []; tt, yy = t, y
@@ -574,6 +542,7 @@ def _valid_walks(L, C, W, stop=None):
             x = tt % W; s = 2 * yy + d
             if s in used[x]: break                     # collision: no longer run can work
             used[x].add(s); added.append((x, s))
+            ys[tt] = yy
             tt += 1; yy += d
             if k >= kmin:
                 runs[r] = k
@@ -583,20 +552,59 @@ def _valid_walks(L, C, W, stop=None):
     yield from rec(0, 0, 0, half, half)
 
 
+def _canonical_runs(runs, C):
+    """Is `runs` the largest among the run sequences of the same drawing moved around the
+    cylinder (rotations by a pair of runs), read backwards, turned upside down, or both?
+    All four are symmetries (checked: every one maps each of 24243 valid drawings to a
+    drawing of the same knot), so one representative of each orbit is enough."""
+    n = 2 * C
+    rev = runs[::-1]; rev = rev[1:] + rev[:1]          # backwards, starting on an up-run
+    flip = runs[1:] + runs[:1]                          # upside down: downs become ups
+    flrev = flip[::-1]; flrev = flrev[1:] + flrev[:1]
+    for seq in (runs, rev, flip, flrev):
+        for k in range(0, n, 2):
+            if seq[k:] + seq[:k] > runs: return False
+    return True
+
+
+def _word_and_idle(ys, runs, L, W):
+    """The tile word of a VALID walk (heights ys), and whether some run is IDLE (holds no
+    crossing).  A step's rank on its half-column; at a column a rank rising by one is the
+    rising pass of sigma_(new rank), and any rank change is a crossing.  A drawing without
+    idle runs has exactly 2C bights in its word; an idle run is a wiggle, i.e. a smaller C."""
+    N = W * L
+    rank = [0] * N
+    for x in range(W):
+        steps = range(x, N, W)
+        for r, t in enumerate(sorted(steps, key=lambda t: ys[t] + ys[(t + 1) % N])):
+            rank[t] = r
+    cols = [[] for _ in range(W)]
+    cross = [False] * N
+    for t in range(N):
+        dr = rank[t] - rank[t - 1]
+        if dr:
+            cross[t] = True
+            if dr == 1: cols[t % W].append(rank[t])
+    t = 0
+    for k in runs:
+        if not any(cross[(t + j) % N] for j in range(1, k)):
+            return None, True
+        t += k
+    return [v for c in cols for v in sorted(c)], False
+
+
 def iter_small_c(L, C, Wmax=None, stop=None):
     """Knots with exactly C bight pairs, any |g|, from drawings with 2C runs and width
     W <= Wmax (default 2C; see the COMPLETENESS note above).  Yields canonical words,
     each knot once (cylinder key), knot-level powers dropped as in iter_gs.
-    C=4 at L=11: 16133 knots in ~3 min (the word search could not finish |g| <= 22)."""
+    C=4 at L=11: 16133 knots in ~50 s; C=5 at L=7: 9794 in ~2 min."""
     Wmax = Wmax or 2 * C
     seen = set()
     for W in range(1, Wmax + 1):
-        for runs in _valid_walks(L, C, W, stop):
-            # the same drawing starting at another valley: keep the largest rotation
-            if any(runs[2 * k:] + runs[:2 * k] > runs for k in range(1, C)): continue
-            g = word_from_runs(runs, L, W)
-            if not g or len(set(g)) < L - 1: continue      # must use every generator
-            if bights_of(g, L) != 2 * C: continue          # wiggles: a smaller C
+        for runs, ys in _valid_walks(L, C, W, stop):
+            if not _canonical_runs(runs, C): continue
+            g, idle = _word_and_idle(ys, runs, L, W)
+            if idle or len(set(g)) < L - 1: continue      # a wiggle, or not every generator
             key = cylinder_key(g, L)
             if key in seen: continue
             seen.add(key)
@@ -609,7 +617,13 @@ def iter_small_c(L, C, Wmax=None, stop=None):
 
 # ---------------------------------------------------------------- filtered browsing
 
-SMALL_C = 4        # up to this C, knots come from the drawing generator (any |g|)
+SMALL_C = 4        # up to this C, knots come from the drawing generator (any |g|) ...
+SMALL_C_AT_SMALL_L = (7, 5)   # ... and up to C=5 while L <= 7 (C=5: L=7 ~2 min, L=8 ~75 min)
+
+def small_c_max(L):
+    """The largest C the drawing generator handles at this L; larger C uses the word
+    search.  The generator's cost grows fast with C and L."""
+    return SMALL_C_AT_SMALL_L[1] if L <= SMALL_C_AT_SMALL_L[0] else SMALL_C
 _SMALL_C_DONE = {}  # (L, C) -> iter_small_c's complete output: it yields every |g| at once,
                     # so stepping |g| under a small-C filter must not regenerate it
 
@@ -635,9 +649,9 @@ def braid_amphichiral(g, L):
 def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None, stop=None):
     """Knots at L with gmin <= |g| <= gmax and cmin <= C <= cmax, optionally only chiral /
     amphichiral (chiral=True/False) and self-flip or not (selfflip=True/False).
-    The C range is SPLIT by source: C <= SMALL_C comes from the drawing generator
+    The C range is SPLIT by source: C <= small_c_max(L) comes from the drawing generator
     (iter_small_c), which reaches any |g| -- its knots come out by width, not by |g|; the
-    rest (C > SMALL_C) from the word search level by level, C-pruned when cmax is set and
+    rest from the word search level by level, C-pruned when cmax is set and
     never beyond cmax*(L-1), the proven bound.  Streams canonical words, each knot once
     (the two parts cannot overlap: they have different C).  stop: a callable; once it
     returns True the search raises Cancelled within a few thousand steps."""
@@ -648,8 +662,9 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
         if selfflip is not None and word_self_flip(g, L) != selfflip: return False
         return True
     lo = max(1, cmin or 1)
+    small = small_c_max(L)
     # 1. small C: the generator, one C at a time (memoised per (L, C): every |g| at once)
-    for C in range(lo, min(SMALL_C, cmax if cmax is not None else SMALL_C) + 1):
+    for C in range(lo, min(small, cmax if cmax is not None else small) + 1):
         if C * (L - 1) < gmin: continue
         done = _SMALL_C_DONE.get((L, C))
         if done is None:
@@ -661,9 +676,9 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
         else:
             for g in done:
                 if keep(g, None): yield g
-    # 2. larger C: the word search, keeping only C > SMALL_C (and >= cmin)
-    if cmax is not None and cmax <= SMALL_C: return
-    clo = max(lo, SMALL_C + 1)
+    # 2. larger C: the word search, keeping only C > small (and >= cmin)
+    if cmax is not None and cmax <= small: return
+    clo = max(lo, small + 1)
     top = gmax if cmax is None else min(gmax, cmax * (L - 1))
     for gl in range(max(gmin, L - 1), top + 1):
         if gl % 2 != (L - 1) % 2: continue

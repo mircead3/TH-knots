@@ -214,9 +214,6 @@
       <span>|g|</span>
       <span style="white-space:nowrap"><input id="fGmin" type="number" min="1" step="2" class="f-in" placeholder="L−1"> – <input id="fGmax" type="number" min="1" step="2" class="f-in" placeholder="="></span>
       <span id="vG" class="f-val"></span>
-      <span>achiral</span>
-      <span><select id="fChiral" class="f-in"><option value="">any</option><option value="0">✓</option><option value="1">✗</option></select></span>
-      <span id="vChiral" class="f-val"></span>
       <span>self-flip</span>
       <span><select id="fFlip" class="f-in"><option value="">any</option><option value="1">✓</option><option value="0">✗</option></select></span>
       <span id="vFlip" class="f-val"></span>
@@ -844,10 +841,10 @@ function updateKnotStats(B, ncomp, crossings, components) {
   const lines = [];
   if (showTubeDiag) {
     // Braid view is B-free: just the step g and its per-step measures.
-    // In g-mode |g|, C and chirality are shown on the filter lines instead.
+    // In g-mode |g|, C and self-flip are shown on the filter lines instead.
     lines.push(gMode ? `W ${W}   depth ${depth}` : `|g| ${len}   W ${W}   depth ${depth}   C ${C}`);
     lines.push(`g:  ${gTokens(g)}`);
-    if (!gMode) lines.push(braidChirality(g, LEADS));   // a property of the braid, not of B
+    lines.push(braidChirality(g, LEADS));   // a property of the braid, not of B
   } else {
     // Knot/round view: closure invariants at the current B, then the step.
     if (ncomp === 1) {
@@ -1204,7 +1201,7 @@ async function gRebuild(opts) {
   const L = parseInt(document.getElementById('mInput').value);
   if (isNaN(L) || L < 2) return;
   LEADS = L;
-  syncChiralFilter(L);             // chirality is tied to self-flip by L's parity
+  colourMarkMenus();
   // Changing L restarts at that L's FIRST |g| (= L-1) rather than carrying over the old
   // one: |g| means something different at each L, and the old value is usually deep into
   // the new L's range, landing you mid-list in a big level instead of at its start.
@@ -1354,33 +1351,15 @@ document.getElementById('bInput').addEventListener('change', () => {
   else redrawCurrentView();
 });
 
-// Chirality and self-flip are tied (see gcatalog.braid_amphichiral): with the parity
-// signs of these diagrams the flip IS the mirror when L is odd, and never when L is even.
-//   odd L:  amphichiral <=> self-flip, chiral <=> not self-flip -- the two menus move together
-//   even L: every braid is chiral -- the chirality menu is disabled, showing ✗
-// changed: the menu the user just set (it wins); otherwise chirality follows self-flip.
+// Chirality is not a filter: it follows from self-flip (see gcatalog.braid_amphichiral) --
+// odd L: amphichiral <=> self-flip; even L: every braid is chiral.  Shown in the braid panel.
 // Colour a ✓/✗ menu by its selection (green / red); 'any' keeps the default colour.
 function colourMarkMenus() {
-  for (const id of ['fChiral', 'fFlip']) {
+  for (const id of ['fFlip']) {
     const el = document.getElementById(id);
     const mark = el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
     el.classList.toggle('f-yes', mark === '✓'); el.classList.toggle('f-no', mark === '✗');
   }
-}
-function syncChiralFilter(L, changed) {
-  const ch = document.getElementById('fChiral'), fl = document.getElementById('fFlip');
-  if (L % 2 === 0) {
-    ch.value = '1'; ch.disabled = true;          // shows ✗: every braid is chiral at even L
-    ch.title = 'every braid is chiral at even L';
-    colourMarkMenus();
-    return;
-  }
-  ch.disabled = false;
-  ch.title = 'odd L: amphichiral = self-flip, chiral = not self-flip';
-  const other = v => (v === '' ? '' : v === '1' ? '0' : '1');   // chiral <-> not self-flip
-  if (changed === 'fChiral') fl.value = other(ch.value);
-  else ch.value = other(fl.value);
-  colourMarkMenus();
 }
 // A from/to pair keeps from <= to: moving one past the other drags the other along.
 function linkRange(loId, hiId, changed) {
@@ -1401,10 +1380,10 @@ function snapGParity(id) {
   if (w !== v) el.value = w;
 }
 // Any filter change starts a new list from its first knot.
-['fGmin', 'fGmax', 'fCmin', 'fCmax', 'fChiral', 'fFlip'].forEach(id =>
+['fGmin', 'fGmax', 'fCmin', 'fCmax', 'fFlip'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => {
     if (!gMode) return;
-    syncChiralFilter(LEADS, id);
+    colourMarkMenus();
     if (id === 'fGmin' || id === 'fGmax') { snapGParity(id); linkRange('fGmin', 'fGmax', id); }
     if (id === 'fCmin' || id === 'fCmax') {
       // C is always an explicit range: a cleared box refills (min 1, max = min).
@@ -1700,12 +1679,11 @@ function updateFilterValues() {
     el.textContent = v;
     el.classList.toggle('f-yes', v === '✓'); el.classList.toggle('f-no', v === '✗');
   };
-  if (!gMode || !currentG) { ['vC', 'vG', 'vChiral', 'vFlip'].forEach(id => set(id, '')); return; }
+  if (!gMode || !currentG) { ['vC', 'vG', 'vFlip'].forEach(id => set(id, '')); return; }
   const g = currentG, L = LEADS, sf = wordSelfFlip(g, L);
   set('vC', String(bightsOf(g, L) / 2));
   set('vG', String(g.length));
   set('vFlip', sf ? '✓' : '✗');
-  set('vChiral', L % 2 === 1 && sf ? '✓' : '✗');            // the row asks "achiral?"
 }
 
 function braidChirality(g, L) {
@@ -2915,10 +2893,9 @@ async function gPost(path, body) {
   }
   return res.json();
 }
-// The list query: L, the |g| range (the |g| from/to boxes), the C range, braid chirality and
-// word self-flip.  Keyed by the same string
+// The list query: L, the |g| range (the |g| from/to boxes), the C range and word self-flip
+// (the chirality slot stays in the key, always '-': chirality follows from self-flip).  Keyed by the same string
 // the server uses (its _query_key), so a stale list or poll is recognised by its key.
-// For odd L, amphichiral = self-flip; for even L every braid is chiral (see gcatalog).
 // Smallest possible |g| at L for the current C minimum (PROVEN): every generator
 // appears (|g| >= L-1), and without wiggles each of the 2C runs holds a crossing, each
 // crossing passed twice (|g| >= C).  Rounded up to L-1's parity (a single L-cycle).
@@ -2937,7 +2914,7 @@ function gQuery(L) {
   return { L, gmin, gmax,
            cmin: (num('fCmin') ?? 1) > 1 ? num('fCmin') : null,   // C >= 1 is no limit
            cmax: num('fCmax'),
-           chiral: L % 2 === 0 ? null : tri('fChiral'),   // even L: shown as ✗, filters nothing
+           chiral: null,                                   // not a filter (see colourMarkMenus)
            selfflip: tri('fFlip') };
 }
 function gQueryKey(q) {
@@ -3891,7 +3868,6 @@ function knotDescription() {
     if (!g || !currentG) {
       const mark = v => (v === null ? 'any' : v ? '✓' : '✗');
       return `scan L=${L} |g| ${q.gmin}-${q.gmax} C ${q.cmin ?? 1}-${q.cmax ?? 'any'}`
-           + ` achiral ${L % 2 === 0 ? '✗' : mark(q.chiral === null ? null : !q.chiral)}`
            + ` self-flip ${mark(q.selfflip)} B=${B} (no knot yet) [filter ${gQueryKey(q)}]`;
     }
     const f = gFiltered(q) || q.gmax > q.gmin ? ` [filter ${gQueryKey(q)}]` : '';
