@@ -246,7 +246,7 @@
     <div style="display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(180,195,255,0.35);margin-bottom:4px;margin-top:14px;">
       <span>Narrow</span><span>Wide</span>
     </div>
-    <input type="range" id="xStretchSlider" min="0.3" max="1.65" step="0.05" value="1"
+    <input type="range" id="xStretchSlider" min="0.05" max="1.4" step="0.05" value="1"
            style="width:100%;margin-bottom:14px;cursor:pointer;accent-color:rgba(100,130,255,0.8);">
   </div>
 
@@ -1075,7 +1075,8 @@ function rebuildKnot() {
 // ==== g-mode: enumerate/construct knots by step-word g (server-backed) ====
 let gMode = true;             // always true: g-mode is the only mode since C mode was retired
 let currentG = null;          // selected step-word (array)
-let gErr = '';                // gLen / gList / gListIdx / gRunsCache declared with the fetch helpers
+let gErr = '';
+let gReqKey = null;           // query key of a list request in flight (shown as "loading…")                // gLen / gList / gListIdx / gRunsCache declared with the fetch helpers
 const gParity = L => (L - 1) % 2;
 function clampGLen(L, glen) {
   const lo = L - 1;
@@ -1094,7 +1095,8 @@ function updateGDisplays() {
   if (idxEl) {
     const rest = gErr ? gErr
         : (gList.length && gList._key === gQueryKey(gQuery(LEADS))   // not a previous query's list
-             ? `${gListIdx + 1} / ${gList.length}` : '— / —');
+             ? `${gListIdx + 1} / ${gList.length}`
+             : gReqKey === gQueryKey(gQuery(LEADS)) ? 'loading…' : '— / —');
     // Progress ("scanning Ns" / "solving Ns") goes on its own line below.  The line is
     // always there (a blank one when idle) so the box does not jump in height each time
     // a message comes and goes.
@@ -1124,6 +1126,22 @@ function showBusy(msg, onShow) {
     if (onShow) onShow();
     paint(); _busyTick = setInterval(paint, 1000);
   }, 300);
+}
+
+// While a new list is scanned for its first knot, the knot on screen belongs to the
+// previous filters -- confusing when several filters are changed in a row.  Blank the
+// picture (3D group and the 2D diagram canvas) and the info panel; the first knot of the
+// new list redraws everything as usual.  Called only after the 300ms busy delay, so a
+// cached list (instant) does not flash.
+function blankDisplay() {
+  currentG = null;
+  clearKnotGroup();
+  const ctx = diagramCanvas.getContext('2d');
+  ctx.clearRect(0, 0, diagramCanvas.width, diagramCanvas.height);
+  document.getElementById('knotStats').style.display = 'none';
+  _knotStatsSig = null;                      // recompute when the next knot draws
+  document.getElementById('infoName').textContent = '';
+  updateFilterValues();                      // blanks the current-value marks
 }
 
 // While a knot is being solved, the invariants panel would otherwise keep showing the
@@ -1193,7 +1211,7 @@ async function gRebuild(opts) {
   if (gLenForL !== L) {
     for (const id of ['fGmin', 'fGmax']) {       // stepping visits only |g| = L-1 (mod 2)
       const el = document.getElementById(id);
-      el.min = L - 1; el.value = L - 1;
+      el.min = gMinFor(L); el.value = gMinFor(L);
     }
     gListIdx = 0; gLenForL = L;
   }
@@ -1203,18 +1221,24 @@ async function gRebuild(opts) {
     const key = gQueryKey(query);
     if (opts.reenum || gList._key !== key) {
       stopEnumPoll();              // switching level: abandon the previous scan
-      showBusy('scanning');     // |g| is already shown large on this line
+      showBusy('scanning', blankDisplay);   // a slow new list: blank the stale knot meanwhile
+      gReqKey = key;               // a list for these settings is on its way ("loading…")
+      gErr = '';                   // the previous list's message ("none match …") is stale now
+      updateGDisplays();
       let r = await gEnumerate(query);
       // Wait for the first knot, not the last: a big level yields #1 in ~0.1s and its
       // final count only minutes later, and changing L or |g| abandons the scan.
       while (!r.done && !r.gs.length && !r.error) {
         await new Promise(res => setTimeout(res, 250));
-        if (myGen !== gGen) { clearBusy(); return; }
+        // Superseded: leave the progress line alone -- it belongs to the newer call now.
+        // (Clearing it here is what left "— / —" with no message while that call waited.)
+        if (myGen !== gGen) return;
         r = await gPost('/enumerate/poll', {});
-        if (r.q !== key) { clearBusy(); return; }    // superseded by another query
+        if (r.q !== key) { if (myGen === gGen) { clearBusy(); gReqKey = null; } return; }
       }
-      clearBusy();
       if (myGen !== gGen) return;              // a newer press superseded us
+      clearBusy();
+      gReqKey = null;
       if (r.error) {
         console.warn('enumeration failed:', r.error);
         currentG = null; gErr = 'scan failed'; updateGDisplays(); return;
@@ -1255,8 +1279,8 @@ async function gRebuild(opts) {
       try {
         showBusy('solving', () => showSolvingG(L, g));   // slow solve: show WHICH g
         const bd = await gConstruct(L, g);
+        if (myGen !== gGen) return;            // superseded while constructing (its busy line)
         clearBusy();
-        if (myGen !== gGen) return;            // superseded while constructing
         currentG = g;
         enforceMinBights();   // B=1 only where its drawing is minimal
         setKnotFromRuns(bd.runs, L);
@@ -1267,8 +1291,8 @@ async function gRebuild(opts) {
         else redrawCurrentView();
         return;
       } catch (e) {
-        clearBusy();          // or "solving" stays up, ticking, after the solve is over
         if (myGen !== gGen) return;
+        clearBusy();          // or "solving" stays up, ticking, after the solve is over
         failed.add(g.join(','));
       }
     }
@@ -1276,6 +1300,7 @@ async function gRebuild(opts) {
   } catch (e) {
     if (myGen !== gGen) return;                // don't clobber a newer render with a stale error
     clearBusy();
+    gReqKey = null;
     // Prefer the server's own short reason (e.g. a level too large to enumerate).
     // This panel is narrow, so show a SHORT reason and put the full text in the console.
     gErr = e && e.short ? String(e.short).slice(0, 34)
@@ -1332,7 +1357,7 @@ document.getElementById('bInput').addEventListener('change', () => {
 // Chirality and self-flip are tied (see gcatalog.braid_amphichiral): with the parity
 // signs of these diagrams the flip IS the mirror when L is odd, and never when L is even.
 //   odd L:  amphichiral <=> self-flip, chiral <=> not self-flip -- the two menus move together
-//   even L: every braid is chiral -- the chirality menu is disabled at "any"
+//   even L: every braid is chiral -- the chirality menu is disabled, showing ✗
 // changed: the menu the user just set (it wins); otherwise chirality follows self-flip.
 // Colour a ✓/✗ menu by its selection (green / red); 'any' keeps the default colour.
 function colourMarkMenus() {
@@ -1345,7 +1370,7 @@ function colourMarkMenus() {
 function syncChiralFilter(L, changed) {
   const ch = document.getElementById('fChiral'), fl = document.getElementById('fFlip');
   if (L % 2 === 0) {
-    ch.value = ''; ch.disabled = true;
+    ch.value = '1'; ch.disabled = true;          // shows ✗: every braid is chiral at even L
     ch.title = 'every braid is chiral at even L';
     colourMarkMenus();
     return;
@@ -1361,7 +1386,8 @@ function syncChiralFilter(L, changed) {
 function linkRange(loId, hiId, changed) {
   const lo = document.getElementById(loId), hi = document.getElementById(hiId);
   const a = parseInt(lo.value), b = parseInt(hi.value);
-  if (!isNaN(a)) hi.min = a;        // stepping an empty 'to' starts at 'from', not at 1
+  // Both boxes keep the same absolute minimum (set elsewhere), so either can be stepped
+  // past the other and drag it along -- 'to' below 'from' pulls 'from' down too.
   if (isNaN(a) || isNaN(b) || a <= b) return;
   if (changed === loId) hi.value = a; else lo.value = b;
 }
@@ -1370,7 +1396,7 @@ function linkRange(loId, hiId, changed) {
 function snapGParity(id) {
   const el = document.getElementById(id), v = parseInt(el.value);
   if (isNaN(v)) return;
-  let w = Math.max(v, LEADS - 1);
+  let w = Math.max(v, gMinFor(LEADS));
   if (w % 2 !== (LEADS - 1) % 2) w += 1;
   if (w !== v) el.value = w;
 }
@@ -1386,6 +1412,13 @@ function snapGParity(id) {
       if (isNaN(parseInt(lo.value)) || parseInt(lo.value) < 1) lo.value = 1;
       if (isNaN(parseInt(hi.value))) hi.value = lo.value;
       linkRange('fCmin', 'fCmax', id);
+      // C min raises the smallest possible |g|: keep the |g| boxes at or above it.
+      const gm = gMinFor(LEADS);
+      for (const gid of ['fGmin', 'fGmax']) {
+        const el = document.getElementById(gid);
+        el.min = gm;
+        if (parseInt(el.value) < gm) el.value = gm;
+      }
     }
     gListIdx = 0;
     gRebuild({ reenum: true, dir: 1 });
@@ -2527,6 +2560,46 @@ const KNOT_OUTER_R = 250;
 //     (a true flat annulus); otherwise H is bumped up to make up the rest.
 //   - nz = -spread/|n| (negative) so a +bump lifts "over" the same way the old
 //     flat diagram did; at spread=0 the bump is purely radial (nr=1).
+// The band between the inner and outer radius must fit L strands side by side, each
+// needing about a tube diameter (x1.15).  frustumParams used to make room by lifting the
+// band into a cone -- so a thick strand at large L was no longer flat although the Height
+// slider said Flat.  Instead, WIDEN the band: lower the inner radius first (and move its
+// slider, so it shows the radius actually used), and only when that reaches the slider's
+// minimum grow the outer radius beyond KNOT_OUTER_R -- up to KNOT_OUTER_MAX; past that,
+// tilt into a frustum after all, and move the Height slider to the height used, so the
+// slider always shows the shape on screen.  -> {innerPx, outerPx}.
+const KNOT_OUTER_MAX = 1.4 * 250;    // how large the knot may grow before it tilts instead
+function fitBand(tubeRadius) {
+  const sl = document.getElementById('roundInnerSlider');
+  const pxToWorld = 2 * CAM_R / innerHeight;
+  const H = parseFloat(document.getElementById('heightSlider').value);
+  const minSlant = LEADS * 2 * tubeRadius * 1.15;                     // world units
+  const needPx = Math.sqrt(Math.max(0, minSlant * minSlant - H * H)) / pxToWorld;
+  let inner = parseFloat(sl.value), outer = KNOT_OUTER_R;
+  if (outer - inner < needPx) {
+    const step = parseFloat(sl.step) || 1, lo = parseFloat(sl.min) || 0;
+    const want = Math.floor((outer - needPx) / step) * step;          // round DOWN: enough room
+    if (want >= lo) inner = want;
+    else { inner = lo; outer = Math.min(lo + needPx, KNOT_OUTER_MAX); }   // cannot lower: grow
+    if (parseFloat(sl.value) !== inner) {
+      sl.value = inner;
+      if (showKnot) knotInnerVal = inner;                             // the knot view's own value
+    }
+    // Still too narrow at the largest size: the rest comes from height (a frustum).
+    const spreadW = (outer - inner) * pxToWorld;
+    if (spreadW < minSlant) {
+      const hs = document.getElementById('heightSlider');
+      const hStep = parseFloat(hs.step) || 0.1;
+      const hNeed = Math.ceil(Math.sqrt(minSlant * minSlant - spreadW * spreadW) / hStep) * hStep;
+      if (hNeed > H) {
+        if (hNeed > parseFloat(hs.max)) hs.max = String(Math.ceil(hNeed));   // let it show
+        hs.value = hNeed.toFixed(1);
+      }
+    }
+  }
+  return { innerPx: inner, outerPx: outer };
+}
+
 function frustumParams(worldInnerR, worldOuterR, tubeRadius) {
   const spread   = worldOuterR - worldInnerR;
   const minSlant = LEADS * 2 * tubeRadius * 1.15;
@@ -2547,8 +2620,9 @@ function buildKnot() {
   const mod        = PERIOD * B / LEADS;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = tubeRadius;
-  const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
-  const outerR_raw = KNOT_OUTER_R;   // fixed outer radius; inner slider runs from its min up to this
+  // Fixed outer radius, inner from the slider -- widened by fitBand if the strands
+  // would not fit side by side (see there).
+  const { innerPx: innerR_raw, outerPx: outerR_raw } = fitBand(tubeRadius);
 
   // Camera half-height matches the braid view so tube radius looks the same
   // size at the same slider value.  pxToWorld converts slider pixel values to
@@ -2722,8 +2796,7 @@ function getKnotPointsForRelax(deltaOverride) {
   const mod        = PERIOD * B / LEADS;
   const tubeRadius = parseFloat(document.getElementById('thickInput').value);
   const delta      = (deltaOverride != null) ? deltaOverride : tubeRadius;
-  const innerR_raw = parseFloat(document.getElementById('roundInnerSlider').value);
-  const outerR_raw = KNOT_OUTER_R;   // fixed outer radius (matches buildKnot)
+  const { innerPx: innerR_raw, outerPx: outerR_raw } = fitBand(tubeRadius);   // as buildKnot
 
   const pxToWorld   = 2 * CAM_R / innerHeight;
   const worldInnerR = innerR_raw * pxToWorld;
@@ -2846,15 +2919,26 @@ async function gPost(path, body) {
 // word self-flip.  Keyed by the same string
 // the server uses (its _query_key), so a stale list or poll is recognised by its key.
 // For odd L, amphichiral = self-flip; for even L every braid is chiral (see gcatalog).
+// Smallest possible |g| at L for the current C minimum (PROVEN): every generator
+// appears (|g| >= L-1), and without wiggles each of the 2C runs holds a crossing, each
+// crossing passed twice (|g| >= C).  Rounded up to L-1's parity (a single L-cycle).
+function gMinFor(L) {
+  const cmin = parseInt(document.getElementById('fCmin').value) || 1;
+  let m = Math.max(L - 1, cmin);
+  if ((m - (L - 1)) % 2) m += 1;
+  return m;
+}
 function gQuery(L) {
   const num = id => { const v = parseInt(document.getElementById(id).value); return isNaN(v) ? null : v; };
   const tri = id => { const v = document.getElementById(id).value; return v === '' ? null : v === '1'; };
   // |g| from..to: blank 'from' = L-1 (the first level), blank 'to' = 'from'.
-  const gmin = Math.max(L - 1, num('fGmin') ?? L - 1);
+  const gmin = Math.max(gMinFor(L), num('fGmin') ?? gMinFor(L));
   const gmax = Math.max(gmin, num('fGmax') ?? gmin);
   return { L, gmin, gmax,
            cmin: (num('fCmin') ?? 1) > 1 ? num('fCmin') : null,   // C >= 1 is no limit
-           cmax: num('fCmax'), chiral: tri('fChiral'), selfflip: tri('fFlip') };
+           cmax: num('fCmax'),
+           chiral: L % 2 === 0 ? null : tri('fChiral'),   // even L: shown as ✗, filters nothing
+           selfflip: tri('fFlip') };
 }
 function gQueryKey(q) {
   return [q.L, q.gmin, q.gmax, q.cmin, q.cmax, q.chiral, q.selfflip]
@@ -3802,6 +3886,14 @@ function knotDescription() {
     // |g| of the knot itself (a filtered list may span levels), and the filters, so the
     // index can be found again.
     const q = gQuery(L);
+    // No knot for these settings yet (the scan is still looking for its first one):
+    // copy the SCAN instead, readably and with its exact key.
+    if (!g || !currentG) {
+      const mark = v => (v === null ? 'any' : v ? '✓' : '✗');
+      return `scan L=${L} |g| ${q.gmin}-${q.gmax} C ${q.cmin ?? 1}-${q.cmax ?? 'any'}`
+           + ` achiral ${L % 2 === 0 ? '✗' : mark(q.chiral === null ? null : !q.chiral)}`
+           + ` self-flip ${mark(q.selfflip)} B=${B} (no knot yet) [filter ${gQueryKey(q)}]`;
+    }
     const f = gFiltered(q) || q.gmax > q.gmin ? ` [filter ${gQueryKey(q)}]` : '';
     return `L=${L} |g|=${g ? g.length : gLen}${idx} g=${g ? g.join(' ') : '?'} B=${B}${flip}${f}`;
   }
