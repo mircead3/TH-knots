@@ -646,6 +646,22 @@ def braid_amphichiral(g, L):
     return L % 2 == 1 and word_self_flip(g, L)
 
 
+def min_glen(L, C):
+    """Smallest |g| of a wiggle-free drawing with L strands and C bight pairs:
+    L-1 + 2*floor(C/2).  PROVEN; met at every (L, C) checked (C <= 5), not proven tight.
+
+    Follow the curve around the cylinder, tracking its RANK on the half-column (0..L-1).
+    A pass through a crossing moves it by exactly 1, bights do not; up-runs only raise it,
+    down-runs only lower it, and each run moves it at least once (no wiggles).  Every
+    half-column holds all L ranks, so the walk spans 0..L-1; its total movement is 2|g|
+    (each crossing passed twice).  Cut it at A lowest valley and A highest peak (which
+    occurrence does not matter): valley->peak has k up-runs and k-1 down-runs and net
+    change L-1, so it moves >= (L-1) + 2(k-1); peak->valley likewise with m down-runs
+    and m-1 up-runs; and k + m - 1 = C.  So 2|g| >= 2(L-1) + 2(C-1), and rounding
+    L+C-2 up to L-1's parity gives the bound.  Met e.g. by s1^C s2 (L=3, C odd)."""
+    return L - 1 + 2 * (C // 2)
+
+
 def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=None, stop=None):
     """Knots at L with gmin <= |g| <= gmax and cmin <= C <= cmax, optionally only chiral /
     amphichiral (chiral=True/False) and self-flip or not (selfflip=True/False).
@@ -665,7 +681,7 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
     small = small_c_max(L)
     # 1. small C: the generator, one C at a time (memoised per (L, C): every |g| at once)
     for C in range(lo, min(small, cmax if cmax is not None else small) + 1):
-        if C * (L - 1) < gmin: continue
+        if C * (L - 1) < gmin or min_glen(L, C) > gmax: continue
         done = _SMALL_C_DONE.get((L, C))
         if done is None:
             found = []
@@ -680,7 +696,7 @@ def iter_filtered(L, gmin, gmax, cmin=None, cmax=None, chiral=None, selfflip=Non
     if cmax is not None and cmax <= small: return
     clo = max(lo, small + 1)
     top = gmax if cmax is None else min(gmax, cmax * (L - 1))
-    for gl in range(max(gmin, L - 1), top + 1):
+    for gl in range(max(gmin, min_glen(L, clo)), top + 1):
         if gl % 2 != (L - 1) % 2: continue
         for g in iter_gs(L, gl, cmax=cmax, stop=stop):
             if keep(g, clo): yield g

@@ -2896,14 +2896,11 @@ async function gPost(path, body) {
 // The list query: L, the |g| range (the |g| from/to boxes), the C range and word self-flip
 // (the chirality slot stays in the key, always '-': chirality follows from self-flip).  Keyed by the same string
 // the server uses (its _query_key), so a stale list or poll is recognised by its key.
-// Smallest possible |g| at L for the current C minimum (PROVEN): every generator
-// appears (|g| >= L-1), and without wiggles each of the 2C runs holds a crossing, each
-// crossing passed twice (|g| >= C).  Rounded up to L-1's parity (a single L-cycle).
+// Smallest possible |g| at L for the current C minimum: L-1 + 2*floor(C/2), PROVEN for
+// wiggle-free drawings (see gcatalog.min_glen) and already of L-1's parity.
 function gMinFor(L) {
   const cmin = parseInt(document.getElementById('fCmin').value) || 1;
-  let m = Math.max(L - 1, cmin);
-  if ((m - (L - 1)) % 2) m += 1;
-  return m;
+  return L - 1 + 2 * Math.floor(cmin / 2);
 }
 function gQuery(L) {
   const num = id => { const v = parseInt(document.getElementById(id).value); return isNaN(v) ? null : v; };
