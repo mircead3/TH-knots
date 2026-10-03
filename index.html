@@ -1212,6 +1212,7 @@ async function gRebuild(opts) {
     }
     gListIdx = 0; gLenForL = L;
   }
+  clampGBoxes(L);
   gLen = gQuery(L).gmin;           // the range's first level (messages, the copy line)
   try {
     const query = gQuery(L);
@@ -1371,12 +1372,13 @@ function linkRange(loId, hiId, changed) {
   if (changed === loId) hi.value = a; else lo.value = b;
 }
 // |g| must have L-1's parity (a single L-cycle): a typed value of the other parity is
-// rounded up to the next valid one, never below L-1.
+// rounded up to the next valid one, kept within [gMinFor, gMaxFor].
 function snapGParity(id) {
   const el = document.getElementById(id), v = parseInt(el.value);
   if (isNaN(v)) return;
   let w = Math.max(v, gMinFor(LEADS));
   if (w % 2 !== (LEADS - 1) % 2) w += 1;
+  w = Math.min(w, gMaxFor(LEADS));
   if (w !== v) el.value = w;
 }
 // Any filter change starts a new list from its first knot.
@@ -1391,13 +1393,8 @@ function snapGParity(id) {
       if (isNaN(parseInt(lo.value)) || parseInt(lo.value) < 1) lo.value = 1;
       if (isNaN(parseInt(hi.value))) hi.value = lo.value;
       linkRange('fCmin', 'fCmax', id);
-      // C min raises the smallest possible |g|: keep the |g| boxes at or above it.
-      const gm = gMinFor(LEADS);
-      for (const gid of ['fGmin', 'fGmax']) {
-        const el = document.getElementById(gid);
-        el.min = gm;
-        if (parseInt(el.value) < gm) el.value = gm;
-      }
+      // C min and C max move the possible |g| range: keep the |g| boxes inside it.
+      clampGBoxes(LEADS);
     }
     gListIdx = 0;
     gRebuild({ reenum: true, dir: 1 });
@@ -2902,12 +2899,32 @@ function gMinFor(L) {
   const cmin = parseInt(document.getElementById('fCmin').value) || 1;
   return L - 1 + 2 * Math.floor(cmin / 2);
 }
+// Largest possible |g| for the current C maximum: C*(L-1), PROVEN (a run passes at most
+// L-1 crossings, there are 2C runs, each crossing is passed twice), rounded down to
+// L-1's parity.  Reached by C=1 (always), C=2 at even L, C=4 at L=6; elsewhere in the
+// data 1-3 below (C<=4, L<=12).  Never below gMinFor (L=2 aside,
+// where that range is empty anyway).
+function gMaxFor(L) {
+  const cmax = parseInt(document.getElementById('fCmax').value) || 1;
+  let m = cmax * (L - 1);
+  if ((m - (L - 1)) % 2) m -= 1;
+  return Math.max(m, gMinFor(L));
+}
+// Keep both |g| boxes inside [gMinFor, gMaxFor].
+function clampGBoxes(L) {
+  const lo = gMinFor(L), hi = gMaxFor(L);
+  for (const id of ['fGmin', 'fGmax']) {
+    const el = document.getElementById(id), v = parseInt(el.value);
+    el.min = lo; el.max = hi;
+    if (!isNaN(v)) el.value = Math.min(Math.max(v, lo), hi);
+  }
+}
 function gQuery(L) {
   const num = id => { const v = parseInt(document.getElementById(id).value); return isNaN(v) ? null : v; };
   const tri = id => { const v = document.getElementById(id).value; return v === '' ? null : v === '1'; };
   // |g| from..to: blank 'from' = L-1 (the first level), blank 'to' = 'from'.
   const gmin = Math.max(gMinFor(L), num('fGmin') ?? gMinFor(L));
-  const gmax = Math.max(gmin, num('fGmax') ?? gmin);
+  const gmax = Math.max(gmin, Math.min(gMaxFor(L), num('fGmax') ?? gmin));
   return { L, gmin, gmax,
            cmin: (num('fCmin') ?? 1) > 1 ? num('fCmin') : null,   // C >= 1 is no limit
            cmax: num('fCmax'),
