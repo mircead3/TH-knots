@@ -306,6 +306,7 @@
   </div>
   <button id="downloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download tying sequence</button>
   <button id="pdfDownloadBtn" class="view-btn" style="display:none;margin-bottom:8px;">Download</button>
+  <button id="imageDownloadBtn" class="view-btn" style="margin-bottom:8px;">Download image</button>
 </div>
 
 <div id="buildInfo" style="position:fixed;display:none;left:50%;top:14px;transform:translateX(-50%);white-space:nowrap;max-width:96vw;font-size:14px;color:#fff;background:rgba(0,20,40,0.82);border:1px solid rgba(0,255,136,0.5);border-radius:6px;padding:8px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;letter-spacing:0.5px;z-index:12;text-align:center;pointer-events:none;"></div>
@@ -2603,14 +2604,15 @@ function buildKnot() {
   // size at the same slider value.  pxToWorld converts slider pixel values to
   // world units using the same factor as the screen projection, so the rings
   // appear at exactly the same pixel radii as in the round diagram.
-  // The center shifts right by PANEL_W/2 px to match the round diagram's cx.
+  // The center shifts right by PANEL_W/2 px to match the round diagram's cx: the
+  // frustum is shifted, not the knot, so orbiting still turns it about its own center.
   const aspect    = innerWidth / innerHeight;
   const pxToWorld = 2 * CAM_R / innerHeight;
   const worldOuterR = outerR_raw * pxToWorld;
   const worldInnerR = innerR_raw * pxToWorld;
   const xCenter     = PANEL_W * CAM_R / innerHeight;
-  orthoCamera.left   = -CAM_R * aspect;
-  orthoCamera.right  =  CAM_R * aspect;
+  orthoCamera.left   = -CAM_R * aspect - xCenter;
+  orthoCamera.right  =  CAM_R * aspect - xCenter;
   orthoCamera.top    =  CAM_R;
   orthoCamera.bottom = -CAM_R;
   orthoCamera.updateProjectionMatrix();
@@ -3429,7 +3431,8 @@ function buildStraight() {
   const arcRef = 2 * Math.PI * (260 * pxToWorld) / mod;             // fixed rod-length scale
   const R = radiusRaw * pxToWorld;                                  // anchor radius
   const H = 2 * Math.PI * (heightRaw * pxToWorld) / mod * MAX_Y;    // anchor height spread
-  orthoCamera.left = -CAM_R * aspect; orthoCamera.right =  CAM_R * aspect;
+  const xCenter = PANEL_W * CAM_R / innerHeight;   // centered right of the panel, as the knot
+  orthoCamera.left = -CAM_R * aspect - xCenter; orthoCamera.right = CAM_R * aspect - xCenter;
   orthoCamera.top  =  CAM_R;          orthoCamera.bottom = -CAM_R;
   orthoCamera.updateProjectionMatrix();
 
@@ -4051,6 +4054,34 @@ document.getElementById('downloadBtn').addEventListener('click', () => {
   a.href = url; a.download = `knot_${m}L_${B}B.txt`;
   document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+});
+
+// Download what is on screen as a PNG: the visible canvas (the 2D diagram canvas or the
+// WebGL view), without the strip under the control panel, on the page background (the
+// diagram canvas is transparent).  The WebGL buffer is not preserved between frames, so
+// render once right before reading it.
+document.getElementById('imageDownloadBtn').addEventListener('click', () => {
+  const src = diagramCanvas.style.display === 'block' ? diagramCanvas : renderer.domElement;
+  if (src === renderer.domElement) renderer.render(scene, orthoCamera);
+  const sx = Math.round(PANEL_W * src.width / innerWidth);
+  const out = document.createElement('canvas');
+  out.width = src.width - sx; out.height = src.height;
+  const c = out.getContext('2d');
+  c.fillStyle = '#060610'; c.fillRect(0, 0, out.width, out.height);
+  c.drawImage(src, sx, 0, out.width, out.height, 0, 0, out.width, out.height);
+  const L = parseInt(document.getElementById('mInput').value);
+  const B = parseInt(document.getElementById('bInput').value);
+  const g = gList.length && gList._key === gQueryKey(gQuery(L)) ? gList[gListIdx] : null;
+  const view = showTubeDiag ? 'braid' : diagramCanvas.style.display === 'block' ? 'diagram'
+             : showStraight ? 'tensegrity' : 'knot';
+  const name = `knot_L${L}` + (g ? `_g${g.length}_${gListIdx + 1}` : '') + `_B${B}_${view}.png`;
+  out.toBlob(blob => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }, 'image/png');
 });
 
 // ── Round diagram PDF export ─────────────────────────────────────────────────
